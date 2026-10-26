@@ -30,6 +30,7 @@ ThreadId Kernel::start(uint32_t entry, uint32_t stack_top, uint32_t priority) {
     Thread &t = *threads_.back();
     t.context.vfp = t.vfp;
     t.context.fpscr = &t.fpscr;
+    hooks_.prepare(t.context);
     return id;
 }
 

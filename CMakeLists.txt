@@ -10,6 +10,8 @@ set(CMAKE_C_STANDARD 11)
 add_library(recomp_runtime STATIC
     src/kernel.cpp
     src/svc.cpp
+    src/memory.cpp
+    src/system.cpp
     src/services.cpp
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
@@ -19,3 +21,6 @@ enable_testing()
 add_executable(kernel_test tests/kernel_test.cpp)
 target_link_libraries(kernel_test PRIVATE recomp_runtime)
 add_test(NAME kernel COMMAND kernel_test)
+add_executable(system_test tests/system_test.cpp)
+target_link_libraries(system_test PRIVATE recomp_runtime)
+add_test(NAME system COMMAND system_test)

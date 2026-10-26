@@ -38,6 +38,7 @@ struct NoHooks : Hooks {
     void request(Kernel &, Thread &, const std::string &, uint32_t) override {}
     void memory_syscall(Kernel &, Thread &, uint32_t) override {}
     uint32_t allocate_tls() override { return next_tls += 0x200; }
+    void prepare(Context &) override {}
 };
 
 struct World {

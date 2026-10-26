@@ -70,8 +70,10 @@ struct AddressArbiter {
 };
 
 struct SharedMemory {
+    std::string name; // the services' blocks are found by it (GSP, HID)
     uint32_t address; // in the owning process, or 0 when the kernel picks
     uint32_t size;
+    uint32_t paddr; // the physical memory behind it
     std::optional<uint32_t> mapped_at;
 };
 
@@ -148,6 +150,9 @@ struct Hooks {
     virtual void memory_syscall(Kernel &, Thread &, uint32_t number) = 0;
     // a page for a new thread's TLS
     virtual uint32_t allocate_tls() = 0;
+    // fills what a new thread's context needs besides its registers: the
+    // page tables, the host's callbacks
+    virtual void prepare(Context &context) = 0;
 };
 
 class Kernel {

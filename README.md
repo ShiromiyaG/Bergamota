@@ -27,8 +27,17 @@ Zakuro's renderer, linked through a C interface.
   the games' code gives control back on every syscall, so switching
   threads is picking another context, with no fibers. Tests:
   `tests/kernel_test.cpp`.
-- Next: guest memory (the address space, the memory syscalls, TLS), the
-  loop that runs the code, and the services.
+- **Memory** (`memory.h`, `src/memory.cpp`): the 3DS's physical memories
+  and FCRAM's regions, the page tables the code reads through, mappings,
+  the configuration and shared pages, and the memory syscalls.
+- **The loop** (`system.h`, `src/system.cpp`): runs each thread's code from
+  its r15 through the port's lookup, handles the syscall it stopped at, and
+  sleeps the host when every thread waits. No interpreter: everything has
+  to be C. Tests: `tests/system_test.cpp` (two threads, written by hand as
+  3dsrecomp writes code, meet on the address arbiter).
+- Next: the services (`srv`, `APT`, `cfg`, `fs`, `hid`, `gsp`, `dsp`,
+  `y2r`, `ldr:ro`) and loading the game's code and modules, then the first
+  run of the real game against Zakuro.
 
 ## Building
 
