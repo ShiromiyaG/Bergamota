@@ -122,8 +122,8 @@ int main(int argc, char **argv) {
         handlers.tick(system);
         auto &out = handlers.audio.output;
         if (sound && !out.empty()) {
-            // a tenth of a second queued at most, the rest is late
-            if (SDL_GetAudioStreamQueued(sound) < int(AUDIO_RATE / 10 * 4)) {
+            // a quarter of a second queued at most, the rest is late
+            if (SDL_GetAudioStreamQueued(sound) < int(AUDIO_RATE / 4 * 4)) {
                 SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
             }
             out.clear();
