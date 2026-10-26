@@ -65,6 +65,10 @@ int main(int argc, char **argv) {
         if (!fs.update_romfs) std::fprintf(stderr, "%s\n", error.c_str());
     }
     handlers.fs = &fs;
+    handlers.on_module = [](const std::string &name, uint32_t base) {
+        library.place(name, base);
+        std::printf("module %s %s 0x%08X\n", name.c_str(), base ? "at" : "gone from", base);
+    };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
 

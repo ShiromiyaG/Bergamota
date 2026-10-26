@@ -91,6 +91,11 @@ public:
     void write8(uint32_t a, uint8_t v);
     void write16(uint32_t a, uint16_t v);
     void write32(uint32_t a, uint32_t v) override;
+    // a word written wherever there is memory, read-only pages too (the
+    // CRO loader relocates code)
+    void write32_privileged(uint32_t a, uint32_t v);
+    // the physical pages behind source mapped at destination as well
+    bool mirror(uint32_t destination, uint32_t source, uint32_t size);
     void read_bytes(uint32_t a, void *out, uint32_t size);
     void write_bytes(uint32_t a, const void *in, uint32_t size);
     std::string read_cstring(uint32_t a, uint32_t max);

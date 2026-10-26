@@ -193,6 +193,24 @@ void Memory::write32(uint32_t a, uint32_t v) {
     write16(a + 2, uint16_t(v >> 16));
 }
 
+void Memory::write32_privileged(uint32_t a, uint32_t v) {
+    for (uint32_t i = 0; i < 4; i++) {
+        if (uint8_t *page = read_[(a + i) >> PAGE_BITS]) page[(a + i) & PAGE_MASK] = uint8_t(v >> (i * 8));
+    }
+}
+
+bool Memory::mirror(uint32_t destination, uint32_t source, uint32_t size) {
+    size = align_up(size, PAGE_SIZE);
+    for (uint32_t done = 0; done < size;) {
+        const Mapping *m = mapping_at(source + done);
+        if (!m) return false;
+        uint32_t offset = source + done - m->base, chunk = std::min(m->size - offset, size - done);
+        map(destination + done, m->paddr + offset, chunk, m->permission | RW, MemoryState::Alias);
+        done += chunk;
+    }
+    return true;
+}
+
 void Memory::read_bytes(uint32_t a, void *out, uint32_t size) {
     auto *o = static_cast<uint8_t *>(out);
     for (uint32_t i = 0; i < size; i++) o[i] = read8(a + i);

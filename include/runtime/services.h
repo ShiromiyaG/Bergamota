@@ -8,11 +8,13 @@
 #define RUNTIME_SERVICES_H
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "runtime/cro.h"
 #include "runtime/system.h"
 
 namespace runtime {
@@ -66,6 +68,9 @@ public:
     // fs:USER, FSFile and FSDirectory go to it, when there is one
     Fs *fs = nullptr;
     ConsoleSettings console;
+    // told where each module goes (0 when it goes away), for the code made for it
+    std::function<void(const std::string &name, uint32_t base)> on_module;
+    CroLoader cro;
 
     // what the hardware does on its own as time passes: the DSP's audio
     // frames; called often from the loop
@@ -88,6 +93,7 @@ private:
     bool apt(System &, CommandBuffer &);
     bool cfg(System &, CommandBuffer &);
     bool dsp(System &, CommandBuffer &);
+    bool ldr_ro(System &, CommandBuffer &);
     void dsp_write_pipe(System &, uint32_t channel, const std::vector<uint8_t> &data);
     void dsp_signal(System &);
     void send_parameter(System &, Parameter parameter);
@@ -112,6 +118,14 @@ private:
         std::vector<uint8_t> pipes[8];
         uint64_t next_frame = 0;
     } dsp_;
+    // modules ldr:ro gave memory of their own: where they run, the game's
+    // buffer, their memory, how much fixing left
+    struct Copy {
+        uint32_t buffer;
+        Block block;
+        uint32_t fixed;
+    };
+    std::map<uint32_t, Copy> copies_;
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
 };
