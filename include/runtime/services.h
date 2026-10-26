@@ -163,11 +163,19 @@ private:
         uint32_t accelerometer_users = 0, gyroscope_users = 0;
         uint64_t reset[4][2]{};
     } hid_;
-    // y2r: its settings by the command that set them, and its end event
+    // y2r: how it converts, its buffers, its end event
+    struct Y2rBuffer {
+        uint32_t address = 0, transfer = 0, gap = 0;
+    };
     struct Y2r {
-        std::map<uint32_t, uint32_t> settings;
+        uint32_t input = 0, output = 0, rotation = 0, width = 0, lines = 0, standard = 0, alpha = 0xFF;
+        bool tiled = false;
+        int32_t coefficients[8] = {0x100, 0x166, 0xB6, 0x58, 0x1C5, -0x166F, 0x10EE, -0x1C5B};
+        Y2rBuffer y, u, v, yuyv, out;
+        std::map<uint32_t, uint32_t> other; // what only reads back
         std::optional<ObjectId> event;
     } y2r_;
+    void y2r_convert(System &);
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
 };

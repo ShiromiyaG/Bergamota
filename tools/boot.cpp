@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
         // A pressed for a tenth of each second, to get past the title as the bots do
         auto now = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
+        handlers.input.buttons = 0;
         handlers.tick(system);
 #ifdef RUNTIME_ZAKURO_GPU
         // both screens to a picture every five seconds
