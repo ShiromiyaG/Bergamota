@@ -12,6 +12,7 @@ add_library(recomp_runtime STATIC
     src/svc.cpp
     src/memory.cpp
     src/system.cpp
+    src/loader.cpp
     src/services.cpp
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
@@ -24,3 +25,7 @@ add_test(NAME kernel COMMAND kernel_test)
 add_executable(system_test tests/system_test.cpp)
 target_link_libraries(system_test PRIVATE recomp_runtime)
 add_test(NAME system COMMAND system_test)
+
+# boots a game on the runtime and reports how far it gets
+add_executable(boot tools/boot.cpp)
+target_link_libraries(boot PRIVATE recomp_runtime)
