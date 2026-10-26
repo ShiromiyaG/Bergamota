@@ -13,6 +13,7 @@ add_library(recomp_runtime STATIC
     src/memory.cpp
     src/system.cpp
     src/loader.cpp
+    src/interpreter.cpp
     src/services.cpp
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)

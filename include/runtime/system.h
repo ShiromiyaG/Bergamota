@@ -52,6 +52,12 @@ public:
     // why run() could not go on, when it could not
     const std::string &error() const { return error_; }
 
+    // runs a context's code from r15 in the interpreter, up to an address
+    // the C has, a syscall or a slice's end; false when it cannot go on
+    bool interpret(Context &c);
+    // instructions the interpreter ran, where the C had nothing
+    uint64_t interpreted = 0;
+
 private:
     void request(Kernel &, Thread &, const std::string &service, uint32_t subhandle) override;
     void memory_syscall(Kernel &, Thread &, uint32_t number) override;

@@ -2,6 +2,8 @@
 
 #include "runtime/system.h"
 
+#include "runtime/interpreter.h"
+
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -19,12 +21,23 @@ void host_write8(Context *c, uint32_t a, uint8_t v) { system_of(c).memory.write8
 void host_write16(Context *c, uint32_t a, uint16_t v) { system_of(c).memory.write16(a, v); }
 void host_write32(Context *c, uint32_t a, uint32_t v) { system_of(c).memory.write32(a, v); }
 
-// the port has no interpreter: everything has to be in C, recompiled or
-// decompiled
-void host_interpret(Context *c, uint32_t address, uint32_t opcode) {
-    std::fprintf(stderr, "runtime: no C for the instruction 0x%08X at 0x%08X\n", opcode, address);
-    c->r[15] = address;
-    c->exit = EXIT_UNWIND;
+// one instruction the C left to the interpreter; a branch, a syscall or
+// one it cannot run leaves the C for the main loop
+void host_interpret(Context *c, uint32_t address, uint32_t) {
+    System &s = system_of(c);
+    Cpu cpu;
+    load(*c, cpu);
+    cpu.regs[15] = address;
+    Exit exit = step(cpu, s.memory);
+    store(cpu, *c);
+    s.interpreted++;
+    uint32_t next = address + (c->thumb ? 2 : 4);
+    if (exit.kind == Exit::Supervisor) {
+        c->svc = exit.value;
+        c->exit = EXIT_SVC;
+    } else if (exit.kind != Exit::None || c->r[15] != next) {
+        c->exit = EXIT_UNWIND;
+    }
 }
 
 constexpr uint32_t STACK_SIZE = 0x4000;
@@ -49,12 +62,13 @@ System::System(const Config &config, Lookup lookup, ServiceHandler services)
         System &s = system_of(c);
         while (!(c->r[15] == stop && !c->thumb)) {
             Code code = s.lookup_(c->r[15] | c->thumb);
-            if (!code) {
+            c->exit = EXIT_NONE;
+            if (code) {
+                code(c);
+            } else if (!s.interpret(*c)) {
                 c->exit = EXIT_UNWIND;
                 return;
             }
-            c->exit = EXIT_NONE;
-            code(c);
             if (c->exit == EXIT_SVC) {
                 s.kernel.syscall(c->svc);
                 if (s.kernel.current() && s.kernel.current()->status != ThreadStatus::Running) {
@@ -115,6 +129,36 @@ void System::memory_syscall(Kernel &k, Thread &thread, uint32_t number) {
     runtime::memory_syscall(memory, k, thread, number, config_.region);
 }
 
+bool System::interpret(Context &c) {
+    // the interpreter, from r15 to the first address the C has, a syscall,
+    // or the end of a slice
+    Cpu cpu;
+    load(c, cpu);
+    for (int32_t n = 0; n < config_.slice; n++) {
+        Exit exit = step(cpu, memory);
+        interpreted++;
+        if (exit.kind == Exit::Supervisor) {
+            store(cpu, c);
+            c.svc = exit.value;
+            c.exit = EXIT_SVC;
+            return true;
+        }
+        if (exit.kind != Exit::None) {
+            store(cpu, c);
+            char text[96];
+            std::snprintf(text, sizeof text, "the instruction 0x%08X at 0x%08X cannot run", exit.value,
+                          cpu.regs[15] | cpu.cpsr.thumb);
+            error_ = text;
+            return false;
+        }
+        if (lookup_(cpu.regs[15] | cpu.cpsr.thumb)) {
+            break;
+        }
+    }
+    store(cpu, c);
+    return true;
+}
+
 bool System::run(const std::function<bool()> &stop) {
     while (!kernel.exited() && !stop()) {
         if (!kernel.schedule()) {
@@ -137,16 +181,14 @@ bool System::run(const std::function<bool()> &stop) {
             continue;
         }
         Code code = lookup_(c.r[15] | c.thumb);
-        if (!code) {
-            char text[64];
-            std::snprintf(text, sizeof text, "no C for 0x%08X (thread %u)", c.r[15] | c.thumb, t.id);
-            error_ = text;
-            return false;
-        }
         c.exit = EXIT_NONE;
         c.budget = config_.slice;
         c.depth = 0;
-        code(&c);
+        if (code) {
+            code(&c);
+        } else if (!interpret(c)) {
+            return false;
+        }
         if (c.exit == EXIT_SVC) {
             kernel.syscall(c.svc);
         }
