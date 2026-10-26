@@ -2,8 +2,9 @@
 // commands nothing answers yet, and where its threads are at the end.
 // A tool for building the services up one by one, not the port.
 //
-//   boot <exheader.bin> <code.bin> <recompiled library> [seconds]
+//   boot <exheader.bin> <code.bin> <recompiled library> [seconds] [game .3ds] [update .cia] [user folder]
 
+#include "runtime/fs.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
@@ -54,6 +55,16 @@ int main(int argc, char **argv) {
     config.region = exheader.region;
     Services handlers(exheader.program_id);
     services_ptr = &handlers;
+    Fs fs(argc > 7 ? argv[7] : "user", exheader.program_id);
+    if (argc > 5) {
+        fs.romfs = find_romfs(argv[5], error);
+        if (!fs.romfs) std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    if (argc > 6) {
+        fs.update_romfs = find_romfs(argv[6], error);
+        if (!fs.update_romfs) std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    handlers.fs = &fs;
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
 

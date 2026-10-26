@@ -94,6 +94,12 @@ std::pair<ObjectId, Handle> Kernel::create_event(ResetType reset) {
     return {id, create_handle(id)};
 }
 
+void Kernel::sleep(Thread &t, uint64_t ticks) {
+    end_wait(t);
+    t.wakeup_at = clock_.ticks() + ticks;
+    t.status = ThreadStatus::Sleeping;
+}
+
 void Kernel::signal_event(ObjectId object) {
     auto *event = std::get_if<Event>(this->object(object));
     if (!event) {

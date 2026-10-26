@@ -17,6 +17,8 @@
 
 namespace runtime {
 
+class Fs;
+
 // a command header: command << 16 | normal parameters << 6 | translate ones
 constexpr uint32_t header(uint32_t command, uint32_t normal, uint32_t translate) {
     return command << 16 | (normal & 0x3F) << 6 | (translate & 0x3F);
@@ -52,6 +54,9 @@ struct CommandBuffer {
 class Services {
 public:
     explicit Services(uint64_t program_id) : program_id_(program_id) {}
+
+    // fs:USER, FSFile and FSDirectory go to it, when there is one
+    Fs *fs = nullptr;
 
     // answers a request: SendSyncRequest's hook
     void request(System &system, Thread &thread, const std::string &service, uint32_t subhandle);

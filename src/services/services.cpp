@@ -4,6 +4,8 @@
 
 #include "runtime/services.h"
 
+#include "runtime/fs.h"
+
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
@@ -57,11 +59,13 @@ std::vector<uint8_t> CommandBuffer::read_static(uint32_t index, uint32_t size) c
     return data;
 }
 
-void Services::request(System &system, Thread &thread, const std::string &service, uint32_t) {
+void Services::request(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
     CommandBuffer buffer{system.memory, thread.tls};
     bool handled = false;
     if (service == "srv:" || service == "srv:pm") handled = srv(system, buffer);
     else if (service == "APT:U" || service == "APT:A" || service == "APT:S") handled = apt(system, buffer);
+    else if (fs && (service == "fs:USER" || service == "FSFile" || service == "FSDirectory"))
+        handled = fs->handle(system, thread, buffer, service, subhandle);
     if (handled) return;
     if (network(service)) offline(buffer, service);
     else unimplemented(buffer, service);

@@ -176,6 +176,9 @@ public:
 
     // for the services: events they signal (vertical blank, GPU interrupts)
     std::pair<ObjectId, Handle> create_event(ResetType reset);
+    // for the services: a thread made to wait a while, as the console's
+    // card does for a read
+    void sleep(Thread &thread, uint64_t ticks);
     void signal_event(ObjectId object);
     ObjectId insert(KObject object);
     Handle create_handle(ObjectId object);
