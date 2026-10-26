@@ -11,11 +11,14 @@
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
 
 #include "runtime/fs.h"
+#include "runtime/pica.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
 
 #include <chrono>
+#include <functional>
+#include <memory>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -131,13 +134,31 @@ int main(int argc, char **argv) {
     };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
+    // RUNTIME_RENDERER=native: the runtime's own renderer (docs/vulkan-renderer.md)
+    struct {
+        std::function<Picture(uint32_t)> screen;
+        std::function<double()> busy;
+        std::function<uint64_t()> lists;
+    } gpu;
+    const bool native = env("RUNTIME_RENDERER") && std::string(env("RUNTIME_RENDERER")) == "native";
+    std::unique_ptr<pica::Pica> pica_gpu;
 #ifdef RUNTIME_ZAKURO_GPU
-    ZakuroGpu gpu(system.memory, true);
-    std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
-#else
-    NullGpu gpu(system.memory);
+    std::unique_ptr<ZakuroGpu> zakuro_gpu;
+    if (!native) {
+        zakuro_gpu = std::make_unique<ZakuroGpu>(system.memory, true);
+        std::printf("drawing with Zakuro's renderer %s\n", zakuro_gpu->hardware ? "on the GPU (Vulkan)" : "in software");
+        handlers.gpu = zakuro_gpu.get();
+        gpu = {[&](uint32_t s) { return zakuro_gpu->screen(s); }, [&] { return zakuro_gpu->busy; },
+               [&] { return zakuro_gpu->lists; }};
+    }
 #endif
-    handlers.gpu = &gpu;
+    if (!handlers.gpu) {
+        pica_gpu = std::make_unique<pica::Pica>(system.memory);
+        std::printf("drawing with the runtime's renderer\n");
+        handlers.gpu = pica_gpu.get();
+        gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
+               [&] { return pica_gpu->lists; }};
+    }
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -194,7 +215,7 @@ int main(int argc, char **argv) {
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
 #ifdef RUNTIME_ZAKURO_GPU
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
-    std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy, (unsigned long long)gpu.lists, system.idle);
+    std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy(), (unsigned long long)gpu.lists(), system.idle);
 #endif
     {
         int peak = 0;
