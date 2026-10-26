@@ -30,6 +30,10 @@ struct Gpu {
     // a screen's picture from now on: physical addresses
     virtual void framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
                              uint32_t format) = 0;
+    // memory over a physical range made right before something other than
+    // the GPU (a service, a DMA) writes or reads it: a GPU that keeps what it
+    // draws, and the textures it read, elsewhere puts it back or drops it
+    virtual void sync(uint32_t, uint32_t) {}
 };
 
 class NullGpu : public Gpu {
@@ -77,6 +81,7 @@ public:
                       uint32_t output_gap) override;
     void framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
                      uint32_t format) override;
+    void sync(uint32_t paddr, uint32_t size) override;
     // what a screen shows now
     Picture screen(uint32_t screen);
     // time spent drawing and transferring, in seconds, and command lists run

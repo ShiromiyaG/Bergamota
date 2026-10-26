@@ -118,6 +118,7 @@ private:
     void gsp_queue(System &);
     void gsp_refresh(System &);
     uint32_t gsp_physical(System &, uint32_t vaddr) const;
+    void gpu_sync(System &, uint32_t vaddr, uint32_t size);
     void dsp_write_pipe(System &, uint32_t channel, const std::vector<uint8_t> &data);
     void dsp_signal(System &);
     void send_parameter(System &, Parameter parameter);

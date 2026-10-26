@@ -610,6 +610,11 @@ uint32_t Services::gsp_physical(System &system, uint32_t vaddr) const {
     return vaddr;
 }
 
+// a range of the game's memory made right for something other than the GPU
+void Services::gpu_sync(System &system, uint32_t vaddr, uint32_t size) {
+    if (gpu && size) gpu->sync(gsp_physical(system, vaddr), size);
+}
+
 // an interrupt into the client's queue (in the shared block), and its event
 void Services::gsp_interrupt(System &system, uint8_t id) {
     uint32_t queue = gsp_shared(system);
@@ -662,6 +667,8 @@ void Services::gsp_queue(System &system) {
         m.write32(ring, (index + 1) % 15 | (count - 1) << 8); // taken before it runs
         switch (id) {
         case 0x00: { // RequestDma(source, destination, size)
+            gpu_sync(system, d[0], d[2]);
+            gpu_sync(system, d[1], d[2]);
             std::vector<uint8_t> data(d[2]);
             m.read_bytes(d[0], data.data(), d[2]);
             m.write_bytes(d[1], data.data(), d[2]);
@@ -733,6 +740,8 @@ bool Services::gsp(System &system, CommandBuffer &b) {
         b.reply(command);
         return true;
     case 0x0007: { // RequestDma
+        gpu_sync(system, b.get(1), b.get(3));
+        gpu_sync(system, b.get(2), b.get(3));
         std::vector<uint8_t> data(b.get(3));
         m.read_bytes(b.get(1), data.data(), b.get(3));
         m.write_bytes(b.get(2), data.data(), b.get(3));
@@ -1015,6 +1024,8 @@ void Services::y2r_convert(System &system) {
         }
     }
     uint32_t transfer = std::max(s.out.transfer, 1u), address = s.out.address;
+    // the movie's frames go where textures were read from: the GPU drops them
+    gpu_sync(system, address, uint32_t((out.size() + transfer - 1) / transfer * (transfer + s.out.gap)));
     for (size_t i = 0; i < out.size(); i += transfer) {
         uint32_t n = uint32_t(std::min<size_t>(transfer, out.size() - i));
         m.write_bytes(address, &out[i], n);

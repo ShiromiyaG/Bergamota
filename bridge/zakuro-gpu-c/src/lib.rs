@@ -3,7 +3,7 @@
 //! the 3DS's memory by physical address, in the runtime's own buffers.
 //! See bridge/zakuro-gpu.h.
 
-use zakuro_gpu::{Gpu, GpuMemory, SoftwareRenderer};
+use zakuro_gpu::{Gpu, GpuMemory, Picture, ScreenRef, SoftwareRenderer};
 
 /// the runtime's physical memories, by their physical addresses.
 struct Physical {
@@ -46,6 +46,10 @@ pub struct ZGpu {
     gpu: Gpu,
     renderer: SoftwareRenderer,
     memory: Physical,
+    /// per screen, the picture it showed a presentation ago, and the last
+    /// one handed out, kept alive while the runtime reads it
+    showing: [Option<ScreenRef>; 2],
+    shown: [Option<Picture>; 2],
 }
 
 /// # Safety
@@ -57,6 +61,8 @@ pub unsafe extern "C" fn zgpu_new(fcram: *mut u8, fcram_size: usize, vram: *mut 
         gpu: Gpu::new(),
         renderer: SoftwareRenderer::default(),
         memory: Physical { regions: [(0x2000_0000, fcram, fcram_size), (0x1800_0000, vram, vram_size), (0x1FF8_0000, axi, axi_size)] },
+        showing: [None; 2],
+        shown: [None, None],
     }))
 }
 
@@ -136,4 +142,47 @@ pub extern "C" fn zgpu_enable_hardware(gpu: *mut ZGpu, scale: u32) -> i32 {
 #[no_mangle]
 pub extern "C" fn zgpu_sync(gpu: *mut ZGpu, addr: u32, len: u32) {
     with(gpu, |g| g.gpu.sync_memory(&mut g.memory, addr, len))
+}
+
+/// what a screen shows, as the host GPU drew it, upright RGBA at the
+/// renderer's scale, without writing it back to memory first; null when
+/// there is none (then read memory after zgpu_sync). good until the next
+/// call for the same screen.
+#[no_mangle]
+pub extern "C" fn zgpu_scaled_screen(gpu: *mut ZGpu, screen: u32, width: *mut u32, height: *mut u32) -> *const u8 {
+    with(gpu, |g| {
+        let index = (screen & 1) as usize;
+        let (w, h) = if index == 0 { (400, 240) } else { (320, 240) };
+        let config = g.gpu.framebuffers[index];
+        let format = config.color_format();
+        let bpp = format.bytes_per_pixel() as u32;
+        let stride = if config.stride == 0 { h * bpp } else { config.stride };
+        let address = config.address_left();
+        if address == 0 || stride % bpp != 0 || stride < h * bpp {
+            g.showing[index] = None;
+            return std::ptr::null();
+        }
+        let len = (w * stride) as usize;
+        let Some(bytes) = g.memory.find(address, len).map(|p| unsafe { std::slice::from_raw_parts(p, len) }) else {
+            return std::ptr::null();
+        };
+        let Some(now) = g.gpu.scaled_screen(address, (h, w), stride / bpp, format, bytes) else {
+            g.showing[index] = None;
+            return std::ptr::null();
+        };
+        // the picture of a presentation ago, as Zakuro shows them: the GPU
+        // has finished it, so nothing waits
+        let show = g.showing[index].replace(now).unwrap_or(now);
+        let Some(picture) = g.gpu.scaled_picture(show).or_else(|| g.gpu.scaled_picture(now)) else {
+            return std::ptr::null();
+        };
+        // SAFETY: the runtime passes two words to fill
+        unsafe {
+            *width = w * picture.1;
+            *height = h * picture.1;
+        }
+        let pointer = picture.0.as_ptr();
+        g.shown[index] = Some(picture);
+        pointer
+    })
 }

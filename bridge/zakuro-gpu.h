@@ -30,6 +30,9 @@ void zgpu_set_framebuffer(ZGpu *gpu, uint32_t screen, uint32_t active, uint32_t 
 int zgpu_enable_hardware(ZGpu *gpu, uint32_t scale);
 /* memory over a range made to hold what the host GPU drew there */
 void zgpu_sync(ZGpu *gpu, uint32_t addr, uint32_t len);
+/* what a screen shows as the host GPU drew it, upright RGBA, no write-back; null when
+   there is none. good until the next call for the same screen */
+const uint8_t *zgpu_scaled_screen(ZGpu *gpu, uint32_t screen, uint32_t *width, uint32_t *height);
 void zgpu_framebuffer(ZGpu *gpu, uint32_t screen, uint32_t *address, uint32_t *stride, uint32_t *format);
 
 #ifdef __cplusplus
