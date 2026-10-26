@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "runtime/audio.h"
 #include "runtime/cro.h"
 #include "runtime/gpu.h"
 #include "runtime/system.h"
@@ -83,6 +84,8 @@ public:
     Gpu *gpu = nullptr;
     // read at each vertical blank
     Input input;
+    // the sound the DSP made, for the frontend to play
+    Audio audio;
     // pictures the game handed the top screen, and vertical blanks
     uint64_t pictures = 0, vblanks = 0;
 
@@ -134,7 +137,7 @@ private:
     std::optional<uint32_t> library_applet_;
     std::vector<uint8_t> capture_info_;
     uint32_t cpu_time_limit_ = 0;
-    // the DSP: no sound yet, but its firmware's answers and its frames
+    // the DSP: its firmware's answers and its frames
     struct Dsp {
         bool loaded = false, running = false;
         std::optional<ObjectId> semaphore_event;

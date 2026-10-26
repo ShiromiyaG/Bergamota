@@ -111,6 +111,11 @@ int main(int argc, char **argv) {
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
     std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy, (unsigned long long)gpu.lists, system.idle);
 #endif
+    {
+        int peak = 0;
+        for (int16_t s : handlers.audio.output) peak = std::max(peak, std::abs(int(s)));
+        std::printf("sound: peak %d over the last %zu samples\n", peak, handlers.audio.output.size() / 2);
+    }
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
     {
         std::vector<std::pair<uint64_t, uint32_t>> top;

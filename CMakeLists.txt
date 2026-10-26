@@ -18,6 +18,7 @@ add_library(recomp_runtime STATIC
     src/gpu.cpp
     src/services/services.cpp
     src/services/fs.cpp
+    src/audio.cpp
     src/services.cpp
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)

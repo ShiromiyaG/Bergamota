@@ -4,7 +4,7 @@
 //
 //   player <exheader.bin> <code.bin> <recompiled library> <game .3ds> <update .cia> <user folder>
 //
-// Keys: arrows the D-pad, X/Z A/B, S/A X/Y, Q/W L/R, Enter Start,
+// Sound through SDL3. Keys: arrows the D-pad, X/Z A/B, S/A X/Y, Q/W L/R, Enter Start,
 // Backspace Select, IJKL the circle pad. A gamepad by position (the
 // bottom face button is B, as on the 3DS).
 
@@ -97,7 +97,7 @@ int main(int argc, char **argv) {
     std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
     handlers.gpu = &gpu;
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
@@ -111,11 +111,23 @@ int main(int argc, char **argv) {
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240),
     };
     SDL_Gamepad *gamepad = nullptr;
+    // the DSP's frames as they come, at its own rate; SDL resamples
+    SDL_AudioSpec spec{SDL_AUDIO_S16, 2, int(AUDIO_RATE)};
+    SDL_AudioStream *sound = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (sound) SDL_ResumeAudioStreamDevice(sound);
 
     bool quit = false;
     auto next_frame = std::chrono::steady_clock::now();
     system.run([&] {
         handlers.tick(system);
+        auto &out = handlers.audio.output;
+        if (sound && !out.empty()) {
+            // a tenth of a second queued at most, the rest is late
+            if (SDL_GetAudioStreamQueued(sound) < int(AUDIO_RATE / 10 * 4)) {
+                SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
+            }
+            out.clear();
+        }
         auto now = std::chrono::steady_clock::now();
         if (now < next_frame) return quit;
         next_frame = now + std::chrono::microseconds(16667);

@@ -346,7 +346,7 @@ bool Services::cfg(System &system, CommandBuffer &b) {
 }
 
 // dsp::DSP. Translated from Zakuro's services/dsp.rs; the voices and the
-// mixer (the sound itself) come later.
+// mixer are in audio.cpp.
 namespace {
 constexpr uint32_t PIPE_AUDIO = 2, PIPE_BINARY = 3;
 // where the firmware keeps its structures, in DSP data memory
@@ -415,6 +415,7 @@ void Services::tick(System &system) {
     if (now < dsp_.next_frame) return;
     dsp_.next_frame += DSP_FRAME_TICKS;
     if (dsp_.next_frame < now) dsp_.next_frame = now + DSP_FRAME_TICKS; // fell far behind
+    audio.tick(system.memory);
     dsp_signal(system);
 }
 
