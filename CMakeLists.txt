@@ -23,6 +23,26 @@ add_library(recomp_runtime STATIC
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
 target_include_directories(recomp_runtime PUBLIC include third_party)
 
+# drawing with Zakuro's renderer until the native one exists: a Rust static
+# library, bridge/zakuro-gpu-c, built with cargo
+option(RUNTIME_ZAKURO_GPU "draw with Zakuro's renderer (needs cargo)" ON)
+if(RUNTIME_ZAKURO_GPU)
+    set(ZGPU_DIR ${CMAKE_CURRENT_SOURCE_DIR}/bridge/zakuro-gpu-c)
+    set(ZGPU_LIB ${ZGPU_DIR}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}zakuro_gpu_c${CMAKE_STATIC_LIBRARY_SUFFIX})
+    add_custom_target(zakuro_gpu_c
+        COMMAND cargo build --release --manifest-path ${ZGPU_DIR}/Cargo.toml
+        BYPRODUCTS ${ZGPU_LIB}
+        WORKING_DIRECTORY ${ZGPU_DIR})
+    add_dependencies(recomp_runtime zakuro_gpu_c)
+    target_compile_definitions(recomp_runtime PUBLIC RUNTIME_ZAKURO_GPU)
+    target_include_directories(recomp_runtime PRIVATE bridge)
+    target_link_libraries(recomp_runtime PUBLIC ${ZGPU_LIB})
+    if(WIN32)
+        # what Rust's standard library needs from Windows
+        target_link_libraries(recomp_runtime PUBLIC ws2_32 userenv ntdll bcrypt advapi32 kernel32 synchronization ole32 oleaut32 shell32)
+    endif()
+endif()
+
 enable_testing()
 add_executable(kernel_test tests/kernel_test.cpp)
 target_link_libraries(kernel_test PRIVATE recomp_runtime)

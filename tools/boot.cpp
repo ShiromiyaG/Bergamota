@@ -72,16 +72,37 @@ int main(int argc, char **argv) {
     };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
+#ifdef RUNTIME_ZAKURO_GPU
+    ZakuroGpu gpu(system.memory);
+#else
     NullGpu gpu(system.memory);
+#endif
     handlers.gpu = &gpu;
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    int shots = 0;
     bool went_on = system.run([&] {
         // A pressed for a tenth of each second, to get past the title as the bots do
         auto now = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
         handlers.tick(system);
+#ifdef RUNTIME_ZAKURO_GPU
+        // both screens to a picture every five seconds
+        if (now > next_shot) {
+            next_shot = now + std::chrono::seconds(5);
+            for (uint32_t screen = 0; screen < 2; screen++) {
+                Picture p = gpu.screen(screen);
+                char name[64];
+                std::snprintf(name, sizeof name, "shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
+                std::ofstream out(name, std::ios::binary);
+                out << "P6\n" << p.width << " " << p.height << "\n255\n";
+                for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&p.rgba[i]), 3);
+            }
+            shots++;
+        }
+#endif
         return now > until;
     });
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);

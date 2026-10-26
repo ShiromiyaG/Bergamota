@@ -38,4 +38,70 @@ void NullGpu::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint3
     }
 }
 
+Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t stride, uint32_t format) {
+    Picture p;
+    p.width = screen == 0 ? 400 : 320;
+    p.height = 240;
+    p.rgba.assign(p.width * p.height * 4, 0);
+    static const uint32_t sizes[8] = {4, 3, 2, 2, 2, 4, 4, 4};
+    uint32_t bpp = sizes[format & 7];
+    if (!stride) stride = 240 * bpp;
+    const uint8_t *base = memory.host(address, stride * p.width);
+    if (!base) return p;
+    for (uint32_t x = 0; x < p.width; x++) {
+        // a column of the screen is a row in memory, bottom to top
+        const uint8_t *row = base + x * stride;
+        for (uint32_t y = 0; y < p.height; y++) {
+            const uint8_t *s = row + (p.height - 1 - y) * bpp;
+            uint8_t *d = &p.rgba[(y * p.width + x) * 4];
+            uint16_t v = uint16_t(s[0] | s[1] << 8);
+            switch (format & 7) {
+            case 0: d[0] = s[3], d[1] = s[2], d[2] = s[1]; break;          // RGBA8: A B G R in memory
+            case 1: d[0] = s[2], d[1] = s[1], d[2] = s[0]; break;          // RGB8: B G R
+            case 2: d[0] = uint8_t((v >> 11) << 3), d[1] = uint8_t(((v >> 5) & 63) << 2), d[2] = uint8_t((v & 31) << 3); break;
+            case 3: d[0] = uint8_t((v >> 11) << 3), d[1] = uint8_t(((v >> 6) & 31) << 3), d[2] = uint8_t(((v >> 1) & 31) << 3); break;
+            default: d[0] = uint8_t((v >> 12) << 4), d[1] = uint8_t(((v >> 8) & 15) << 4), d[2] = uint8_t(((v >> 4) & 15) << 4); break;
+            }
+            d[3] = 255;
+        }
+    }
+    return p;
+}
+
 } // namespace runtime
+
+#ifdef RUNTIME_ZAKURO_GPU
+#include "zakuro-gpu.h"
+
+namespace runtime {
+
+ZakuroGpu::ZakuroGpu(Memory &memory) : memory_(memory) {
+    gpu_ = zgpu_new(memory.host(map::FCRAM_PADDR, 1), memory.fcram_size(), memory.host(map::VRAM_PADDR, map::VRAM_SIZE),
+                    map::VRAM_SIZE, memory.host(map::AXI_WRAM_PADDR, map::AXI_WRAM_SIZE), map::AXI_WRAM_SIZE);
+}
+ZakuroGpu::~ZakuroGpu() { zgpu_free(gpu_); }
+void ZakuroGpu::write_register(uint32_t offset, uint32_t value) { zgpu_write_register(gpu_, offset, value); }
+uint32_t ZakuroGpu::read_register(uint32_t offset) { return zgpu_read_register(gpu_, offset); }
+void ZakuroGpu::command_list(uint32_t paddr, uint32_t size) { zgpu_command_list(gpu_, paddr, size); }
+void ZakuroGpu::memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
+    zgpu_memory_fill(gpu_, start, end, value, width);
+}
+void ZakuroGpu::display_transfer(uint32_t input, uint32_t output, uint32_t input_size, uint32_t output_size,
+                                 uint32_t flags) {
+    zgpu_display_transfer(gpu_, input, output, input_size, output_size, flags);
+}
+void ZakuroGpu::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t input_gap, uint32_t output_gap) {
+    zgpu_texture_copy(gpu_, input, output, size, input_gap, output_gap);
+}
+void ZakuroGpu::framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
+                            uint32_t format) {
+    zgpu_set_framebuffer(gpu_, screen, index, left, right, stride, format);
+}
+Picture ZakuroGpu::screen(uint32_t screen) {
+    uint32_t address, stride, format;
+    zgpu_framebuffer(gpu_, screen, &address, &stride, &format);
+    return read_screen(memory_, screen, address, stride, format);
+}
+
+} // namespace runtime
+#endif

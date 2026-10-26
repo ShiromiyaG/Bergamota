@@ -7,8 +7,11 @@
 #define RUNTIME_GPU_H
 
 #include <cstdint>
+#include <vector>
 
 #include "runtime/memory.h"
+
+struct ZGpu; // bridge/zakuro-gpu.h
 
 namespace runtime {
 
@@ -45,6 +48,41 @@ private:
     Memory &memory_;
     uint32_t registers_[0x1000]{}; // the registers games read back
 };
+
+// a screen's picture as it shows now, upright RGBA (400x240 or 320x240)
+struct Picture {
+    uint32_t width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+// reads the picture the LCD shows from memory: the 3DS keeps it turned on
+// its side, in one of five formats
+Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t stride, uint32_t format);
+
+#ifdef RUNTIME_ZAKURO_GPU
+// Zakuro's renderer (software), through bridge/zakuro-gpu.h
+class ZakuroGpu : public Gpu {
+public:
+    explicit ZakuroGpu(Memory &memory);
+    ~ZakuroGpu() override;
+    void write_register(uint32_t offset, uint32_t value) override;
+    uint32_t read_register(uint32_t offset) override;
+    void command_list(uint32_t paddr, uint32_t size) override;
+    void memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) override;
+    void display_transfer(uint32_t input, uint32_t output, uint32_t input_size, uint32_t output_size,
+                          uint32_t flags) override;
+    void texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t input_gap,
+                      uint32_t output_gap) override;
+    void framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
+                     uint32_t format) override;
+    // what a screen shows now
+    Picture screen(uint32_t screen);
+
+private:
+    Memory &memory_;
+    ::ZGpu *gpu_;
+};
+#endif
 
 } // namespace runtime
 

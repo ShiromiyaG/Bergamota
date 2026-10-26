@@ -78,6 +78,7 @@ public:
     void free(Block block);
     uint32_t region_used(Region region) const;
     uint8_t *host(uint32_t paddr, uint32_t size);
+    size_t fcram_size() const { return fcram_.size(); }
 
     void map(uint32_t vaddr, uint32_t paddr, uint32_t size, uint32_t permission, MemoryState state);
     void unmap(uint32_t vaddr, uint32_t size);
