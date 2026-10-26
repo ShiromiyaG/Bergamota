@@ -25,6 +25,9 @@ add_library(recomp_runtime STATIC
     src/services/fs.cpp
     src/audio.cpp
     src/pica/pica.cpp
+    src/pica/shader.cpp
+    src/pica/vertex.cpp
+    src/pica/sketch.cpp
     src/services.cpp
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)

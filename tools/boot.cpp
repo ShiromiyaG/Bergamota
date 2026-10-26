@@ -12,6 +12,7 @@
 
 #include "runtime/fs.h"
 #include "runtime/pica.h"
+#include "runtime/pica_sketch.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
@@ -140,7 +141,10 @@ int main(int argc, char **argv) {
         std::function<double()> busy;
         std::function<uint64_t()> lists;
     } gpu;
-    const bool native = env("RUNTIME_RENDERER") && std::string(env("RUNTIME_RENDERER")) == "native";
+    // RUNTIME_RENDERER=sketch: the same, its draws filled flat on canvases saved with the shots
+    const std::string renderer = env("RUNTIME_RENDERER") ? env("RUNTIME_RENDERER") : "";
+    const bool native = renderer == "native" || renderer == "sketch";
+    std::unique_ptr<pica::Sketch> sketch;
     std::unique_ptr<pica::Pica> pica_gpu;
 #ifdef RUNTIME_ZAKURO_GPU
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
@@ -154,6 +158,10 @@ int main(int argc, char **argv) {
 #endif
     if (!handlers.gpu) {
         pica_gpu = std::make_unique<pica::Pica>(system.memory);
+        if (renderer == "sketch") {
+            sketch = std::make_unique<pica::Sketch>();
+            pica_gpu->backend = sketch.get();
+        }
         std::printf("drawing with the runtime's renderer\n");
         handlers.gpu = pica_gpu.get();
         gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
@@ -178,6 +186,11 @@ int main(int argc, char **argv) {
 #ifdef RUNTIME_ZAKURO_GPU
             if (shots_dir && handlers.vblanks >= shot_frame + shot_every) {
                 shot_frame = handlers.vblanks / shot_every * shot_every;
+                if (sketch) {
+                    char prefix[512];
+                    std::snprintf(prefix, sizeof prefix, "%s/%06llu-sketch", shots_dir, (unsigned long long)shot_frame);
+                    sketch->save(prefix);
+                }
                 for (uint32_t screen = 0; screen < 2; screen++) {
                     Picture p = gpu.screen(screen);
                     char name[512];
@@ -230,6 +243,10 @@ int main(int argc, char **argv) {
     }
     for (auto &[key, spent] : handlers.time_spent) {
         if (spent > 0.2) std::printf("  %s 0x%04X %.1f s\n", key.first.c_str(), key.second, spent);
+    }
+    if (sketch) {
+        std::printf("sketch: %llu draws, %llu vertices shaded, %llu draws skipped\n", (unsigned long long)pica_gpu->draws,
+                    (unsigned long long)sketch->shaded(), (unsigned long long)sketch->skipped);
     }
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
     {
