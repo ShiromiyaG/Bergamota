@@ -11,7 +11,9 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <chrono>
 #include <bit>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
@@ -74,9 +76,13 @@ struct Image {
 struct Surface {
     uint32_t address, width, height, format;
     bool depth;
+    bool linear = false; // rows in order, as a display transfer leaves a framebuffer
     Image image;
     bool dirty = false; // the GPU has drawn what memory has not
     bool stale = false; // memory was written since: loaded again before use
+    uint32_t offset(uint32_t x, uint32_t y, uint32_t bpp) const {
+        return linear ? (y * width + x) * bpp : tiled_offset(x, y, width, bpp);
+    }
     uint32_t bytes() const {
         static constexpr uint32_t DEPTH_BYTES[4] = {2, 2, 3, 4};
         return width * height * (depth ? DEPTH_BYTES[format & 3] : bytes_per_pixel(format));
@@ -427,7 +433,7 @@ struct VulkanRenderer::Impl {
             uint32_t bpp = bytes_per_pixel(s.format);
             for (uint32_t y = 0; y < h; y++) {
                 for (uint32_t x = 0; x < w; x++) {
-                    auto c = decode_color(s.format, src + tiled_offset(x, y, w, bpp));
+                    auto c = decode_color(s.format, src + s.offset(x, y, bpp));
                     std::memcpy(&rgba[(size_t(y) * w + x) * 4], c.data(), 4);
                 }
             }
@@ -441,7 +447,7 @@ struct VulkanRenderer::Impl {
         std::vector<uint8_t> stencil(size_t(w) * h);
         for (uint32_t y = 0; y < h; y++) {
             for (uint32_t x = 0; x < w; x++) {
-                const uint8_t *p = src + tiled_offset(x, y, w, bpp);
+                const uint8_t *p = src + s.offset(x, y, bpp);
                 uint32_t v = bpp == 2 ? uint32_t(p[0] | p[1] << 8) << 8 : uint32_t(p[0] | p[1] << 8 | p[2] << 16);
                 size_t at = size_t(y) * w + x;
                 depth[at] = depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT ? std::bit_cast<uint32_t>(float(v) / 16777215.0f) : v;
@@ -453,7 +459,9 @@ struct VulkanRenderer::Impl {
     }
 
     // an image's pixels back into the buffer's memory
+    int cause = 0; // why the next write-back happens, for the counters
     void write_back(Surface &s) {
+        self.write_back_causes[cause]++;
         uint32_t w = s.width, h = s.height;
         VkDeviceSize texels = VkDeviceSize(w) * h;
         Buffer a = buffer(texels * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT), b{};
@@ -476,7 +484,7 @@ struct VulkanRenderer::Impl {
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < w; x++) {
                         const uint8_t *p = a.mapped + (size_t(y) * w + x) * 4;
-                        encode_color(s.format, {p[0], p[1], p[2], p[3]}, dst + tiled_offset(x, y, w, bpp));
+                        encode_color(s.format, {p[0], p[1], p[2], p[3]}, dst + s.offset(x, y, bpp));
                     }
                 }
             } else {
@@ -489,7 +497,7 @@ struct VulkanRenderer::Impl {
                         std::memcpy(&v, a.mapped + at * 4, 4);
                         if (depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT) v = uint32_t(std::clamp(std::bit_cast<float>(v), 0.0f, 1.0f) * 16777215.0f + 0.5f);
                         v &= 0xFFFFFF;
-                        uint8_t *p = dst + tiled_offset(x, y, w, bpp);
+                        uint8_t *p = dst + s.offset(x, y, bpp);
                         if (bpp == 2) v >>= 8, p[0] = uint8_t(v), p[1] = uint8_t(v >> 8);
                         else p[0] = uint8_t(v), p[1] = uint8_t(v >> 8), p[2] = uint8_t(v >> 16);
                         if (bpp == 4) p[3] = b.mapped[at];
@@ -519,9 +527,10 @@ struct VulkanRenderer::Impl {
         }
     }
 
-    Surface *surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format, bool depth) {
+    Surface *surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format, bool depth, bool linear = false) {
         for (auto &s : surfaces) {
-            if (s->address == address && s->width == w && s->height == h && s->format == format && s->depth == depth) {
+            if (s->address == address && s->width == w && s->height == h && s->format == format && s->depth == depth &&
+                s->linear == linear) {
                 if (s->stale) {
                     if (color_target == s.get() || depth_target == s.get()) end_rendering();
                     upload(*s);
@@ -531,7 +540,7 @@ struct VulkanRenderer::Impl {
             }
         }
         // others over the same memory go back first, then away
-        Surface fresh{address, w, h, format, depth, {}};
+        Surface fresh{address, w, h, format, depth, linear, {}};
         for (size_t i = 0; i < surfaces.size();) {
             Surface &s = *surfaces[i];
             if (!overlaps(s.address, s.bytes(), address, fresh.bytes())) {
@@ -548,6 +557,88 @@ struct VulkanRenderer::Impl {
         upload(*s);
         surfaces.push_back(std::move(s));
         return surfaces.back().get();
+    }
+
+    // a fill: a buffer it covers whole is cleared on the GPU, the rest goes
+    // back to memory first and loads again after
+    void fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
+        for (auto &s : surfaces) {
+            if (!overlaps(s->address, s->bytes(), start, end - start)) continue;
+            bool whole = start <= s->address && end >= s->address + s->bytes() && !s->linear;
+            if (!whole) {
+                if (s->dirty) write_back(*s);
+                if (color_target == s.get() || depth_target == s.get()) end_rendering();
+                s->stale = true;
+                continue;
+            }
+            end_rendering();
+            uint8_t pattern[4];
+            std::memcpy(pattern, &value, 4);
+            VkImageSubresourceRange range{VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1, 0, 1};
+            if (s->depth) {
+                // D16 or D24 in the low bytes, the stencil above
+                uint32_t d = width == 2 ? uint32_t(value & 0xFFFF) << 8 : value & 0xFFFFFF;
+                VkClearDepthStencilValue v{float(d) / 16777215.0f, width == 4 ? value >> 24 : 0};
+                vkCmdClearDepthStencilImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &range);
+            } else {
+                // the pattern is the buffer's own pixel
+                auto c = bytes_per_pixel(s->format) == width ? decode_color(s->format, pattern) : decode_color(0, pattern);
+                VkClearColorValue v{{c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, c[3] / 255.0f}};
+                vkCmdClearColorImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &range);
+            }
+            barrier();
+            s->dirty = false; // memory gets the same fill
+            s->stale = false;
+        }
+    }
+
+    // a display transfer from a buffer the GPU drew, into another of its
+    // own: a blit flips and halves (averaging) on the way
+    bool transfer(const Backend::Transfer &t) {
+        // the input can start some rows into a buffer (a band of 8-row tiles):
+        // games draw both screens into one and transfer each from its rows
+        Surface *in = nullptr;
+        uint32_t row = 0;
+        for (auto &s : surfaces) {
+            if (s->depth || s->stale || s->linear || s->width != t.in_width || t.input < s->address) continue;
+            uint32_t band = s->width * 8 * bytes_per_pixel(s->format), offset = t.input - s->address;
+            if (offset % band || offset / band * 8 + t.copy_height * t.scale_y > s->height) continue;
+            in = s.get();
+            row = offset / band * 8;
+        }
+        if (!in || !in->dirty) {
+            static int shown = 0;
+            if (std::getenv("RUNTIME_VK_DEBUG") && shown++ < 12) {
+                std::fprintf(stderr, "transfer %08X %ux%u -> %08X %ux%u fmt %u tiled %d:", t.input, t.in_width, t.in_height, t.output,
+                             t.out_width, t.out_height, t.out_format, t.out_tiled);
+                for (auto &s : surfaces) {
+                    if (overlaps(s->address, s->bytes(), t.input, t.in_width * t.in_height * 4))
+                        std::fprintf(stderr, " [%08X %ux%u f%u d%d dirty%d stale%d lin%d]", s->address, s->width, s->height, s->format, s->depth, s->dirty, s->stale, s->linear);
+                }
+                std::fprintf(stderr, "\n");
+            }
+            return false;
+        }
+        Surface *out = surface(t.output, t.out_width, t.out_height, t.out_format, false, !t.out_tiled);
+        if (out == in) return false;
+        end_rendering();
+        VkImageBlit b{};
+        b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        b.srcOffsets[0] = {0, int32_t(row), 0};
+        b.srcOffsets[1] = {int32_t(t.copy_width * t.scale_x), int32_t(row + t.copy_height * t.scale_y), 1};
+        if (t.flip) {
+            b.dstOffsets[0] = {0, int32_t(t.out_height), 0};
+            b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.out_height - t.copy_height), 1};
+        } else {
+            b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.copy_height), 1};
+        }
+        bool scaled = t.scale_x > 1 || t.scale_y > 1;
+        vkCmdBlitImage(cmd, in->image.image, VK_IMAGE_LAYOUT_GENERAL, out->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &b,
+                       scaled ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+        barrier();
+        out->dirty = true;
+        guard(*out);
+        return true;
     }
 
     VkSampler sampler(uint32_t params) {
@@ -584,13 +675,14 @@ struct VulkanRenderer::Impl {
         if (!w || !h || !address) return blank.view;
         // a color buffer drawn into, read in place when it is the same
         for (auto &s : surfaces) {
-            if (!s->depth && !s->stale && s->address == address && s->width == w && s->height == h && format <= 4 &&
+            if (!s->depth && !s->linear && !s->stale && s->address == address && s->width == w && s->height == h && format <= 4 &&
                 s->format == format) {
                 if (color_target == s.get()) end_rendering();
                 return s->image.view;
             }
         }
         size_t size = size_t(w) * h * texture_bits(format) / 8;
+        cause = 3;
         sync(address, uint32_t(size), false);
         const uint8_t *bytes = memory.host(address, uint32_t(size));
         if (!bytes) return blank.view;
@@ -859,6 +951,7 @@ VulkanRenderer::VulkanRenderer(Memory &memory) : impl_(std::make_unique<Impl>(*t
         uint32_t paddr = vaddr >= map::VRAM_VADDR && vaddr < map::VRAM_VADDR + map::VRAM_SIZE
                              ? map::VRAM_PADDR + (vaddr - map::VRAM_VADDR)
                              : map::FCRAM_PADDR + (vaddr - memory.linear_base);
+        impl_->cause = 0;
         impl_->sync(paddr, size, write);
     };
 }
@@ -870,10 +963,19 @@ VulkanRenderer::~VulkanRenderer() {
 
 bool VulkanRenderer::ready() const { return impl_->device != VK_NULL_HANDLE; }
 
+namespace {
+using clock = std::chrono::steady_clock;
+double since(clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); }
+} // namespace
+
 void VulkanRenderer::draw(Pica &p, bool indexed) {
     if (!ready()) return;
+    auto t = clock::now();
     impl_->stage.draw(p, indexed, impl_->triangles);
+    time_vertices += since(t);
+    t = clock::now();
     impl_->render(p);
+    time_render += since(t);
 }
 
 void VulkanRenderer::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>> &vertices) {
@@ -882,8 +984,23 @@ void VulkanRenderer::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 
     impl_->render(p);
 }
 
+void VulkanRenderer::fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
+    auto t = clock::now();
+    if (ready()) impl_->cause = 2, impl_->fill(start, end, value, width);
+    time_sync += since(t);
+}
+
+bool VulkanRenderer::display_transfer(const Transfer &transfer) {
+    auto t = clock::now();
+    bool done = ready() && impl_->transfer(transfer);
+    time_sync += since(t);
+    return done;
+}
+
 void VulkanRenderer::sync(uint32_t paddr, uint32_t size, bool write) {
-    if (ready()) impl_->sync(paddr, size, write);
+    auto t = clock::now();
+    if (ready()) impl_->cause = 1, impl_->sync(paddr, size, write);
+    time_sync += since(t);
 }
 
 } // namespace runtime

@@ -126,6 +126,17 @@ struct Backend {
     // memory over a range is about to be read or written by something
     // else: what the back end keeps of it goes back first (or is dropped)
     virtual void sync(uint32_t paddr, uint32_t size, bool write) { (void)paddr, (void)size, (void)write; }
+    // a fill of memory (done on memory as well afterwards): buffers it
+    // covers whole are cleared where they are
+    virtual void fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) { sync(start, end - start, true); }
+    // a display transfer done where the input is, the GPU's own buffer;
+    // false leaves it to memory. Sizes in output pixels, scale 1 or 2 each way
+    struct Transfer {
+        uint32_t input, output, in_width, in_height, out_width, out_height, copy_width, copy_height, scale_x, scale_y;
+        uint32_t out_format;
+        bool flip, out_tiled;
+    };
+    virtual bool display_transfer(const Transfer &) { return false; }
 };
 
 class Pica : public Gpu {

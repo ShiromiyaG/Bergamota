@@ -22,9 +22,15 @@ public:
     void draw(pica::Pica &pica, bool indexed) override;
     void draw_immediate(pica::Pica &pica, const std::vector<std::array<pica::Vec4, 16>> &vertices) override;
     void sync(uint32_t paddr, uint32_t size, bool write) override;
+    void fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) override;
+    bool display_transfer(const Transfer &transfer) override;
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
+    // where the time went, in seconds: the vertex stage, recording draws, syncs
+    double time_vertices = 0, time_render = 0, time_sync = 0;
+    // write-backs by cause: the CPU (guards), the front end, a fill, a texture
+    uint64_t write_back_causes[4]{};
 
     struct Impl;
 

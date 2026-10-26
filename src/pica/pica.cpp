@@ -281,7 +281,7 @@ uint32_t tiled_offset(uint32_t x, uint32_t y, uint32_t width, uint32_t bpp) {
 void Pica::memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
     if (end <= start) return;
     width = width == 2 || width == 3 ? width : 4;
-    if (backend) backend->sync(start, end - start, true);
+    if (backend) backend->fill(start, end, value, width);
     uint8_t *at = memory.host(start, end - start);
     if (!at) return;
     for (uint32_t i = 0; i + width <= end - start; i += width) std::memcpy(at + i, &value, width);
@@ -303,6 +303,12 @@ void Pica::display_transfer(uint32_t input, uint32_t output, uint32_t input_size
     // cropped off take, all but the last
     if (flip && (flags & 4)) output += (in_w > (output_size & 0xFFFF) ? in_w - (output_size & 0xFFFF) : 0) * (out_h ? out_h - 1 : 0) * out_bpp;
     uint32_t in_bytes = in_w * in_h * in_bpp, out_bytes = out_w * out_h * out_bpp;
+    if (backend && copy_w && copy_h &&
+        backend->display_transfer({input, output, in_w, in_h, out_w, out_h, copy_w, copy_h, sx, sy, out_format, flip, tiled_out})) {
+        transfers++;
+        busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+        return;
+    }
     if (backend) {
         backend->sync(input, in_bytes, false);
         backend->sync(output, out_bytes, true);
@@ -364,6 +370,9 @@ void Pica::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t
 
 Picture Pica::screen(uint32_t s) {
     const Screen &screen = screens[s & 1];
+    // what the GPU keeps of it, into memory first
+    uint32_t stride = screen.stride ? screen.stride : 240 * bytes_per_pixel(screen.format);
+    if (backend) backend->sync(screen.address, stride * (s & 1 ? 320 : 400), false);
     return read_screen(memory, s & 1, screen.address, screen.stride, screen.format);
 }
 
