@@ -1,9 +1,0 @@
-[package]
-name = "recomp-runtime"
-description = "A lean 3DS system for recompiled Pokémon ports: only what USUM, XY and ORAS ask for"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-
-[dependencies]
