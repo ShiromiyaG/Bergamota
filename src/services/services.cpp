@@ -61,6 +61,7 @@ std::vector<uint8_t> CommandBuffer::read_static(uint32_t index, uint32_t size) c
 
 void Services::request(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
     CommandBuffer buffer{system.memory, thread.tls};
+    usage[{service, buffer.command()}]++;
     bool handled = false;
     if (service == "srv:" || service == "srv:pm") handled = srv(system, buffer);
     else if (service == "APT:U" || service == "APT:A" || service == "APT:S") handled = apt(system, buffer);

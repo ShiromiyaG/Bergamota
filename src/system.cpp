@@ -96,6 +96,7 @@ System::System(const Config &config, Lookup lookup, ServiceHandler services)
 }
 
 uint64_t System::ticks() {
+    if (config_.virtual_clock) return virtual_;
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     auto since = std::chrono::nanoseconds(now).count() - static_cast<int64_t>(boot_);
     return nanos_to_ticks(static_cast<uint64_t>(since));
@@ -178,6 +179,13 @@ bool System::run(const std::function<bool()> &stop) {
             // every thread waits: on a time, or on an outside event the
             // services signal (the caller's stop() lets it raise them)
             auto wake = kernel.next_wakeup();
+            if (config_.virtual_clock) {
+                // a millisecond on at most, so the hardware's events (stop()'s
+                // caller) come in order, or straight to the wakeup
+                constexpr uint64_t MS = CPU_CLOCK_HZ / 1000;
+                virtual_ = wake && *wake > virtual_ ? std::min(*wake, virtual_ + MS) : virtual_ + MS;
+                continue;
+            }
             if (!wake) {
                 // nothing has a time to wake at: only an outside event can
                 auto before = std::chrono::steady_clock::now();
@@ -206,10 +214,16 @@ bool System::run(const std::function<bool()> &stop) {
         c.exit = EXIT_NONE;
         c.budget = config_.slice;
         c.depth = 0;
+        uint64_t interpreted_before = interpreted;
         if (code) {
             code(&c);
         } else if (!interpret(c)) {
             return false;
+        }
+        if (config_.virtual_clock) {
+            // what the slice used, a tick an instruction (one at least)
+            int64_t used = code ? int64_t(config_.slice) - c.budget : int64_t(interpreted - interpreted_before);
+            virtual_ += uint64_t(std::max<int64_t>(used, 1));
         }
         if (c.exit == EXIT_SVC) {
             kernel.syscall(c.svc);

@@ -31,6 +31,9 @@ struct Config {
     Region region = Region::Application;
     uint64_t boot_clock_ms = 0;     // local time at boot, ms since 1900
     int32_t slice = 200000;         // a thread's time slice, in instructions
+    // time as the code runs, a tick an instruction, as Zakuro counts it: a
+    // run plays out the same each time, and never sleeps (for comparing)
+    bool virtual_clock = false;
 };
 
 class System : private Hooks, private Clock {
@@ -47,7 +50,7 @@ public:
     // process ends; false when it ended or could not go on
     bool run(const std::function<bool()> &stop);
 
-    // the time, in CPU ticks: the host's clock since boot
+    // the time, in CPU ticks: the host's clock since boot, or the virtual one
     uint64_t ticks() override;
 
     // why run() could not go on, when it could not
@@ -75,6 +78,7 @@ private:
     Host host_{};
     uint32_t tls_used_ = 0;
     uint64_t boot_ = 0;
+    uint64_t virtual_ = 0; // the virtual clock
     std::string error_;
 };
 

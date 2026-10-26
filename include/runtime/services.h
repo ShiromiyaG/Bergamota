@@ -98,6 +98,8 @@ public:
 
     // the commands a game made that nothing answers yet, counted
     const std::map<std::pair<std::string, uint32_t>, uint32_t> &unimplemented() const { return unimplemented_; }
+    // every command asked for, by service: what ZAKURO_USAGE counts
+    std::map<std::pair<std::string, uint32_t>, uint64_t> usage;
 
 private:
     struct Parameter {
