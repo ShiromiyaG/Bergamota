@@ -67,6 +67,10 @@ public:
     Fs *fs = nullptr;
     ConsoleSettings console;
 
+    // what the hardware does on its own as time passes: the DSP's audio
+    // frames; called often from the loop
+    void tick(System &system);
+
     // answers a request: SendSyncRequest's hook
     void request(System &system, Thread &thread, const std::string &service, uint32_t subhandle);
 
@@ -83,6 +87,9 @@ private:
     bool srv(System &, CommandBuffer &);
     bool apt(System &, CommandBuffer &);
     bool cfg(System &, CommandBuffer &);
+    bool dsp(System &, CommandBuffer &);
+    void dsp_write_pipe(System &, uint32_t channel, const std::vector<uint8_t> &data);
+    void dsp_signal(System &);
     void send_parameter(System &, Parameter parameter);
     void offline(CommandBuffer &, const std::string &service);
     void unimplemented(CommandBuffer &, const std::string &service);
@@ -96,6 +103,15 @@ private:
     std::optional<uint32_t> library_applet_;
     std::vector<uint8_t> capture_info_;
     uint32_t cpu_time_limit_ = 0;
+    // the DSP: no sound yet, but its firmware's answers and its frames
+    struct Dsp {
+        bool loaded = false, running = false;
+        std::optional<ObjectId> semaphore_event;
+        std::vector<ObjectId> interrupt_events;
+        uint32_t semaphore_mask = 0, semaphore_value = 0;
+        std::vector<uint8_t> pipes[8];
+        uint64_t next_frame = 0;
+    } dsp_;
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
 };

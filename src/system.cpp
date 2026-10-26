@@ -166,11 +166,16 @@ bool System::run(const std::function<bool()> &stop) {
             // services signal (the caller's stop() lets it raise them)
             auto wake = kernel.next_wakeup();
             if (!wake) {
-                return true;
+                // nothing has a time to wake at: only an outside event can
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                continue;
             }
             uint64_t now = ticks();
             if (*wake > now) {
-                std::this_thread::sleep_for(std::chrono::nanoseconds((*wake - now) * 1000000000 / CPU_CLOCK_HZ));
+                // a millisecond at most: the hardware's own events (audio
+                // frames, vertical blank) come from stop()'s caller
+                uint64_t nanos = std::min<uint64_t>((*wake - now) * 1000000000 / CPU_CLOCK_HZ, 1000000);
+                std::this_thread::sleep_for(std::chrono::nanoseconds(nanos));
             }
             continue;
         }

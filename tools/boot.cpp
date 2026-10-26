@@ -69,7 +69,10 @@ int main(int argc, char **argv) {
     load(system, exheader, read_file(argv[2]));
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
-    bool went_on = system.run([&] { return std::chrono::steady_clock::now() > until; });
+    bool went_on = system.run([&] {
+        handlers.tick(system);
+        return std::chrono::steady_clock::now() > until;
+    });
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
     if (!system.error().empty()) std::printf("error: %s\n", system.error().c_str());
