@@ -51,12 +51,21 @@ struct CommandBuffer {
     std::vector<uint8_t> read_static(uint32_t index, uint32_t size) const;
 };
 
+// what the console says about itself through cfg
+struct ConsoleSettings {
+    uint8_t region = 1;   // 0 Japan, 1 the Americas, 2 Europe
+    uint8_t language = 1; // English
+    std::u16string username = u"Player";
+    uint64_t console_id = 0x0000525533415A55;
+};
+
 class Services {
 public:
     explicit Services(uint64_t program_id) : program_id_(program_id) {}
 
     // fs:USER, FSFile and FSDirectory go to it, when there is one
     Fs *fs = nullptr;
+    ConsoleSettings console;
 
     // answers a request: SendSyncRequest's hook
     void request(System &system, Thread &thread, const std::string &service, uint32_t subhandle);
@@ -73,6 +82,7 @@ private:
 
     bool srv(System &, CommandBuffer &);
     bool apt(System &, CommandBuffer &);
+    bool cfg(System &, CommandBuffer &);
     void send_parameter(System &, Parameter parameter);
     void offline(CommandBuffer &, const std::string &service);
     void unimplemented(CommandBuffer &, const std::string &service);
