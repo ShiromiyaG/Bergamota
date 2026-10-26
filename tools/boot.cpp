@@ -1,11 +1,11 @@
-// Boots a game on the runtime and reports how far it gets: every service
-// command it makes (the first time), with the services that are not there
-// yet answered "success, nothing", and where its threads are at the end.
+// Boots a game on the runtime and reports how far it gets: the service
+// commands nothing answers yet, and where its threads are at the end.
 // A tool for building the services up one by one, not the port.
 //
 //   boot <exheader.bin> <code.bin> <recompiled library> [seconds]
 
 #include "runtime/loader.h"
+#include "runtime/services.h"
 #include "runtime/system.h"
 
 #include <chrono>
@@ -27,30 +27,10 @@ Library library;
 
 Code lookup(uint32_t address) { return library.lookup(address); }
 
-std::set<std::pair<std::string, uint32_t>> seen;
+Services *services_ptr = nullptr;
 
-// srv: hands out sessions by name; everything else: success and zeros
-void services(System &system, Thread &thread, const std::string &service, uint32_t) {
-    uint32_t buffer = thread.tls + map::TLS_COMMAND_BUFFER;
-    Memory &m = system.memory;
-    uint32_t header = m.read32(buffer);
-    uint32_t command = header >> 16;
-    if (seen.insert({service, command}).second) {
-        std::printf("ipc %-12s 0x%04X\n", service.c_str(), command);
-    }
-    if (service == "srv:" && command == 0x0005) { // GetServiceHandle: name in words 1-2, length in 3
-        char name[9] = {};
-        m.read_bytes(buffer + 4, name, 8);
-        name[std::min<uint32_t>(m.read32(buffer + 12), 8)] = 0;
-        Handle handle = system.kernel.create_handle(system.kernel.insert(ClientSession{name, 0}));
-        m.write32(buffer, 0x00050042);
-        m.write32(buffer + 4, 0);
-        m.write32(buffer + 8, 0);
-        m.write32(buffer + 12, handle);
-        return;
-    }
-    m.write32(buffer, command << 16 | 0x40 * 4);
-    for (uint32_t i = 1; i <= 4; i++) m.write32(buffer + i * 4, 0);
+void services(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
+    services_ptr->request(system, thread, service, subhandle);
 }
 
 } // namespace
@@ -72,6 +52,8 @@ int main(int argc, char **argv) {
     Config config;
     config.app_bytes = exheader.app_bytes;
     config.region = exheader.region;
+    Services handlers(exheader.program_id);
+    services_ptr = &handlers;
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
 
@@ -84,6 +66,9 @@ int main(int argc, char **argv) {
         Thread &t = system.kernel.thread(static_cast<ThreadId>(i));
         std::printf("thread %zu: status %d, pc 0x%08X, lr 0x%08X\n", i, static_cast<int>(t.status), t.context.r[15],
                     t.context.r[14]);
+    }
+    for (auto &[key, count] : handlers.unimplemented()) {
+        std::printf("unanswered %-12s 0x%04X x%u\n", key.first.c_str(), key.second, count);
     }
     for (auto [page, count] : system.memory.faults()) {
         std::printf("fault at 0x%08X x%u\n", page, count);
