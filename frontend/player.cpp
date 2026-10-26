@@ -93,7 +93,7 @@ int main(int argc, char **argv) {
     handlers.on_module = [](const std::string &name, uint32_t base) { library.place(name, base); };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
-    ZakuroGpu gpu(system.memory, true);
+    ZakuroGpu gpu(system.memory, true, exheader.program_id);
     std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
     handlers.gpu = &gpu;
 
@@ -118,6 +118,11 @@ int main(int argc, char **argv) {
 
     bool quit = false;
     auto next_frame = std::chrono::steady_clock::now();
+    // RUNTIME_STATS: a line a second on where the time went
+    const bool stats = SDL_getenv("RUNTIME_STATS") != nullptr;
+    auto second = next_frame, last_shown = next_frame;
+    double worst = 0, presenting = 0, busy_before = 0, idle_before = 0;
+    uint64_t shown = 0, interpreted_before = 0, vblanks_before = 0, pictures_before = 0;
     system.run([&] {
         handlers.tick(system);
         auto &out = handlers.audio.output;
@@ -162,6 +167,7 @@ int main(int argc, char **argv) {
             handlers.input.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
         }
 
+        auto drawing = std::chrono::steady_clock::now();
         // the screens
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -172,6 +178,30 @@ int main(int argc, char **argv) {
             SDL_RenderTexture(renderer, screens[s], nullptr, &at);
         }
         SDL_RenderPresent(renderer);
+        if (stats) {
+            auto done = std::chrono::steady_clock::now();
+            presenting += std::chrono::duration<double>(done - drawing).count();
+            worst = std::max(worst, std::chrono::duration<double>(done - last_shown).count());
+            last_shown = done;
+            shown++;
+            if (done - second >= std::chrono::seconds(1)) {
+                std::printf("shown %llu, worst gap %.0f ms, presenting %.0f ms, gpu %.0f ms, idle %.0f ms, "
+                            "vblanks %llu, pictures %llu, interpreted %llu\n",
+                            (unsigned long long)shown, worst * 1000, presenting * 1000, (gpu.busy - busy_before) * 1000,
+                            (system.idle - idle_before) * 1000, (unsigned long long)(handlers.vblanks - vblanks_before),
+                            (unsigned long long)(handlers.pictures - pictures_before),
+                            (unsigned long long)(system.interpreted - interpreted_before));
+                std::fflush(stdout);
+                second = done;
+                shown = 0;
+                worst = presenting = 0;
+                busy_before = gpu.busy;
+                idle_before = system.idle;
+                vblanks_before = handlers.vblanks;
+                pictures_before = handlers.pictures;
+                interpreted_before = system.interpreted;
+            }
+        }
         return quit;
     });
     if (!system.error().empty()) std::fprintf(stderr, "stopped: %s\n", system.error().c_str());

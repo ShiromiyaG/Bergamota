@@ -68,7 +68,8 @@ Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t 
 class ZakuroGpu : public Gpu {
 public:
     // hardware: on the host GPU through Vulkan, else in software
-    ZakuroGpu(Memory &memory, bool hardware);
+    // title: its compiled pipelines kept on disk (0 for none)
+    ZakuroGpu(Memory &memory, bool hardware, uint64_t title = 0);
     bool hardware = false;
     ~ZakuroGpu() override;
     void write_register(uint32_t offset, uint32_t value) override;

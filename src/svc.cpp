@@ -310,6 +310,9 @@ void Kernel::arbitrate_address(Thread &self) {
     if (type == 2 || type == 4) { // decrement first
         memory_.write32(address, static_cast<uint32_t>(now - 1));
     }
+    // a thread waits on one thing at a time: an entry a timed-out wait left
+    // goes, or waits on addresses nobody signals pile up
+    std::erase_if(arbiter->waiters, [&](const auto &w) { return w.first == self.id; });
     arbiter->waiters.emplace_back(self.id, address);
     end_wait(self);
     self.wait_address = address;

@@ -77,10 +77,10 @@ Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t 
 
 namespace runtime {
 
-ZakuroGpu::ZakuroGpu(Memory &memory, bool use_hardware) : memory_(memory) {
+ZakuroGpu::ZakuroGpu(Memory &memory, bool use_hardware, uint64_t title) : memory_(memory) {
     gpu_ = zgpu_new(memory.host(map::FCRAM_PADDR, 1), memory.fcram_size(), memory.host(map::VRAM_PADDR, map::VRAM_SIZE),
                     map::VRAM_SIZE, memory.host(map::AXI_WRAM_PADDR, map::AXI_WRAM_SIZE), map::AXI_WRAM_SIZE);
-    hardware = use_hardware && zgpu_enable_hardware(gpu_, 1);
+    hardware = use_hardware && zgpu_enable_hardware(gpu_, 1, title);
 }
 ZakuroGpu::~ZakuroGpu() { zgpu_free(gpu_); }
 void ZakuroGpu::write_register(uint32_t offset, uint32_t value) { zgpu_write_register(gpu_, offset, value); }

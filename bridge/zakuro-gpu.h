@@ -26,8 +26,9 @@ void zgpu_texture_copy(ZGpu *gpu, uint32_t input, uint32_t output, uint32_t size
                        uint32_t output_gap);
 void zgpu_set_framebuffer(ZGpu *gpu, uint32_t screen, uint32_t active, uint32_t left, uint32_t right, uint32_t stride,
                           uint32_t format);
-/* draws on the host GPU through Vulkan at scale times the 3DS resolution; 0 when it cannot */
-int zgpu_enable_hardware(ZGpu *gpu, uint32_t scale);
+/* draws on the host GPU through Vulkan at scale times the 3DS resolution; 0 when it cannot.
+   title, when not 0, keeps the compiled pipelines on disk for the next run */
+int zgpu_enable_hardware(ZGpu *gpu, uint32_t scale, uint64_t title);
 /* memory over a range made to hold what the host GPU drew there */
 void zgpu_sync(ZGpu *gpu, uint32_t addr, uint32_t len);
 /* what a screen shows as the host GPU drew it, upright RGBA, no write-back; null when
