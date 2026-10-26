@@ -26,6 +26,7 @@ add_library(recomp_runtime STATIC
     src/audio.cpp
     src/pica/pica.cpp
     src/pica/shader.cpp
+    src/pica/batch.cpp
     src/pica/vertex.cpp
     src/pica/sketch.cpp
     src/services.cpp

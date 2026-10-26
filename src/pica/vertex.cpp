@@ -10,7 +10,7 @@
 
 namespace runtime::pica {
 
-VertexStage::VertexStage() : program_(std::make_unique<Program>()) {}
+VertexStage::VertexStage() : program_(std::make_unique<Program>()), batch_(std::make_unique<BatchRunner>()) {}
 
 namespace {
 
@@ -113,14 +113,12 @@ void fetch(Memory &m, uint32_t base, const Layout &l, uint32_t index, std::array
 // one vertex through the shader, and its outputs to the rasterizer's
 // values: the enabled output registers in order, each component named by
 // the output map
-static void shade(const Pica &p, const Program &program, Runner &runner, const std::array<Vec4, 16> &inputs, Vertex &v) {
-    runner.input = inputs;
-    runner.run(p.vertex_shader, program);
+static void place(const Pica &p, const std::array<Vec4, 16> &output, Vertex &v) {
     std::array<Vec4, 16> packed{};
     uint32_t mask = p.regs[VS_BLOCK + OUTPUT_MASK] & 0xFFFF;
-    if (!mask) packed = runner.output;
+    if (!mask) packed = output;
     for (uint32_t reg = 0, slot = 0; reg < 16 && mask; reg++) {
-        if (mask >> reg & 1) packed[slot++] = runner.output[reg];
+        if (mask >> reg & 1) packed[slot++] = output[reg];
     }
     float values[24] = {};
     values[3] = 1; // w, when nothing says
@@ -146,21 +144,51 @@ static void shade(const Pica &p, const Program &program, Runner &runner, const s
     v.uv2[0] = values[22], v.uv2[1] = values[23];
 }
 
+static void shade(const Pica &p, const Program &program, Runner &runner, const std::array<Vec4, 16> &inputs, Vertex &v) {
+    runner.input = inputs;
+    runner.run(p.vertex_shader, program);
+    place(p, runner.output, v);
+}
+
+// BATCH vertices from first on (fewer at the end): together, or one at a
+// time when they part ways
+static void shade_batch(const Pica &p, const Program &program, BatchRunner &batch, Runner &runner,
+                        const std::vector<std::array<Vec4, 16>> &inputs, std::vector<Vertex> &out, size_t first) {
+    size_t n = std::min<size_t>(BATCH, inputs.size() - first);
+    for (int reg = 0; reg < 16; reg++) {
+        for (int c = 0; c < 4; c++) {
+            for (size_t l = 0; l < BATCH; l++) batch.input[reg][c][l] = inputs[first + std::min(l, n - 1)][reg][c];
+        }
+    }
+    if (!batch.run(p.vertex_shader, program)) {
+        for (size_t l = 0; l < n; l++) shade(p, program, runner, inputs[first + l], out[first + l]);
+        return;
+    }
+    std::array<Vec4, 16> o;
+    for (size_t l = 0; l < n; l++) {
+        for (int reg = 0; reg < 16; reg++) {
+            for (int c = 0; c < 4; c++) o[reg][c] = batch.output[reg][c][l];
+        }
+        place(p, o, out[first + l]);
+    }
+}
+
 void VertexStage::shade_all(Pica &p) {
     size_t n = inputs_.size();
     shaded_.resize(n);
     shaded += n;
-    constexpr size_t CHUNK = 128;
+    constexpr size_t CHUNK = 128; // a multiple of BATCH
     if (n < CHUNK * 2) {
-        for (size_t i = 0; i < n; i++) shade(p, *program_, runner_, inputs_[i], shaded_[i]);
+        for (size_t i = 0; i < n; i += BATCH) shade_batch(p, *program_, *batch_, runner_, inputs_, shaded_, i);
         return;
     }
-    // a runner each chunk: they keep their own registers
+    // runners each chunk: they keep their own registers
     std::vector<size_t> chunks((n + CHUNK - 1) / CHUNK);
     std::iota(chunks.begin(), chunks.end(), size_t(0));
     std::for_each(std::execution::par, chunks.begin(), chunks.end(), [&](size_t c) {
         Runner runner;
-        for (size_t i = c * CHUNK; i < std::min(n, (c + 1) * CHUNK); i++) shade(p, *program_, runner, inputs_[i], shaded_[i]);
+        auto batch = std::make_unique<BatchRunner>();
+        for (size_t i = c * CHUNK; i < std::min(n, (c + 1) * CHUNK); i += BATCH) shade_batch(p, *program_, *batch, runner, inputs_, shaded_, i);
     });
 }
 

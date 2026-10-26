@@ -39,6 +39,7 @@ private:
 
     std::unique_ptr<Program> program_;
     Runner runner_;
+    std::unique_ptr<BatchRunner> batch_;
     std::vector<Vertex> shaded_;
     std::vector<std::array<Vec4, 16>> inputs_;
     std::vector<uint32_t> indices_, order_, seen_;

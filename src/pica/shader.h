@@ -55,6 +55,32 @@ private:
     std::vector<Block> blocks_;
 };
 
+// the same over BATCH vertices at once (batch.cpp): registers by component
+// and then by vertex. run is false when the vertices part ways at a branch
+constexpr int BATCH = 16;
+class BatchRunner {
+public:
+    float input[16][4][BATCH]{}, output[16][4][BATCH]{};
+    bool run(const ShaderUnit &unit, const Program &program);
+
+private:
+    struct Block {
+        uint32_t end, back, repeat;
+        int32_t increment;
+        uint32_t start;
+        bool loop;
+    };
+    void read(const Operand &o, float (&r)[4][BATCH]) const;
+    void write(uint32_t reg, uint32_t mask, const float (&v)[4][BATCH]);
+    int condition(uint32_t word) const;
+
+    const ShaderUnit *unit_ = nullptr;
+    float temp_[16][4][BATCH]{};
+    int32_t address_[3][BATCH]{};
+    bool cond_[2][BATCH]{};
+    std::vector<Block> blocks_;
+};
+
 } // namespace runtime::pica
 
 #endif

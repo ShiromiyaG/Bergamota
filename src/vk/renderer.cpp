@@ -127,15 +127,22 @@ struct VulkanRenderer::Impl {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         Buffer vertices, uniforms;
-        Buffer screens[2]; // the screens read back, a frame behind
-        bool screen_ready[2]{};
-        uint32_t screen_size[2][2]{};
+        uint64_t serial = 0; // which submission it holds
         std::vector<Buffer> staging;
         std::vector<struct Image> dead;
         bool pending = false;
     } slots[2];
     int current = 0;
     VkCommandBuffer cmd = VK_NULL_HANDLE; // the current slot's
+    uint64_t submitted = 0;               // submissions so far; the next one is submitted + 1
+    // each screen read back into two buffers in turn: a copy is recorded
+    // into one, the last one recorded is read once its submission ran
+    struct ScreenCopy {
+        Buffer buffers[2];
+        uint64_t serial[2]{}; // the submission each copy went with, 0 for none
+        uint32_t size[2][2]{};
+        int next = 0;
+    } screen_copies[2];
     VkFormat depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
     VkPhysicalDeviceMemoryProperties memory_props{};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors = nullptr;
@@ -268,7 +275,10 @@ struct VulkanRenderer::Impl {
             vkCreateFence(device, &fci, nullptr, &s.fence);
             s.vertices = buffer(VERTEX_RING, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
             s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-            for (Buffer &b : s.screens) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+
+        }
+        for (ScreenCopy &c : screen_copies) {
+            for (Buffer &b : c.buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
         }
         cmd = slots[0].cmd;
         vertices = slots[0].vertices;
@@ -469,6 +479,7 @@ struct VulkanRenderer::Impl {
         si.pCommandBuffers = &cmd;
         vkQueueSubmit(queue, 1, &si, s.fence);
         s.pending = true;
+        s.serial = ++submitted;
         s.staging.insert(s.staging.end(), staging.begin(), staging.end());
         s.dead.insert(s.dead.end(), dead.begin(), dead.end());
         staging.clear();
@@ -491,6 +502,7 @@ struct VulkanRenderer::Impl {
     // a screen, read back from its framebuffer on the GPU a frame behind:
     // the copy goes with this frame, the picture is the last frame's
     bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
+        if (std::getenv("RUNTIME_VK_NO_PICTURE")) return false;
         Surface *fb = nullptr;
         for (auto &s : surfaces) {
             if (s->linear && !s->stale && !s->depth && s->address == address && s->width * bytes_per_pixel(s->format) == stride) fb = s.get();
@@ -507,32 +519,41 @@ struct VulkanRenderer::Impl {
             return false;
         }
         (void)format;
+        if (std::getenv("RUNTIME_VK_DEBUG")) {
+            static int calls = 0;
+            calls++;
+            if (screen == 0 && calls > 200 && calls < 212) {
+                std::fprintf(stderr, "picture call %d: fb %08X %ux%u f%u dirty%d; others:", calls, fb->address, fb->width, fb->height,
+                             fb->format, fb->dirty);
+                for (auto &o : surfaces) std::fprintf(stderr, " [%08X %ux%u lin%d stale%d dirty%d]", o->address, o->width, o->height, o->linear, o->stale, o->dirty);
+                std::fprintf(stderr, "%s", "\n");
+            }
+        }
         end_rendering();
-        Slot &s = slots[current];
+        ScreenCopy &sc = screen_copies[screen];
+        int now = sc.next, last = now ^ 1;
+        sc.next = last;
         VkBufferImageCopy c{};
         c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         c.imageExtent = {fb->width, fb->height, 1};
-        vkCmdCopyImageToBuffer(cmd, fb->image.image, VK_IMAGE_LAYOUT_GENERAL, s.screens[screen].buffer, 1, &c);
+        vkCmdCopyImageToBuffer(cmd, fb->image.image, VK_IMAGE_LAYOUT_GENERAL, sc.buffers[now].buffer, 1, &c);
         barrier();
-        s.screen_ready[screen] = true;
-        s.screen_size[screen][0] = fb->width, s.screen_size[screen][1] = fb->height;
-        // the copy the last frame sent, done by now (frame_done sent it)
-        Slot &done = slots[current ^ 1];
-        auto waited = std::chrono::steady_clock::now();
-        retire(done);
-        if (std::getenv("RUNTIME_VK_DEBUG")) {
-            static int shown = 0;
-            double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waited).count();
-            if (ms > 2 && shown++ < 20) std::fprintf(stderr, "picture %u waited %.1f ms for the last frame\n", screen, ms);
+        sc.serial[now] = submitted + 1;
+        sc.size[now][0] = fb->width, sc.size[now][1] = fb->height;
+        // the copy before: its submission done by now, as a rule (frame_done
+        // sent it a frame ago), waited for otherwise
+        if (!sc.serial[last]) return false;
+        if (sc.serial[last] > submitted) submit(true);
+        for (Slot &slot : slots) {
+            if (slot.pending && slot.serial <= sc.serial[last]) retire(slot);
         }
-        if (!done.screen_ready[screen]) return false;
-        uint32_t w = done.screen_size[screen][0], h = done.screen_size[screen][1];
+        uint32_t w = sc.size[last][0], h = sc.size[last][1];
         out.width = screen ? 320 : 400;
         out.height = 240;
         out.rgba.assign(out.width * out.height * 4, 0);
         // the framebuffer is the screen turned on its side: a screen column is
         // a row of it, bottom to top
-        const uint8_t *src = done.screens[screen].mapped;
+        const uint8_t *src = sc.buffers[last].mapped;
         for (uint32_t x = 0; x < out.width && x < h; x++) {
             for (uint32_t y = 0; y < out.height && y < w; y++) {
                 const uint8_t *p = src + (size_t(x) * w + (w - 1 - y)) * 4;
@@ -1138,6 +1159,9 @@ struct VulkanRenderer::Impl {
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
         for (auto &[k, s] : samplers) vkDestroySampler(device, s, nullptr);
         for (Buffer &b : staging) destroy(b);
+        for (ScreenCopy &c : screen_copies) {
+            for (Buffer &b : c.buffers) destroy(b);
+        }
         for (Slot &s : slots) {
             s.pending = true;
             vkResetFences(device, 1, &s.fence);
@@ -1145,7 +1169,7 @@ struct VulkanRenderer::Impl {
             for (Image &i : s.dead) destroy(i);
             destroy(s.vertices);
             destroy(s.uniforms);
-            for (Buffer &b : s.screens) destroy(b);
+
             vkDestroyFence(device, s.fence, nullptr);
         }
         vkDestroyShaderModule(device, vert, nullptr);
