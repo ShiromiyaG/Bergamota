@@ -32,14 +32,17 @@ public:
     uint64_t shaded = 0; // vertices through the shader
 
 private:
-    void shade(Pica &pica, std::array<Vec4, 16> &inputs, Vertex &out);
+    // the vertices gathered, shaded across the CPU's cores when there are many
+    void shade_all(Pica &pica);
     void assemble(Pica &pica, const std::vector<Vertex> &vertices, const std::vector<uint32_t> *order, size_t count,
                   std::vector<Vertex> &triangles);
 
     std::unique_ptr<Program> program_;
     Runner runner_;
     std::vector<Vertex> shaded_;
-    std::vector<uint32_t> indices_, order_;
+    std::vector<std::array<Vec4, 16>> inputs_;
+    std::vector<uint32_t> indices_, order_, seen_;
+    uint32_t stamp_ = 0;
 };
 
 } // namespace runtime::pica

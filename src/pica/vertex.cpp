@@ -5,7 +5,8 @@
 #include "runtime/memory.h"
 
 #include <cstring>
-#include <unordered_map>
+#include <execution>
+#include <numeric>
 
 namespace runtime::pica {
 
@@ -109,17 +110,17 @@ void fetch(Memory &m, uint32_t base, const Layout &l, uint32_t index, std::array
 
 } // namespace
 
-// the shader's outputs to the rasterizer's values: the enabled output
-// registers in order, each component named by the output map
-void VertexStage::shade(Pica &p, std::array<Vec4, 16> &inputs, Vertex &v) {
-    runner_.input = inputs;
-    runner_.run(p.vertex_shader, *program_);
-    shaded++;
+// one vertex through the shader, and its outputs to the rasterizer's
+// values: the enabled output registers in order, each component named by
+// the output map
+static void shade(const Pica &p, const Program &program, Runner &runner, const std::array<Vec4, 16> &inputs, Vertex &v) {
+    runner.input = inputs;
+    runner.run(p.vertex_shader, program);
     std::array<Vec4, 16> packed{};
     uint32_t mask = p.regs[VS_BLOCK + OUTPUT_MASK] & 0xFFFF;
-    if (!mask) packed = runner_.output;
+    if (!mask) packed = runner.output;
     for (uint32_t reg = 0, slot = 0; reg < 16 && mask; reg++) {
-        if (mask >> reg & 1) packed[slot++] = runner_.output[reg];
+        if (mask >> reg & 1) packed[slot++] = runner.output[reg];
     }
     float values[24] = {};
     values[3] = 1; // w, when nothing says
@@ -143,6 +144,24 @@ void VertexStage::shade(Pica &p, std::array<Vec4, 16> &inputs, Vertex &v) {
     v.w0 = values[16];
     v.view[0] = values[18], v.view[1] = values[19], v.view[2] = values[20];
     v.uv2[0] = values[22], v.uv2[1] = values[23];
+}
+
+void VertexStage::shade_all(Pica &p) {
+    size_t n = inputs_.size();
+    shaded_.resize(n);
+    shaded += n;
+    constexpr size_t CHUNK = 128;
+    if (n < CHUNK * 2) {
+        for (size_t i = 0; i < n; i++) shade(p, *program_, runner_, inputs_[i], shaded_[i]);
+        return;
+    }
+    // a runner each chunk: they keep their own registers
+    std::vector<size_t> chunks((n + CHUNK - 1) / CHUNK);
+    std::iota(chunks.begin(), chunks.end(), size_t(0));
+    std::for_each(std::execution::par, chunks.begin(), chunks.end(), [&](size_t c) {
+        Runner runner;
+        for (size_t i = c * CHUNK; i < std::min(n, (c + 1) * CHUNK); i++) shade(p, *program_, runner, inputs_[i], shaded_[i]);
+    });
 }
 
 // triangles from the vertices, in the topology the registers say: a list,
@@ -184,32 +203,32 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
     if (program_->version != p.vertex_shader.version) program_->decode(p.vertex_shader);
     Layout l = layout(p);
     uint32_t base = (p.regs[ATTRIBUTE_BASE] & 0x0FFFFFFF) << 3;
-    std::array<Vec4, 16> in;
-    shaded_.clear();
+    inputs_.clear();
     if (indexed) {
-        // each vertex the index buffer names, shaded once
+        // each vertex the index buffer names, fetched and shaded once: a
+        // stamp per index says where it went this draw
         uint32_t config = p.regs[INDEX_ARRAY];
         bool shorts = config >> 31;
         const uint8_t *bytes = p.memory.host(base + (config & 0x0FFFFFFF), count * (shorts ? 2 : 1));
         if (!bytes) return true;
-        std::unordered_map<uint32_t, uint32_t> seen;
+        if (seen_.size() < 0x10000 * 2) seen_.assign(0x10000 * 2, 0);
+        if (++stamp_ == 0) std::fill(seen_.begin(), seen_.end(), 0), stamp_ = 1;
         order_.resize(count);
         for (uint32_t i = 0; i < count; i++) {
             uint32_t index = shorts ? uint32_t(bytes[i * 2] | bytes[i * 2 + 1] << 8) : bytes[i];
-            auto [it, fresh] = seen.try_emplace(index, uint32_t(shaded_.size()));
-            if (fresh) {
-                fetch(p.memory, base, l, index, in);
-                shade(p, in, shaded_.emplace_back());
+            if (seen_[index * 2] != stamp_) {
+                seen_[index * 2] = stamp_;
+                seen_[index * 2 + 1] = uint32_t(inputs_.size());
+                fetch(p.memory, base, l, index, inputs_.emplace_back());
             }
-            order_[i] = it->second;
+            order_[i] = seen_[index * 2 + 1];
         }
+        shade_all(p);
         assemble(p, shaded_, &order_, count, triangles);
     } else {
-        shaded_.resize(count);
-        for (uint32_t i = 0; i < count; i++) {
-            fetch(p.memory, base, l, first + i, in);
-            shade(p, in, shaded_[i]);
-        }
+        inputs_.resize(count);
+        for (uint32_t i = 0; i < count; i++) fetch(p.memory, base, l, first + i, inputs_[i]);
+        shade_all(p);
         assemble(p, shaded_, nullptr, count, triangles);
     }
     return true;
@@ -221,12 +240,11 @@ bool VertexStage::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>
     if (program_->version != p.vertex_shader.version) program_->decode(p.vertex_shader);
     uint64_t map = p.regs[VS_BLOCK + INPUT_MAP_LOW] | uint64_t(p.regs[VS_BLOCK + INPUT_MAP_HIGH]) << 32;
     uint32_t count = (p.regs[VS_ATTRIBUTE_COUNT] & 0xF) + 1;
-    shaded_.resize(attributes.size());
+    inputs_.assign(attributes.size(), {});
     for (size_t v = 0; v < attributes.size(); v++) {
-        std::array<Vec4, 16> in{};
-        for (uint32_t id = 0; id < count && id < 16; id++) in[(map >> (id * 4)) & 0xF] = attributes[v][id];
-        shade(p, in, shaded_[v]);
+        for (uint32_t id = 0; id < count && id < 16; id++) inputs_[v][(map >> (id * 4)) & 0xF] = attributes[v][id];
     }
+    shade_all(p);
     assemble(p, shaded_, nullptr, shaded_.size(), triangles);
     return true;
 }
