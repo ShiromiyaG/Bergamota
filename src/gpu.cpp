@@ -111,15 +111,6 @@ void ZakuroGpu::sync(uint32_t paddr, uint32_t size) {
     if (hardware && size) zgpu_sync(gpu_, paddr, size);
 }
 Picture ZakuroGpu::screen(uint32_t screen) {
-    if (hardware) {
-        // straight from the host GPU, without waiting for it
-        Picture p;
-        const uint8_t *rgba = zgpu_scaled_screen(gpu_, screen, &p.width, &p.height);
-        if (rgba) {
-            p.rgba.assign(rgba, rgba + size_t(p.width) * p.height * 4);
-            return p;
-        }
-    }
     uint32_t address, stride, format;
     zgpu_framebuffer(gpu_, screen, &address, &stride, &format);
     // what the host GPU drew there, into memory first
