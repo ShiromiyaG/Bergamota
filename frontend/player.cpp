@@ -16,6 +16,8 @@
 #include "ui.h"
 
 #include "runtime/fs.h"
+#include "runtime/pica.h"
+#include "runtime/vulkan_renderer.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
@@ -30,6 +32,8 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
+#include <memory>
 #include <iterator>
 
 using namespace runtime;
@@ -123,9 +127,35 @@ int main(int argc, char **argv) {
     handlers.on_module = [](const std::string &name, uint32_t base) { library.place(name, base); };
     System system(config, lookup, services);
     load(system, exheader, read_file(settings.game.code));
-    ZakuroGpu gpu(system.memory, true, exheader.program_id);
-    std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
-    handlers.gpu = &gpu;
+    // the renderer: the runtime's own, or Zakuro's through its bridge
+    struct {
+        std::function<Picture(uint32_t)> screen;
+        std::function<double()> busy;
+        std::function<void()> frame_done = [] {};
+    } gpu;
+    std::unique_ptr<pica::Pica> pica_gpu;
+    std::unique_ptr<VulkanRenderer> vulkan;
+    std::unique_ptr<ZakuroGpu> zakuro_gpu;
+    if (settings.video.renderer != "zakuro") {
+        pica_gpu = std::make_unique<pica::Pica>(system.memory);
+        vulkan = std::make_unique<VulkanRenderer>(system.memory);
+        if (vulkan->ready()) {
+            pica_gpu->backend = vulkan.get();
+            handlers.gpu = pica_gpu.get();
+            gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; }, [&] { pica_gpu->frame_done(); }};
+            std::printf("drawing with the runtime's renderer\n");
+        } else {
+            std::fprintf(stderr, "no Vulkan for the runtime's renderer (%s), Zakuro's instead\n", vulkan->error.c_str());
+            vulkan.reset();
+            pica_gpu.reset();
+        }
+    }
+    if (!handlers.gpu) {
+        zakuro_gpu = std::make_unique<ZakuroGpu>(system.memory, true, exheader.program_id);
+        handlers.gpu = zakuro_gpu.get();
+        gpu = {[&](uint32_t s) { return zakuro_gpu->screen(s); }, [&] { return zakuro_gpu->busy; }};
+        std::printf("drawing with Zakuro's renderer\n");
+    }
 
     SDL_Texture *screens[2] = {
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240),
@@ -159,7 +189,7 @@ int main(int argc, char **argv) {
     auto next_frame = std::chrono::steady_clock::now();
     auto second = next_frame, last_shown = next_frame;
     frontend::Stats stats, counting;
-    double busy_before = 0, idle_before = 0;
+    double busy_before = 0, idle_before = 0, screens_ms = 0, send_ms = 0;
     system.run([&] {
         handlers.tick(system);
         auto &out = handlers.audio.output;
@@ -230,6 +260,11 @@ int main(int argc, char **argv) {
             SDL_FRect at{s ? 40.0f : 0.0f, s ? 240.0f : 0.0f, float(p.width), 240.0f};
             SDL_RenderTexture(renderer, screens[s], nullptr, &at);
         }
+        auto taken = std::chrono::steady_clock::now();
+        gpu.frame_done();
+        auto sent = std::chrono::steady_clock::now();
+        screens_ms += std::chrono::duration<double, std::milli>(taken - drawing).count();
+        send_ms += std::chrono::duration<double, std::milli>(sent - taken).count();
         // the overlay over them, at the window's own size
         ImGui_ImplSDLRenderer3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -249,18 +284,18 @@ int main(int argc, char **argv) {
         last_shown = done;
         counting.shown++;
         if (done - second >= std::chrono::seconds(1)) {
-            counting.gpu_ms = (gpu.busy - busy_before) * 1000;
+            counting.gpu_ms = (gpu.busy() - busy_before) * 1000;
             counting.idle_ms = (system.idle - idle_before) * 1000;
             stats = counting;
             if (print_stats) {
-                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, drawing %.1f ms\n", stats.shown,
-                            stats.worst_ms, stats.gpu_ms, stats.idle_ms,
-                            std::chrono::duration<double, std::milli>(done - drawing).count());
+                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, screens %.0f ms, sending %.0f ms\n",
+                            stats.shown, stats.worst_ms, stats.gpu_ms, stats.idle_ms, screens_ms, send_ms);
+                screens_ms = send_ms = 0;
                 std::fflush(stdout);
             }
             counting = {};
             second = done;
-            busy_before = gpu.busy;
+            busy_before = gpu.busy();
             idle_before = system.idle;
         }
         return quit;

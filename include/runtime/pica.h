@@ -137,6 +137,14 @@ struct Backend {
         bool flip, out_tiled;
     };
     virtual bool display_transfer(const Transfer &) { return false; }
+    // what a screen shows, straight from the GPU when it is there (a frame
+    // behind, to not wait for it); false to read memory instead
+    virtual bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
+        (void)screen, (void)address, (void)stride, (void)format, (void)out;
+        return false;
+    }
+    // the frontend showed a frame: what was recorded goes to the GPU
+    virtual void frame_done() {}
 };
 
 class Pica : public Gpu {
@@ -156,8 +164,12 @@ public:
                      uint32_t format) override;
     void sync(uint32_t paddr, uint32_t size) override;
 
-    // what a screen shows now, from memory
+    // what a screen shows now (from the GPU a frame behind, or from memory)
     Picture screen(uint32_t screen);
+    // after the screens of a frame were taken
+    void frame_done() {
+        if (backend) backend->frame_done();
+    }
 
     Memory &memory;
     std::array<uint32_t, REGISTERS> regs{};

@@ -370,8 +370,10 @@ void Pica::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t
 
 Picture Pica::screen(uint32_t s) {
     const Screen &screen = screens[s & 1];
-    // what the GPU keeps of it, into memory first
+    // from the GPU, or what it keeps of it into memory first
     uint32_t stride = screen.stride ? screen.stride : 240 * bytes_per_pixel(screen.format);
+    Picture direct;
+    if (backend && backend->picture(s & 1, screen.address, stride, screen.format, direct)) return direct;
     if (backend) backend->sync(screen.address, stride * (s & 1 ? 320 : 400), false);
     return read_screen(memory, s & 1, screen.address, screen.stride, screen.format);
 }

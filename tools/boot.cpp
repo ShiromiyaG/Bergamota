@@ -199,6 +199,7 @@ int main(int argc, char **argv) {
 #ifdef RUNTIME_ZAKURO_GPU
             if (shots_dir && handlers.vblanks >= shot_frame + shot_every) {
                 shot_frame = handlers.vblanks / shot_every * shot_every;
+                if (pica_gpu) pica_gpu->frame_done();
                 if (sketch) {
                     char prefix[512];
                     std::snprintf(prefix, sizeof prefix, "%s/%06llu-sketch", shots_dir, (unsigned long long)shot_frame);

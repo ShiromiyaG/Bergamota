@@ -24,6 +24,8 @@ public:
     void sync(uint32_t paddr, uint32_t size, bool write) override;
     void fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) override;
     bool display_transfer(const Transfer &transfer) override;
+    bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) override;
+    void frame_done() override;
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
