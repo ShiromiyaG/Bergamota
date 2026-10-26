@@ -1,12 +1,19 @@
 // A game on the runtime, in a window: both screens for now (the ports put
 // their own layout on top, Solstice its single screen), the keyboard, a
-// gamepad, and the mouse on the bottom screen as the stylus.
+// gamepad, and the mouse on the bottom screen as the stylus. Sound through
+// SDL3.
 //
+//   player [--config <file>] [--setup]
 //   player <exheader.bin> <code.bin> <recompiled library> <game .3ds> <update .cia> <user folder>
 //
-// Sound through SDL3. Keys: arrows the D-pad, X/Z A/B, S/A X/Y, Q/W L/R, Enter Start,
-// Backspace Select, IJKL the circle pad. A gamepad by position (the
-// bottom face button is B, as on the 3DS).
+// The settings live in config.toml (%APPDATA%\runtime by default): the
+// launcher asks for the game's files when they are missing or with --setup,
+// and F1 opens the overlay over the game for the rest (video, audio,
+// controls). F11 switches fullscreen. RUNTIME_STATS prints a line a second
+// on where the time went.
+
+#include "settings.h"
+#include "ui.h"
 
 #include "runtime/fs.h"
 #include "runtime/loader.h"
@@ -14,18 +21,24 @@
 #include "runtime/system.h"
 
 #include <SDL3/SDL.h>
+#include <imgui.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_sdlrenderer3.h>
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 
 using namespace runtime;
+using frontend::Settings;
 
 namespace {
 
-std::vector<uint8_t> read_file(const char *path) {
-    std::ifstream in(path, std::ios::binary);
+std::vector<uint8_t> read_file(const std::string &path) {
+    std::ifstream in(frontend::path_of(path), std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
 }
 
@@ -36,76 +49,84 @@ void services(System &system, Thread &thread, const std::string &service, uint32
     services_ptr->request(system, thread, service, subhandle);
 }
 
-// the 3DS's button bits
-enum : uint32_t {
-    A = 1, B = 2, SELECT = 4, START = 8, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128, R = 256, L = 512, X = 1024,
-    Y = 2048,
+// the bindings, resolved from their names: a scancode and a gamepad button
+// for each of the settings' buttons
+struct Bindings {
+    SDL_Scancode keys[std::size(frontend::BUTTONS)];
+    SDL_GamepadButton pad[std::size(frontend::BUTTONS)];
+
+    void resolve(const Settings &s) {
+        for (size_t i = 0; i < std::size(frontend::BUTTONS); i++) {
+            auto k = s.keys.find(frontend::BUTTONS[i].name);
+            keys[i] = k == s.keys.end() ? SDL_SCANCODE_UNKNOWN : SDL_GetScancodeFromName(k->second.c_str());
+            auto p = s.pad.find(frontend::BUTTONS[i].name);
+            pad[i] = p == s.pad.end() ? SDL_GAMEPAD_BUTTON_INVALID : SDL_GetGamepadButtonFromString(p->second.c_str());
+        }
+    }
 };
 
-struct Key {
-    SDL_Scancode key;
-    uint32_t button;
-};
-constexpr Key KEYS[] = {
-    {SDL_SCANCODE_X, A}, {SDL_SCANCODE_Z, B}, {SDL_SCANCODE_S, X}, {SDL_SCANCODE_A, Y},
-    {SDL_SCANCODE_Q, L}, {SDL_SCANCODE_W, R}, {SDL_SCANCODE_RETURN, START}, {SDL_SCANCODE_BACKSPACE, SELECT},
-    {SDL_SCANCODE_UP, UP}, {SDL_SCANCODE_DOWN, DOWN}, {SDL_SCANCODE_LEFT, LEFT}, {SDL_SCANCODE_RIGHT, RIGHT},
-};
-
-struct Pad {
-    SDL_GamepadButton button;
-    uint32_t bit;
-};
-// by position: the 3DS's A is on the right, B at the bottom
-constexpr Pad PADS[] = {
-    {SDL_GAMEPAD_BUTTON_EAST, A}, {SDL_GAMEPAD_BUTTON_SOUTH, B}, {SDL_GAMEPAD_BUTTON_NORTH, X},
-    {SDL_GAMEPAD_BUTTON_WEST, Y}, {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, L}, {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, R},
-    {SDL_GAMEPAD_BUTTON_START, START}, {SDL_GAMEPAD_BUTTON_BACK, SELECT}, {SDL_GAMEPAD_BUTTON_DPAD_UP, UP},
-    {SDL_GAMEPAD_BUTTON_DPAD_DOWN, DOWN}, {SDL_GAMEPAD_BUTTON_DPAD_LEFT, LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, RIGHT},
-};
+int fail(const std::string &message) {
+    std::fprintf(stderr, "%s\n", message.c_str());
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "runtime", message.c_str(), nullptr);
+    return 1;
+}
 
 } // namespace
 
 int main(int argc, char **argv) {
-    if (argc < 7) {
-        std::fprintf(stderr, "player <exheader.bin> <code.bin> <library> <game .3ds> <update .cia> <user folder>\n");
-        return 2;
+    std::filesystem::path config_file = frontend::default_path();
+    bool setup = false;
+    std::vector<std::string> positional;
+    for (int i = 1; i < argc; i++) {
+        if (!std::strcmp(argv[i], "--config") && i + 1 < argc) config_file = frontend::path_of(argv[++i]);
+        else if (!std::strcmp(argv[i], "--setup")) setup = true;
+        else positional.push_back(argv[i]);
     }
-    ExHeader exheader;
+    Settings settings;
     std::string error;
-    if (!parse_exheader(read_file(argv[1]), exheader, error) || !library.open(argv[3], error)) {
-        std::fprintf(stderr, "%s\n", error.c_str());
-        return 1;
+    if (!frontend::load(config_file, settings, error)) {
+        std::fprintf(stderr, "%s: %s (the defaults instead)\n", frontend::utf8(config_file).c_str(), error.c_str());
+    }
+    if (positional.size() >= 6) {
+        // the game's files on the command line, as before the settings
+        settings.game = {positional[0], positional[1], positional[2], positional[3], positional[4], positional[5]};
+    }
+
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) return fail(std::string("SDL: ") + SDL_GetError());
+    constexpr int SCALE = 2;
+    SDL_Window *window = SDL_CreateWindow("runtime", 400 * SCALE, 480 * SCALE, SDL_WINDOW_RESIZABLE);
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
+    if (!window || !renderer) return fail(std::string("SDL: ") + SDL_GetError());
+    frontend::ui_init(window, renderer);
+
+    if ((setup || !settings.game_ready()) && !frontend::launcher(window, renderer, settings, config_file)) {
+        frontend::ui_shutdown();
+        SDL_Quit();
+        return 0;
+    }
+
+    // the game
+    ExHeader exheader;
+    if (!parse_exheader(read_file(settings.game.exheader), exheader, error) || !library.open(settings.game.library, error)) {
+        return fail(error);
     }
     Config config;
     config.app_bytes = exheader.app_bytes;
     config.region = exheader.region;
     Services handlers(exheader.program_id);
     services_ptr = &handlers;
-    Fs fs(argv[6], exheader.program_id);
-    fs.romfs = find_romfs(argv[4], error);
-    fs.update_romfs = find_romfs(argv[5], error);
-    if (!fs.romfs) {
-        std::fprintf(stderr, "%s\n", error.c_str());
-        return 1;
-    }
+    Fs fs(settings.game.user, exheader.program_id);
+    fs.romfs = find_romfs(settings.game.game, error);
+    if (!settings.game.update.empty()) fs.update_romfs = find_romfs(settings.game.update, error);
+    if (!fs.romfs) return fail(error);
     handlers.fs = &fs;
     handlers.on_module = [](const std::string &name, uint32_t base) { library.place(name, base); };
     System system(config, lookup, services);
-    load(system, exheader, read_file(argv[2]));
+    load(system, exheader, read_file(settings.game.code));
     ZakuroGpu gpu(system.memory, true, exheader.program_id);
     std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
     handlers.gpu = &gpu;
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) {
-        std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
-        return 1;
-    }
-    constexpr int SCALE = 2;
-    SDL_Window *window = SDL_CreateWindow("runtime", 400 * SCALE, 480 * SCALE, SDL_WINDOW_RESIZABLE);
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
-    SDL_SetRenderVSync(renderer, 0);
-    SDL_SetRenderLogicalPresentation(renderer, 400, 480, SDL_LOGICAL_PRESENTATION_LETTERBOX);
     SDL_Texture *screens[2] = {
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240),
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240),
@@ -116,13 +137,29 @@ int main(int argc, char **argv) {
     SDL_AudioStream *sound = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
     if (sound) SDL_ResumeAudioStreamDevice(sound);
 
+    // what the settings say, applied now and whenever the overlay moves them
+    Bindings bindings;
+    bool both = true;
+    auto apply = [&] {
+        bindings.resolve(settings);
+        SDL_SetWindowFullscreen(window, settings.video.fullscreen);
+        SDL_SetRenderVSync(renderer, settings.video.vsync ? 1 : 0);
+        for (SDL_Texture *t : screens) {
+            SDL_SetTextureScaleMode(t, settings.video.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+        }
+        both = settings.video.layout != "top";
+        SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
+    };
+    apply();
+    frontend::Overlay overlay;
+
     bool quit = false;
+    const bool print_stats = SDL_getenv("RUNTIME_STATS") != nullptr;
     auto next_frame = std::chrono::steady_clock::now();
-    // RUNTIME_STATS: a line a second on where the time went
-    const bool stats = SDL_getenv("RUNTIME_STATS") != nullptr;
     auto second = next_frame, last_shown = next_frame;
-    double worst = 0, presenting = 0, busy_before = 0, idle_before = 0;
-    uint64_t shown = 0, interpreted_before = 0, vblanks_before = 0, pictures_before = 0;
+    frontend::Stats stats, counting;
+    double busy_before = 0, idle_before = 0;
     system.run([&] {
         handlers.tick(system);
         auto &out = handlers.audio.output;
@@ -141,70 +178,96 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) quit = true;
             if (event.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && !event.key.repeat) {
+                settings.video.fullscreen = !settings.video.fullscreen;
+                SDL_SetWindowFullscreen(window, settings.video.fullscreen);
+            }
+            overlay.event(event);
         }
-        // the input, from the keyboard and the gamepad together
-        const bool *keys = SDL_GetKeyboardState(nullptr);
+
+        // the input, from the keyboard and the gamepad together; none while
+        // the overlay is open
         uint32_t buttons = 0;
-        for (const Key &k : KEYS) buttons |= keys[k.key] ? k.button : 0;
-        float cx = float(keys[SDL_SCANCODE_L]) - float(keys[SDL_SCANCODE_J]);
-        float cy = float(keys[SDL_SCANCODE_I]) - float(keys[SDL_SCANCODE_K]);
-        if (gamepad) {
-            for (const Pad &p : PADS) buttons |= SDL_GetGamepadButton(gamepad, p.button) ? p.bit : 0;
-            float gx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0f;
-            float gy = -SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
-            if (std::abs(gx) > std::abs(cx)) cx = gx;
-            if (std::abs(gy) > std::abs(cy)) cy = gy;
+        float cx = 0, cy = 0;
+        bool touching = false;
+        float mx = 0, my = 0;
+        if (!overlay.open) {
+            const bool *keys = SDL_GetKeyboardState(nullptr);
+            float circle[4] = {}; // up, down, left, right
+            for (size_t i = 0; i < std::size(frontend::BUTTONS); i++) {
+                bool held = bindings.keys[i] != SDL_SCANCODE_UNKNOWN && keys[bindings.keys[i]];
+                if (gamepad && bindings.pad[i] != SDL_GAMEPAD_BUTTON_INVALID) held |= SDL_GetGamepadButton(gamepad, bindings.pad[i]);
+                if (!held) continue;
+                if (frontend::BUTTONS[i].bit) buttons |= frontend::BUTTONS[i].bit;
+                else circle[i - 12] = 1;
+            }
+            cx = circle[3] - circle[2];
+            cy = circle[0] - circle[1];
+            if (gamepad) {
+                float gx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0f;
+                float gy = -SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
+                if (std::abs(gx) > std::abs(cx)) cx = gx;
+                if (std::abs(gy) > std::abs(cy)) cy = gy;
+            }
+            // the mouse on the bottom screen is the stylus
+            SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
+            SDL_RenderCoordinatesFromWindow(renderer, mx, my, &mx, &my);
+            touching = both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 40 && mx < 360;
         }
         handlers.input.buttons = buttons;
         handlers.input.circle_x = cx;
         handlers.input.circle_y = cy;
-        // the mouse on the bottom screen is the stylus
-        float mx, my;
-        SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
-        SDL_RenderCoordinatesFromWindow(renderer, mx, my, &mx, &my);
         handlers.input.touch.reset();
-        if ((mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 40 && mx < 360) {
-            handlers.input.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
-        }
+        if (touching) handlers.input.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
 
-        auto drawing = std::chrono::steady_clock::now();
         // the screens
+        auto drawing = std::chrono::steady_clock::now();
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-        for (uint32_t s = 0; s < 2; s++) {
+        for (uint32_t s = 0; s < (both ? 2u : 1u); s++) {
             Picture p = gpu.screen(s);
             SDL_UpdateTexture(screens[s], nullptr, p.rgba.data(), int(p.width * 4));
             SDL_FRect at{s ? 40.0f : 0.0f, s ? 240.0f : 0.0f, float(p.width), 240.0f};
             SDL_RenderTexture(renderer, screens[s], nullptr, &at);
         }
+        // the overlay over them, at the window's own size
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+        bool changed = false;
+        overlay.draw(settings, stats, config_file, changed);
+        ImGui::Render();
+        SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
+        SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
         SDL_RenderPresent(renderer);
-        if (stats) {
-            auto done = std::chrono::steady_clock::now();
-            presenting += std::chrono::duration<double>(done - drawing).count();
-            worst = std::max(worst, std::chrono::duration<double>(done - last_shown).count());
-            last_shown = done;
-            shown++;
-            if (done - second >= std::chrono::seconds(1)) {
-                std::printf("shown %llu, worst gap %.0f ms, presenting %.0f ms, gpu %.0f ms, idle %.0f ms, "
-                            "vblanks %llu, pictures %llu, interpreted %llu\n",
-                            (unsigned long long)shown, worst * 1000, presenting * 1000, (gpu.busy - busy_before) * 1000,
-                            (system.idle - idle_before) * 1000, (unsigned long long)(handlers.vblanks - vblanks_before),
-                            (unsigned long long)(handlers.pictures - pictures_before),
-                            (unsigned long long)(system.interpreted - interpreted_before));
+        if (changed) apply();
+
+        // how the second went
+        auto done = std::chrono::steady_clock::now();
+        counting.worst_ms = std::max(counting.worst_ms, std::chrono::duration<double, std::milli>(done - last_shown).count());
+        last_shown = done;
+        counting.shown++;
+        if (done - second >= std::chrono::seconds(1)) {
+            counting.gpu_ms = (gpu.busy - busy_before) * 1000;
+            counting.idle_ms = (system.idle - idle_before) * 1000;
+            stats = counting;
+            if (print_stats) {
+                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, drawing %.1f ms\n", stats.shown,
+                            stats.worst_ms, stats.gpu_ms, stats.idle_ms,
+                            std::chrono::duration<double, std::milli>(done - drawing).count());
                 std::fflush(stdout);
-                second = done;
-                shown = 0;
-                worst = presenting = 0;
-                busy_before = gpu.busy;
-                idle_before = system.idle;
-                vblanks_before = handlers.vblanks;
-                pictures_before = handlers.pictures;
-                interpreted_before = system.interpreted;
             }
+            counting = {};
+            second = done;
+            busy_before = gpu.busy;
+            idle_before = system.idle;
         }
         return quit;
     });
     if (!system.error().empty()) std::fprintf(stderr, "stopped: %s\n", system.error().c_str());
+    frontend::save(config_file, settings, error);
+    frontend::ui_shutdown();
     SDL_Quit();
     return 0;
 }
