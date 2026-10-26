@@ -182,6 +182,9 @@ public:
     void signal_event(ObjectId object);
     ObjectId insert(KObject object);
     Handle create_handle(ObjectId object);
+    // a service keeping an object alive whatever the game does with its handles
+    void hold(ObjectId object) { add_ref(object); }
+    void release_hold(ObjectId object) { release(object); }
     std::optional<ObjectId> resolve(Handle handle);
     KObject *object(ObjectId id);
 

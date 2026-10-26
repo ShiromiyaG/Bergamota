@@ -71,6 +71,8 @@ int main(int argc, char **argv) {
     };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
+    NullGpu gpu(system.memory);
+    handlers.gpu = &gpu;
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     bool went_on = system.run([&] {

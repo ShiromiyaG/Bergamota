@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "runtime/cro.h"
+#include "runtime/gpu.h"
 #include "runtime/system.h"
 
 namespace runtime {
@@ -71,6 +72,8 @@ public:
     // told where each module goes (0 when it goes away), for the code made for it
     std::function<void(const std::string &name, uint32_t base)> on_module;
     CroLoader cro;
+    // the GPU gsp drives; NullGpu draws nothing
+    Gpu *gpu = nullptr;
 
     // what the hardware does on its own as time passes: the DSP's audio
     // frames; called often from the loop
@@ -94,6 +97,12 @@ private:
     bool cfg(System &, CommandBuffer &);
     bool dsp(System &, CommandBuffer &);
     bool ldr_ro(System &, CommandBuffer &);
+    bool gsp(System &, CommandBuffer &);
+    uint32_t gsp_shared(System &) const;
+    void gsp_interrupt(System &, uint8_t id);
+    void gsp_queue(System &);
+    void gsp_refresh(System &);
+    uint32_t gsp_physical(System &, uint32_t vaddr) const;
     void dsp_write_pipe(System &, uint32_t channel, const std::vector<uint8_t> &data);
     void dsp_signal(System &);
     void send_parameter(System &, Parameter parameter);
@@ -126,6 +135,13 @@ private:
         uint32_t fixed;
     };
     std::map<uint32_t, Copy> copies_;
+    // gsp: its shared block, the client's event, the pictures waiting
+    struct Gsp {
+        std::optional<ObjectId> shared, event;
+        std::optional<std::pair<uint32_t, uint32_t>> waiting[2];
+        bool held = false;
+        uint64_t next_vblank = 0;
+    } gsp_;
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
 };

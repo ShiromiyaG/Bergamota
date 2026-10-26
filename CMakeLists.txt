@@ -15,6 +15,7 @@ add_library(recomp_runtime STATIC
     src/loader.cpp
     src/interpreter.cpp
     src/cro.cpp
+    src/gpu.cpp
     src/services/services.cpp
     src/services/fs.cpp
     src/services.cpp
