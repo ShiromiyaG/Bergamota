@@ -26,7 +26,8 @@ constexpr uint32_t INVALID_ADDRESS = 0xE0E01BF5, MISALIGNED_SIZE = 0xE0E01BF2;
 
 Memory::Memory(bool new3ds, uint32_t app_bytes)
     : fcram_(new3ds ? FCRAM_SIZE_NEW3DS : FCRAM_SIZE_OLD3DS), vram_(VRAM_SIZE), dsp_(DSP_RAM_SIZE),
-      axi_(AXI_WRAM_SIZE), read_(PAGE_COUNT, nullptr), write_(PAGE_COUNT, nullptr) {
+      axi_(AXI_WRAM_SIZE), read_(PAGE_COUNT, nullptr), write_(PAGE_COUNT, nullptr),
+      cpu_read_(PAGE_COUNT, nullptr), cpu_write_(PAGE_COUNT, nullptr) {
     uint32_t total = static_cast<uint32_t>(fcram_.size());
     uint32_t app = std::min(app_bytes, total);
     // the retail kernel gives SYSTEM 32 MiB and BASE the rest
@@ -99,8 +100,14 @@ void Memory::map(uint32_t vaddr, uint32_t paddr, uint32_t size, uint32_t permiss
             continue;
         }
         size_t index = (vaddr >> PAGE_BITS) + page;
-        if (permission & READ) read_[index] = at;
-        if (permission & WRITE) write_[index] = at;
+        if (permission & READ) {
+            read_[index] = at;
+            cpu_read_[index] = guarded(index, false) ? nullptr : at;
+        }
+        if (permission & WRITE) {
+            write_[index] = at;
+            cpu_write_[index] = guarded(index, true) ? nullptr : at;
+        }
     }
     mappings_[vaddr] = Mapping{vaddr, size, paddr, permission, state};
 }
@@ -108,7 +115,7 @@ void Memory::map(uint32_t vaddr, uint32_t paddr, uint32_t size, uint32_t permiss
 void Memory::unmap(uint32_t vaddr, uint32_t size) {
     for (uint32_t page = 0; page < size / PAGE_SIZE; page++) {
         size_t index = (vaddr >> PAGE_BITS) + page;
-        read_[index] = write_[index] = nullptr;
+        read_[index] = write_[index] = cpu_read_[index] = cpu_write_[index] = nullptr;
     }
     // a mapping the range covers in part keeps the rest, at its own pages
     uint64_t end = uint64_t(vaddr) + size;
@@ -191,6 +198,88 @@ void Memory::write32(uint32_t a, uint32_t v) {
     }
     write16(a, uint16_t(v));
     write16(a + 2, uint16_t(v >> 16));
+}
+
+// guards: buffers packed end to end stay apart, so an access to one does
+// not bring the other down
+void Memory::guard(uint32_t vaddr, uint32_t size, bool write) {
+    if (!size) return;
+    auto &guards = guards_[write];
+    uint64_t start = vaddr, end = uint64_t(vaddr) + size;
+    end = std::min<uint64_t>(end, 0xFFFFFFFF);
+    for (auto it = guards.lower_bound(uint32_t(start)); it != guards.begin();) {
+        --it;
+        if (it->second <= start) break;
+        start = std::min<uint64_t>(start, it->first);
+        end = std::max<uint64_t>(end, it->second);
+        it = guards.erase(it);
+    }
+    for (auto it = guards.lower_bound(uint32_t(start)); it != guards.end() && it->first < end;) {
+        end = std::max<uint64_t>(end, it->second);
+        it = guards.erase(it);
+    }
+    guards[uint32_t(start)] = uint32_t(end);
+    auto &table = write ? cpu_write_ : cpu_read_;
+    for (size_t page = vaddr >> PAGE_BITS; page <= (uint64_t(vaddr) + size - 1) >> PAGE_BITS; page++) table[page] = nullptr;
+}
+
+bool Memory::guarded(size_t page, bool write) const {
+    auto &guards = guards_[write];
+    uint64_t start = uint64_t(page) << PAGE_BITS, end = start + PAGE_SIZE;
+    auto it = guards.lower_bound(uint32_t(std::min<uint64_t>(end, 0xFFFFFFFF)));
+    if (it == guards.begin()) return false;
+    --it;
+    return it->second > start;
+}
+
+// the guarded ranges an access falls in: brought down whole and let go
+void Memory::unguard(uint32_t a, uint32_t size, bool write) {
+    auto &guards = guards_[write];
+    uint64_t end = uint64_t(a) + std::max(size, 1u);
+    std::vector<std::pair<uint32_t, uint32_t>> hit;
+    for (auto it = guards.lower_bound(uint32_t(std::min<uint64_t>(end, 0xFFFFFFFF))); it != guards.begin();) {
+        --it;
+        if (it->second <= a) break;
+        hit.push_back(*it);
+        it = guards.erase(it);
+    }
+    auto &table = write ? cpu_write_ : cpu_read_;
+    auto &from = write ? write_ : read_;
+    for (auto [start, stop] : hit) {
+        if (gpu_sync) gpu_sync(start, stop - start, write);
+        for (size_t page = start >> PAGE_BITS; page <= (stop - 1) >> PAGE_BITS; page++) {
+            if (!guarded(page, write)) table[page] = from[page];
+        }
+    }
+    // an access that ran past the page it started in, onto one nothing guards
+    for (size_t page = a >> PAGE_BITS; page <= (end - 1) >> PAGE_BITS; page++) {
+        if (!guarded(page, write)) table[page] = from[page];
+    }
+}
+
+uint8_t Memory::cpu_read8(uint32_t a) {
+    if (!cpu_read_[a >> PAGE_BITS]) unguard(a, 1, false);
+    return read8(a);
+}
+uint16_t Memory::cpu_read16(uint32_t a) {
+    if (!cpu_read_[a >> PAGE_BITS] || !cpu_read_[(a + 1) >> PAGE_BITS]) unguard(a, 2, false);
+    return read16(a);
+}
+uint32_t Memory::cpu_read32(uint32_t a) {
+    if (!cpu_read_[a >> PAGE_BITS] || !cpu_read_[(a + 3) >> PAGE_BITS]) unguard(a, 4, false);
+    return read32(a);
+}
+void Memory::cpu_write8(uint32_t a, uint8_t v) {
+    if (!cpu_write_[a >> PAGE_BITS]) unguard(a, 1, true);
+    write8(a, v);
+}
+void Memory::cpu_write16(uint32_t a, uint16_t v) {
+    if (!cpu_write_[a >> PAGE_BITS] || !cpu_write_[(a + 1) >> PAGE_BITS]) unguard(a, 2, true);
+    write16(a, v);
+}
+void Memory::cpu_write32(uint32_t a, uint32_t v) {
+    if (!cpu_write_[a >> PAGE_BITS] || !cpu_write_[(a + 3) >> PAGE_BITS]) unguard(a, 4, true);
+    write32(a, v);
 }
 
 void Memory::write32_privileged(uint32_t a, uint32_t v) {

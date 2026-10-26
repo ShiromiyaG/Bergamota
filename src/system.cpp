@@ -21,12 +21,12 @@ namespace {
 
 System &system_of(Context *ctx) { return *static_cast<System *>(ctx->user); }
 
-uint8_t host_read8(Context *c, uint32_t a) { return system_of(c).memory.read8(a); }
-uint16_t host_read16(Context *c, uint32_t a) { return system_of(c).memory.read16(a); }
-uint32_t host_read32(Context *c, uint32_t a) { return system_of(c).memory.read32(a); }
-void host_write8(Context *c, uint32_t a, uint8_t v) { system_of(c).memory.write8(a, v); }
-void host_write16(Context *c, uint32_t a, uint16_t v) { system_of(c).memory.write16(a, v); }
-void host_write32(Context *c, uint32_t a, uint32_t v) { system_of(c).memory.write32(a, v); }
+uint8_t host_read8(Context *c, uint32_t a) { return system_of(c).memory.cpu_read8(a); }
+uint16_t host_read16(Context *c, uint32_t a) { return system_of(c).memory.cpu_read16(a); }
+uint32_t host_read32(Context *c, uint32_t a) { return system_of(c).memory.cpu_read32(a); }
+void host_write8(Context *c, uint32_t a, uint8_t v) { system_of(c).memory.cpu_write8(a, v); }
+void host_write16(Context *c, uint32_t a, uint16_t v) { system_of(c).memory.cpu_write16(a, v); }
+void host_write32(Context *c, uint32_t a, uint32_t v) { system_of(c).memory.cpu_write32(a, v); }
 
 // one instruction the C left to the interpreter; a branch, a syscall or
 // one it cannot run leaves the C for the main loop
@@ -123,8 +123,8 @@ uint32_t System::allocate_tls() {
 }
 
 void System::prepare(Context &c) {
-    c.read_pages = memory.read_pages();
-    c.write_pages = memory.write_pages();
+    c.read_pages = memory.cpu_read_pages();
+    c.write_pages = memory.cpu_write_pages();
     c.host = &host_;
     c.user = this;
 }

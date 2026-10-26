@@ -8,6 +8,8 @@ use zakuro_gpu::{Gpu, GpuMemory, Picture, ScreenRef, SoftwareRenderer};
 /// the runtime's physical memories, by their physical addresses.
 struct Physical {
     regions: [(u32, *mut u8, usize); 3],
+    /// told of each range the host GPU drew, for the CPU's reads (0) or writes (1)
+    guard: Option<(extern "C" fn(*mut std::ffi::c_void, u32, u32, i32), *mut std::ffi::c_void)>,
 }
 
 impl Physical {
@@ -30,6 +32,18 @@ impl GpuMemory for Physical {
     fn write(&mut self, addr: u32, data: &[u8]) {
         if let Some(p) = self.find(addr, data.len()) {
             unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), p, data.len()) }
+        }
+    }
+
+    fn guard(&mut self, addr: u32, len: u32) {
+        if let Some((f, user)) = self.guard {
+            f(user, addr, len, 0)
+        }
+    }
+
+    fn guard_writes(&mut self, addr: u32, len: u32) {
+        if let Some((f, user)) = self.guard {
+            f(user, addr, len, 1)
         }
     }
 
@@ -60,7 +74,7 @@ pub unsafe extern "C" fn zgpu_new(fcram: *mut u8, fcram_size: usize, vram: *mut 
     Box::into_raw(Box::new(ZGpu {
         gpu: Gpu::new(),
         renderer: SoftwareRenderer::default(),
-        memory: Physical { regions: [(0x2000_0000, fcram, fcram_size), (0x1800_0000, vram, vram_size), (0x1FF8_0000, axi, axi_size)] },
+        memory: Physical { regions: [(0x2000_0000, fcram, fcram_size), (0x1800_0000, vram, vram_size), (0x1FF8_0000, axi, axi_size)], guard: None },
         showing: [None; 2],
         shown: [None, None],
     }))
@@ -186,4 +200,19 @@ pub extern "C" fn zgpu_scaled_screen(gpu: *mut ZGpu, screen: u32, width: *mut u3
         g.shown[index] = Some(picture);
         pointer
     })
+}
+
+/// guard is told of each range the host GPU drew (physical, its size, and 1
+/// for the CPU's writes, 0 for its reads); the runtime brings it down with
+/// zgpu_sync or zgpu_sync_depth before the CPU gets there
+#[no_mangle]
+pub extern "C" fn zgpu_set_guard(gpu: *mut ZGpu, guard: Option<extern "C" fn(*mut std::ffi::c_void, u32, u32, i32)>, user: *mut std::ffi::c_void) {
+    with(gpu, |g| g.memory.guard = guard.map(|f| (f, user)))
+}
+
+/// memory over a range made to hold the depth the host GPU drew there, for
+/// the CPU reading it
+#[no_mangle]
+pub extern "C" fn zgpu_sync_depth(gpu: *mut ZGpu, addr: u32, len: u32) {
+    with(gpu, |g| g.gpu.sync_depth(&mut g.memory, addr, len))
 }

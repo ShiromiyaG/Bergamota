@@ -31,6 +31,11 @@ void zgpu_set_framebuffer(ZGpu *gpu, uint32_t screen, uint32_t active, uint32_t 
 int zgpu_enable_hardware(ZGpu *gpu, uint32_t scale, uint64_t title);
 /* memory over a range made to hold what the host GPU drew there */
 void zgpu_sync(ZGpu *gpu, uint32_t addr, uint32_t len);
+/* the same for the depth it drew, for the CPU reading there */
+void zgpu_sync_depth(ZGpu *gpu, uint32_t addr, uint32_t len);
+/* guard is told of each range the host GPU drew: physical address, size, and 1 for
+   the CPU's writes there, 0 for its reads */
+void zgpu_set_guard(ZGpu *gpu, void (*guard)(void *user, uint32_t addr, uint32_t len, int32_t write), void *user);
 /* what a screen shows as the host GPU drew it, upright RGBA, no write-back; null when
    there is none. good until the next call for the same screen */
 const uint8_t *zgpu_scaled_screen(ZGpu *gpu, uint32_t screen, uint32_t *width, uint32_t *height);

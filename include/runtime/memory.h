@@ -8,6 +8,7 @@
 #define RUNTIME_MEMORY_H
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -71,6 +72,23 @@ public:
 
     uint8_t *const *read_pages() const { return read_.data(); }
     uint8_t *const *write_pages() const { return write_.data(); }
+    // the tables the game's code goes through: without the pages the host
+    // GPU drew over and keeps on its side, so the CPU's first access there
+    // takes the slow path and has the drawing brought down first
+    uint8_t *const *cpu_read_pages() const { return cpu_read_.data(); }
+    uint8_t *const *cpu_write_pages() const { return cpu_write_.data(); }
+    // a range the GPU drew, by virtual address, for the CPU's reads or writes
+    void guard(uint32_t vaddr, uint32_t size, bool write);
+    // brings down what the GPU drew over a range before the CPU reads or
+    // writes there (the GPU sets it)
+    std::function<void(uint32_t vaddr, uint32_t size, bool write)> gpu_sync;
+    // the slow path of the game's code: as read8..write32, after the sync
+    uint8_t cpu_read8(uint32_t a);
+    uint16_t cpu_read16(uint32_t a);
+    uint32_t cpu_read32(uint32_t a);
+    void cpu_write8(uint32_t a, uint8_t v);
+    void cpu_write16(uint32_t a, uint16_t v);
+    void cpu_write32(uint32_t a, uint32_t v);
 
     // physical pages, from the bottom (the linear heap) or the top (code,
     // heap) of a region
@@ -115,7 +133,10 @@ public:
 
 private:
     std::vector<uint8_t> fcram_, vram_, dsp_, axi_;
-    std::vector<uint8_t *> read_, write_;
+    std::vector<uint8_t *> read_, write_, cpu_read_, cpu_write_;
+    std::map<uint32_t, uint32_t> guards_[2]; // start to end, for reads and writes
+    void unguard(uint32_t a, uint32_t size, bool write);
+    bool guarded(size_t page, bool write) const;
     std::vector<bool> allocated_;
     std::pair<uint32_t, uint32_t> regions_[3]; // first page, page count
     std::map<uint32_t, Mapping> mappings_;

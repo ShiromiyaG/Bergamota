@@ -81,8 +81,30 @@ ZakuroGpu::ZakuroGpu(Memory &memory, bool use_hardware, uint64_t title) : memory
     gpu_ = zgpu_new(memory.host(map::FCRAM_PADDR, 1), memory.fcram_size(), memory.host(map::VRAM_PADDR, map::VRAM_SIZE),
                     map::VRAM_SIZE, memory.host(map::AXI_WRAM_PADDR, map::AXI_WRAM_SIZE), map::AXI_WRAM_SIZE);
     hardware = use_hardware && zgpu_enable_hardware(gpu_, 1, title);
+    if (hardware) {
+        // what the GPU draws stays on its side until the CPU gets there
+        zgpu_set_guard(
+            gpu_,
+            [](void *user, uint32_t paddr, uint32_t len, int32_t write) {
+                Memory &m = *static_cast<Memory *>(user);
+                if (paddr >= map::FCRAM_PADDR) m.guard(m.linear_base + (paddr - map::FCRAM_PADDR), len, write);
+                else if (paddr >= map::VRAM_PADDR && paddr < map::VRAM_PADDR + map::VRAM_SIZE)
+                    m.guard(map::VRAM_VADDR + (paddr - map::VRAM_PADDR), len, write);
+            },
+            &memory_);
+        memory_.gpu_sync = [this](uint32_t vaddr, uint32_t len, bool write) {
+            uint32_t paddr = vaddr >= map::VRAM_VADDR && vaddr < map::VRAM_VADDR + map::VRAM_SIZE
+                                 ? map::VRAM_PADDR + (vaddr - map::VRAM_VADDR)
+                                 : map::FCRAM_PADDR + (vaddr - memory_.linear_base);
+            if (write) zgpu_sync(gpu_, paddr, len);
+            else zgpu_sync_depth(gpu_, paddr, len);
+        };
+    }
 }
-ZakuroGpu::~ZakuroGpu() { zgpu_free(gpu_); }
+ZakuroGpu::~ZakuroGpu() {
+    memory_.gpu_sync = nullptr;
+    zgpu_free(gpu_);
+}
 void ZakuroGpu::write_register(uint32_t offset, uint32_t value) { zgpu_write_register(gpu_, offset, value); }
 uint32_t ZakuroGpu::read_register(uint32_t offset) { return zgpu_read_register(gpu_, offset); }
 void ZakuroGpu::command_list(uint32_t paddr, uint32_t size) {
