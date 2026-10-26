@@ -54,3 +54,16 @@ add_test(NAME system COMMAND system_test)
 # boots a game on the runtime and reports how far it gets
 add_executable(boot tools/boot.cpp)
 target_link_libraries(boot PRIVATE recomp_runtime)
+
+# a game in a window: SDL3 for the window, the input and (later) the sound
+option(RUNTIME_PLAYER "build the player (fetches SDL3)" ON)
+if(RUNTIME_PLAYER AND RUNTIME_ZAKURO_GPU)
+    include(FetchContent)
+    set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+    set(SDL_STATIC ON CACHE BOOL "" FORCE)
+    set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(SDL3 GIT_REPOSITORY https://github.com/libsdl-org/SDL.git GIT_TAG release-3.4.16 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(SDL3)
+    add_executable(player frontend/player.cpp)
+    target_link_libraries(player PRIVATE recomp_runtime SDL3::SDL3-static)
+endif()
