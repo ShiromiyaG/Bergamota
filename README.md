@@ -20,9 +20,15 @@ Zakuro's renderer, linked through a C interface.
 
 ## Status
 
-Skeleton: the lists of syscalls and services. Next: the kernel and the
-native services, translated from Zakuro's (Rust, MIT) and checked against
-it on the same session.
+- **Kernel** (`include/runtime/kernel.h`, `src/kernel.cpp`, `src/svc.cpp`):
+  threads, kernel objects and handles, waits (events, mutexes, the address
+  arbiter, sleeps and timeouts), and the 32 syscalls, translated from
+  Zakuro's. A guest thread is a `Context` (3dsrecomp's, `third_party/recomp.h`):
+  the games' code gives control back on every syscall, so switching
+  threads is picking another context, with no fibers. Tests:
+  `tests/kernel_test.cpp`.
+- Next: guest memory (the address space, the memory syscalls, TLS), the
+  loop that runs the code, and the services.
 
 ## Building
 
