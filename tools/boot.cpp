@@ -73,7 +73,8 @@ int main(int argc, char **argv) {
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
 #ifdef RUNTIME_ZAKURO_GPU
-    ZakuroGpu gpu(system.memory);
+    ZakuroGpu gpu(system.memory, true);
+    std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
 #else
     NullGpu gpu(system.memory);
 #endif
@@ -86,7 +87,7 @@ int main(int argc, char **argv) {
         // A pressed for a tenth of each second, to get past the title as the bots do
         auto now = std::chrono::steady_clock::now();
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        handlers.input.buttons = 0;
+        handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
         handlers.tick(system);
 #ifdef RUNTIME_ZAKURO_GPU
         // both screens to a picture every five seconds
@@ -106,6 +107,10 @@ int main(int argc, char **argv) {
         return now > until;
     });
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
+#ifdef RUNTIME_ZAKURO_GPU
+    std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
+    std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy, (unsigned long long)gpu.lists, system.idle);
+#endif
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
     {
         std::vector<std::pair<uint64_t, uint32_t>> top;

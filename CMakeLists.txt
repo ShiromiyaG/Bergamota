@@ -22,6 +22,9 @@ add_library(recomp_runtime STATIC
 )
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
 target_include_directories(recomp_runtime PUBLIC include third_party)
+if(WIN32)
+    target_link_libraries(recomp_runtime PUBLIC winmm)
+endif()
 
 # drawing with Zakuro's renderer until the native one exists: a Rust static
 # library, bridge/zakuro-gpu-c, built with cargo

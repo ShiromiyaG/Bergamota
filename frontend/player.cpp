@@ -93,7 +93,8 @@ int main(int argc, char **argv) {
     handlers.on_module = [](const std::string &name, uint32_t base) { library.place(name, base); };
     System system(config, lookup, services);
     load(system, exheader, read_file(argv[2]));
-    ZakuroGpu gpu(system.memory);
+    ZakuroGpu gpu(system.memory, true);
+    std::printf("drawing %s\n", gpu.hardware ? "on the GPU (Vulkan)" : "in software");
     handlers.gpu = &gpu;
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {

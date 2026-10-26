@@ -83,6 +83,8 @@ public:
     Gpu *gpu = nullptr;
     // read at each vertical blank
     Input input;
+    // pictures the game handed the top screen, and vertical blanks
+    uint64_t pictures = 0, vblanks = 0;
 
     // what the hardware does on its own as time passes: the DSP's audio
     // frames; called often from the loop

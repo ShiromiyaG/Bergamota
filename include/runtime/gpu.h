@@ -63,7 +63,9 @@ Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t 
 // Zakuro's renderer (software), through bridge/zakuro-gpu.h
 class ZakuroGpu : public Gpu {
 public:
-    explicit ZakuroGpu(Memory &memory);
+    // hardware: on the host GPU through Vulkan, else in software
+    ZakuroGpu(Memory &memory, bool hardware);
+    bool hardware = false;
     ~ZakuroGpu() override;
     void write_register(uint32_t offset, uint32_t value) override;
     uint32_t read_register(uint32_t offset) override;
@@ -77,6 +79,9 @@ public:
                      uint32_t format) override;
     // what a screen shows now
     Picture screen(uint32_t screen);
+    // time spent drawing and transferring, in seconds, and command lists run
+    double busy = 0;
+    uint64_t lists = 0;
 
 private:
     Memory &memory_;

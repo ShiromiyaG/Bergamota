@@ -73,22 +73,32 @@ Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t 
 #ifdef RUNTIME_ZAKURO_GPU
 #include "zakuro-gpu.h"
 
+#include <chrono>
+
 namespace runtime {
 
-ZakuroGpu::ZakuroGpu(Memory &memory) : memory_(memory) {
+ZakuroGpu::ZakuroGpu(Memory &memory, bool use_hardware) : memory_(memory) {
     gpu_ = zgpu_new(memory.host(map::FCRAM_PADDR, 1), memory.fcram_size(), memory.host(map::VRAM_PADDR, map::VRAM_SIZE),
                     map::VRAM_SIZE, memory.host(map::AXI_WRAM_PADDR, map::AXI_WRAM_SIZE), map::AXI_WRAM_SIZE);
+    hardware = use_hardware && zgpu_enable_hardware(gpu_, 1);
 }
 ZakuroGpu::~ZakuroGpu() { zgpu_free(gpu_); }
 void ZakuroGpu::write_register(uint32_t offset, uint32_t value) { zgpu_write_register(gpu_, offset, value); }
 uint32_t ZakuroGpu::read_register(uint32_t offset) { return zgpu_read_register(gpu_, offset); }
-void ZakuroGpu::command_list(uint32_t paddr, uint32_t size) { zgpu_command_list(gpu_, paddr, size); }
+void ZakuroGpu::command_list(uint32_t paddr, uint32_t size) {
+    auto start = std::chrono::steady_clock::now();
+    zgpu_command_list(gpu_, paddr, size);
+    busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    lists++;
+}
 void ZakuroGpu::memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
     zgpu_memory_fill(gpu_, start, end, value, width);
 }
 void ZakuroGpu::display_transfer(uint32_t input, uint32_t output, uint32_t input_size, uint32_t output_size,
                                  uint32_t flags) {
+    auto start = std::chrono::steady_clock::now();
     zgpu_display_transfer(gpu_, input, output, input_size, output_size, flags);
+    busy += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
 }
 void ZakuroGpu::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t input_gap, uint32_t output_gap) {
     zgpu_texture_copy(gpu_, input, output, size, input_gap, output_gap);
@@ -100,6 +110,8 @@ void ZakuroGpu::framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint
 Picture ZakuroGpu::screen(uint32_t screen) {
     uint32_t address, stride, format;
     zgpu_framebuffer(gpu_, screen, &address, &stride, &format);
+    // what the host GPU drew there, into memory first
+    if (hardware) zgpu_sync(gpu_, address, (stride ? stride : 240 * 4) * (screen ? 320 : 400));
     return read_screen(memory_, screen, address, stride, format);
 }
 

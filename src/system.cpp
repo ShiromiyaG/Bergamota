@@ -8,6 +8,13 @@
 #include <cstdio>
 #include <thread>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <timeapi.h>
+#endif
+
 namespace runtime {
 
 namespace {
@@ -79,6 +86,11 @@ System::System(const Config &config, Lookup lookup, ServiceHandler services)
         }
         c->exit = EXIT_NONE;
     };
+#ifdef _WIN32
+    // a millisecond's sleep is a millisecond, not the 15.6 ms the system
+    // timer ticks at by default
+    timeBeginPeriod(1);
+#endif
     boot_ = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
     memory.init_system_pages(config.boot_clock_ms);
 }
@@ -168,7 +180,9 @@ bool System::run(const std::function<bool()> &stop) {
             auto wake = kernel.next_wakeup();
             if (!wake) {
                 // nothing has a time to wake at: only an outside event can
+                auto before = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                idle += std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
                 continue;
             }
             uint64_t now = ticks();
@@ -176,7 +190,9 @@ bool System::run(const std::function<bool()> &stop) {
                 // a millisecond at most: the hardware's own events (audio
                 // frames, vertical blank) come from stop()'s caller
                 uint64_t nanos = std::min<uint64_t>((*wake - now) * 1000000000 / CPU_CLOCK_HZ, 1000000);
+                auto before = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::nanoseconds(nanos));
+                idle += std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
             }
             continue;
         }

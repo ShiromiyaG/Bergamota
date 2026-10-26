@@ -124,3 +124,16 @@ pub extern "C" fn zgpu_framebuffer(gpu: *mut ZGpu, screen: u32, address: *mut u3
         }
     })
 }
+
+/// draws on the host's GPU through Vulkan from now on, at scale times the
+/// 3DS's resolution; 0 when it can't (software drawing goes on)
+#[no_mangle]
+pub extern "C" fn zgpu_enable_hardware(gpu: *mut ZGpu, scale: u32) -> i32 {
+    with(gpu, |g| g.gpu.enable_hardware_renderer(scale, None, None).is_ok() as i32)
+}
+
+/// memory over a range made to hold what the host GPU drew there
+#[no_mangle]
+pub extern "C" fn zgpu_sync(gpu: *mut ZGpu, addr: u32, len: u32) {
+    with(gpu, |g| g.gpu.sync_memory(&mut g.memory, addr, len))
+}

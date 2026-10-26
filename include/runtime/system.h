@@ -58,6 +58,8 @@ public:
     bool interpret(Context &c);
     // instructions the interpreter ran, where the C had nothing
     uint64_t interpreted = 0;
+    // time the host slept, every thread waiting, in seconds
+    double idle = 0;
     // where it ran, by the address it entered at
     std::map<uint32_t, uint64_t> interpreted_at;
 

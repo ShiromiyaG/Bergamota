@@ -10,8 +10,8 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-# software drawing only: no Vulkan, no OpenGL
-zakuro-gpu = { path = "../../../zakuro-dev/crates/zakuro-gpu", default-features = false, features = ["jit"] }
+# software drawing, or on the host GPU through Vulkan; no OpenGL
+zakuro-gpu = { path = "../../../zakuro-dev/crates/zakuro-gpu", default-features = false, features = ["jit", "vulkan"] }
 
 [profile.release]
 debug = 1

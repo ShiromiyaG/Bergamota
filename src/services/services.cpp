@@ -403,6 +403,7 @@ void Services::tick(System &system) {
         if (now >= gsp_.next_vblank) {
             gsp_.next_vblank = std::max(gsp_.next_vblank + FRAME, now);
             gsp_refresh(system);
+            vblanks++;
             hid_update(system);
             gsp_interrupt(system, 2); // top screen
             gsp_interrupt(system, 3); // bottom screen
@@ -637,6 +638,7 @@ void Services::gsp_refresh(System &system) {
         gpu->framebuffer(screen, index, gsp_physical(system, m.read32(entry + 4)), gsp_physical(system, m.read32(entry + 8)),
                          m.read32(entry + 0xC), m.read32(entry + 0x10));
         m.write32(record, index); // taken: the flag clears
+        if (screen == 0) pictures++;
     }
     gsp_.waiting[0].reset();
     gsp_.waiting[1].reset();
