@@ -8,8 +8,8 @@ decomp's, else 3dsrecomp's) calls it directly. Zakuro stays the emulator and
 the decomp's checker.
 
 What each game uses and why the lists are what they are:
-`Solstice/docs/lean-runtime.md` (measured with Zakuro's `ZAKURO_USAGE` and
-read from the code with `decomp-tools/ida/ipc_survey.py`).
+`ports/Solstice/docs/lean-runtime.md` (measured with Zakuro's `ZAKURO_USAGE` and
+read from the code with `tools/decomp-tools/ida/ipc_survey.py`).
 
 ## The port around it
 
