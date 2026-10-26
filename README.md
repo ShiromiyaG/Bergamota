@@ -35,9 +35,18 @@ Zakuro's renderer, linked through a C interface.
   sleeps the host when every thread waits. No interpreter: everything has
   to be C. Tests: `tests/system_test.cpp` (two threads, written by hand as
   3dsrecomp writes code, meet on the address arbiter).
-- Next: the services (`srv`, `APT`, `cfg`, `fs`, `hid`, `gsp`, `dsp`,
-  `y2r`, `ldr:ro`) and loading the game's code and modules, then the first
-  run of the real game against Zakuro.
+- **Services** (`services.h`, `src/services/`, `fs.h`, `cro.h`, `gpu.h`): srv,
+  APT, cfg, fs (the RomFS read from the game's own .3ds and update CIA;
+  saves as folders, laid out as Zakuro's), hid, dsp (its firmware's answers
+  and audio frames; no sound yet), y2r (settings and events; no conversion
+  yet), ldr:ro with the CRO loader, gsp behind a `Gpu` interface
+  (`NullGpu` draws nothing), and offline answers for the online services.
+- **Interpreter** (`interpreter.h`): ARM, Thumb, VFPv2, for what the C
+  does not have (hand-written assembly, paths no session visited).
+- **Status:** USUM boots on it with no screen, past the intro movie and the
+  title, loads its save and reaches the field (`tools/boot.cpp`).
+- Next: drawing (Zakuro's renderer behind `Gpu`, then Vulkan), a window and
+  input (SDL3), sound (the DSP's voices and mixer).
 
 ## Building
 

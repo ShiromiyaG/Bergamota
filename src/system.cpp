@@ -134,6 +134,7 @@ bool System::interpret(Context &c) {
     // or the end of a slice
     Cpu cpu;
     load(c, cpu);
+    interpreted_at[c.r[15] | c.thumb]++;
     for (int32_t n = 0; n < config_.slice; n++) {
         Exit exit = step(cpu, memory);
         interpreted++;

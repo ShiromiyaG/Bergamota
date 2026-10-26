@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <string>
 
 #include "runtime/kernel.h"
@@ -57,6 +58,8 @@ public:
     bool interpret(Context &c);
     // instructions the interpreter ran, where the C had nothing
     uint64_t interpreted = 0;
+    // where it ran, by the address it entered at
+    std::map<uint32_t, uint64_t> interpreted_at;
 
 private:
     void request(Kernel &, Thread &, const std::string &service, uint32_t subhandle) override;

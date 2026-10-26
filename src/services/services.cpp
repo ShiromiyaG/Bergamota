@@ -21,7 +21,7 @@ constexpr uint32_t NO_PARAMETER = 0xC8A0CFFC;
 constexpr uint32_t NOT_CONNECTED = 0xC8809C0C, UDS_WIRELESS_OFF = 0xC9411002;
 
 bool network(const std::string &name) {
-    static const char *names[] = {"frd:u", "frd:a", "nwm::UDS", "dlp:SRVR", "http:C", "nim:aoc", "nim:s",
+    static const char *names[] = {"nwm::UDS", "dlp:SRVR", "http:C", "nim:aoc", "nim:s",
                                   "nim:u", "ac:u", "ac:i", "olv:u", "act:u", "act:a"};
     return std::any_of(std::begin(names), std::end(names), [&](const char *n) { return name == n; });
 }
@@ -68,6 +68,11 @@ void Services::request(System &system, Thread &thread, const std::string &servic
     else if (service == "dsp::DSP") handled = dsp(system, buffer);
     else if (service == "ldr:ro") handled = ldr_ro(system, buffer);
     else if (service == "gsp::Gpu" && gpu) handled = gsp(system, buffer);
+    else if (service == "hid:USER" || service == "hid:SPVR") handled = hid(system, buffer);
+    else if (service == "y2r:u") handled = y2r(system, buffer);
+    else if (service == "ssl:C" || service == "frd:u" || service == "frd:a" || service == "boss:U" ||
+             service == "boss:P" || service == "ndm:u")
+        handled = online(system, buffer, service);
     else if (fs && (service == "fs:USER" || service == "FSFile" || service == "FSDirectory"))
         handled = fs->handle(system, thread, buffer, service, subhandle);
     if (handled) return;
@@ -398,6 +403,7 @@ void Services::tick(System &system) {
         if (now >= gsp_.next_vblank) {
             gsp_.next_vblank = std::max(gsp_.next_vblank + FRAME, now);
             gsp_refresh(system);
+            hid_update(system);
             gsp_interrupt(system, 2); // top screen
             gsp_interrupt(system, 3); // bottom screen
         }
@@ -802,6 +808,191 @@ bool Services::gsp(System &system, CommandBuffer &b) {
     default:
         return false;
     }
+}
+
+// hid: the buttons, the circle pad, the touch screen; the motion sensors
+// read a console held still and upright. After Zakuro's services/hid.rs,
+// leaner.
+namespace {
+constexpr uint32_t HID_SHARED_SIZE = 0x2B0;
+constexpr uint32_t PAD_BASE = 0x00, TOUCH_BASE = 0xA8, ACCELEROMETER_BASE = 0x108, GYROSCOPE_BASE = 0x158;
+} // namespace
+
+bool Services::hid(System &system, CommandBuffer &b) {
+    Kernel &k = system.kernel;
+    uint32_t command = b.command();
+    switch (command) {
+    case 0x000A: { // GetIPCHandles: the shared block and five events
+        if (!hid_.shared) {
+            auto block = system.memory.allocate(Region::Base, HID_SHARED_SIZE);
+            std::memset(system.memory.host(block->paddr, 0x1000), 0, 0x1000);
+            hid_.shared = k.insert(SharedMemory{"HID", 0, HID_SHARED_SIZE, block->paddr, std::nullopt});
+            k.hold(*hid_.shared);
+            for (int i = 0; i < 5; i++) { // pad or touch twice, accelerometer, gyroscope, debug pad
+                auto e = k.create_event(ResetType::OneShot);
+                hid_.events.push_back(e.first);
+            }
+        }
+        b.set(0, header(command, 1, 7));
+        b.set(1, result::SUCCESS);
+        b.set(2, descriptor::handles(6));
+        b.set(3, k.create_handle(*hid_.shared));
+        for (uint32_t i = 0; i < 5; i++) b.set(4 + i, k.create_handle(hid_.events[i]));
+        return true;
+    }
+    case 0x0011: hid_.accelerometer_users++; b.reply(command); return true;
+    case 0x0012: hid_.accelerometer_users -= hid_.accelerometer_users > 0; b.reply(command); return true;
+    case 0x0013: hid_.gyroscope_users++; b.reply(command); return true;
+    case 0x0014: hid_.gyroscope_users -= hid_.gyroscope_users > 0; b.reply(command); return true;
+    case 0x0015: { // GetGyroscopeLowRawToDpsCoefficient
+        float c = 14.375f;
+        uint32_t bits;
+        std::memcpy(&bits, &c, 4);
+        b.reply(command, {bits});
+        return true;
+    }
+    case 0x0016: b.reply(command, {0, 0, 0, 0, 0}); return true; // GetGyroscopeLowCalibrateParam
+    case 0x0017: b.reply(command, {0x3F}); return true;          // GetSoundVolume
+    default: return false;
+    }
+}
+
+// a frame of input into the shared block's rings, as the HID module writes it
+void Services::hid_update(System &system) {
+    if (!hid_.shared) return;
+    auto *block = std::get_if<SharedMemory>(system.kernel.object(*hid_.shared));
+    uint8_t *base = block ? system.memory.host(block->paddr, HID_SHARED_SIZE) : nullptr;
+    if (!base) return;
+    auto put32 = [&](uint32_t at, uint32_t v) { std::memcpy(base + at, &v, 4); };
+    auto put16 = [&](uint32_t at, uint16_t v) { std::memcpy(base + at, &v, 2); };
+    uint64_t tick = system.ticks() & 0x7FFFFFFFFFFFFFFFull;
+    // a section's header: the tick its ring last started over at and the one before, and its index
+    auto section = [&](uint32_t at, int which, uint32_t index) {
+        if (index == 0) {
+            hid_.reset[which][1] = hid_.reset[which][0];
+            hid_.reset[which][0] = tick;
+        }
+        put32(at, uint32_t(hid_.reset[which][0]));
+        put32(at + 4, uint32_t(hid_.reset[which][0] >> 32));
+        put32(at + 8, uint32_t(hid_.reset[which][1]));
+        put32(at + 12, uint32_t(hid_.reset[which][1] >> 32));
+        put32(at + 0x10, index);
+    };
+
+    // the circle pad pushed far enough counts as a direction
+    uint32_t buttons = input.buttons & 0x00000FFF;
+    if (input.circle_x > 0.5f) buttons |= 1u << 28;
+    if (input.circle_x < -0.5f) buttons |= 1u << 29;
+    if (input.circle_y > 0.5f) buttons |= 1u << 30;
+    if (input.circle_y < -0.5f) buttons |= 1u << 31;
+    uint32_t pressed = buttons & ~hid_.previous, released = ~buttons & hid_.previous;
+    hid_.previous = buttons;
+
+    hid_.pad = (hid_.pad + 1) % 8;
+    section(PAD_BASE, 0, hid_.pad);
+    put32(PAD_BASE + 0x1C, buttons);
+    uint32_t entry = PAD_BASE + 0x28 + hid_.pad * 0x10;
+    put32(entry, buttons);
+    put32(entry + 4, pressed);
+    put32(entry + 8, released);
+    put16(entry + 12, uint16_t(int16_t(std::clamp(input.circle_x, -1.0f, 1.0f) * 150)));
+    put16(entry + 14, uint16_t(int16_t(std::clamp(input.circle_y, -1.0f, 1.0f) * 150)));
+
+    hid_.touch = (hid_.touch + 1) % 8;
+    section(TOUCH_BASE, 1, hid_.touch);
+    entry = TOUCH_BASE + 0x20 + hid_.touch * 8;
+    put16(entry, input.touch ? input.touch->first : 0);
+    put16(entry + 2, input.touch ? input.touch->second : 0);
+    put32(entry + 4, input.touch.has_value());
+
+    for (size_t i = 0; i < 2 && i < hid_.events.size(); i++) system.kernel.signal_event(hid_.events[i]);
+
+    // a console held still and upright: one g down, no turning
+    if (hid_.accelerometer_users) {
+        hid_.accelerometer = (hid_.accelerometer + 1) % 8;
+        section(ACCELEROMETER_BASE, 2, hid_.accelerometer);
+        for (uint32_t at : {ACCELEROMETER_BASE + 0x18, ACCELEROMETER_BASE + 0x20 + hid_.accelerometer * 6}) {
+            put16(at, 0);
+            put16(at + 2, uint16_t(int16_t(-512)));
+            put16(at + 4, 0);
+        }
+        system.kernel.signal_event(hid_.events[2]);
+    }
+    if (hid_.gyroscope_users) {
+        hid_.gyroscope = (hid_.gyroscope + 1) % 32;
+        section(GYROSCOPE_BASE, 3, hid_.gyroscope);
+        for (uint32_t at : {GYROSCOPE_BASE + 0x18, GYROSCOPE_BASE + 0x20 + hid_.gyroscope * 6}) {
+            put16(at, 0);
+            put16(at + 2, 0);
+            put16(at + 4, 0);
+        }
+        system.kernel.signal_event(hid_.events[3]);
+    }
+}
+
+// y2r: the movies' YUV to RGB. Its settings are kept and read back; the
+// conversion itself is not done yet (the movies show black), but it ends
+// at once and says so.
+bool Services::y2r(System &system, CommandBuffer &b) {
+    Kernel &k = system.kernel;
+    uint32_t command = b.command();
+    if (!y2r_.event) {
+        y2r_.event = k.create_event(ResetType::OneShot).first;
+        k.hold(*y2r_.event);
+    }
+    switch (command) {
+    case 0x000F: // GetTransferEndEvent
+        b.set(0, header(command, 1, 2));
+        b.set(1, result::SUCCESS);
+        b.set(2, descriptor::handles(1));
+        b.set(3, k.create_handle(*y2r_.event));
+        return true;
+    case 0x0026: // StartConversion: done at once
+        k.signal_event(*y2r_.event);
+        b.reply(command);
+        return true;
+    case 0x0014: case 0x0015: case 0x0016: case 0x0017: case 0x0019: // finished sending and receiving
+        b.reply(command, {1});
+        return true;
+    case 0x0028: case 0x002A: // IsBusyConversion, PingProcess
+        b.reply(command, {0});
+        return true;
+    case 0x0025: // GetDitheringWeightParams
+        b.reply(command, {0, 0, 0, 0, 0, 0, 0, 0});
+        return true;
+    case 0x0002: case 0x0004: case 0x0006: case 0x0008: case 0x000A: case 0x000C: case 0x000E: case 0x001B:
+    case 0x001D: case 0x0023: // the getters: what the setter before them was given
+        b.reply(command, {y2r_.settings[command - 1]});
+        return true;
+    case 0x002B: case 0x002C: // DriverInitialize, DriverFinalize
+        y2r_.settings.clear();
+        b.reply(command);
+        return true;
+    default:
+        if (command >= 0x0001 && command <= 0x002D) { // the setters and the rest
+            y2r_.settings[command] = b.get(1);
+            b.reply(command);
+            return true;
+        }
+        return false;
+    }
+}
+
+// what works offline of the online services, as a console with no network
+// answers: SSL sets itself up (USUM stops saving when it does not), the
+// friend list is there and empty, SpotPass has nothing
+bool Services::online(System &, CommandBuffer &b, const std::string &service) {
+    uint32_t command = b.command();
+    if (service == "frd:u" || service == "frd:a") {
+        if (command == 0x0003 || command == 0x0023) { // Login, and the one Zakuro answers likewise
+            b.reply_error(command, NOT_CONNECTED);
+            return true;
+        }
+    }
+    // success, and zeros where the game reads its outputs
+    b.reply(command);
+    for (uint32_t i = 2; i < 8; i++) b.set(i, 0);
+    return true;
 }
 
 } // namespace runtime

@@ -62,6 +62,13 @@ struct ConsoleSettings {
     uint64_t console_id = 0x0000525533415A55;
 };
 
+// what the player does, as the frontend reads it
+struct Input {
+    uint32_t buttons = 0; // the 3DS's bits: A 1, B 2, Select 4, Start 8, Right, Left, Up, Down, R, L, X 0x400, Y 0x800
+    float circle_x = 0, circle_y = 0; // -1 to 1
+    std::optional<std::pair<uint16_t, uint16_t>> touch; // in the bottom screen's pixels
+};
+
 class Services {
 public:
     explicit Services(uint64_t program_id) : program_id_(program_id) {}
@@ -74,6 +81,8 @@ public:
     CroLoader cro;
     // the GPU gsp drives; NullGpu draws nothing
     Gpu *gpu = nullptr;
+    // read at each vertical blank
+    Input input;
 
     // what the hardware does on its own as time passes: the DSP's audio
     // frames; called often from the loop
@@ -98,6 +107,10 @@ private:
     bool dsp(System &, CommandBuffer &);
     bool ldr_ro(System &, CommandBuffer &);
     bool gsp(System &, CommandBuffer &);
+    bool hid(System &, CommandBuffer &);
+    void hid_update(System &);
+    bool y2r(System &, CommandBuffer &);
+    bool online(System &, CommandBuffer &, const std::string &service);
     uint32_t gsp_shared(System &) const;
     void gsp_interrupt(System &, uint8_t id);
     void gsp_queue(System &);
@@ -142,6 +155,19 @@ private:
         bool held = false;
         uint64_t next_vblank = 0;
     } gsp_;
+    // hid: its shared block, its five events, where its rings are
+    struct Hid {
+        std::optional<ObjectId> shared;
+        std::vector<ObjectId> events;
+        uint32_t previous = 0, pad = 0, touch = 0, accelerometer = 0, gyroscope = 0;
+        uint32_t accelerometer_users = 0, gyroscope_users = 0;
+        uint64_t reset[4][2]{};
+    } hid_;
+    // y2r: its settings by the command that set them, and its end event
+    struct Y2r {
+        std::map<uint32_t, uint32_t> settings;
+        std::optional<ObjectId> event;
+    } y2r_;
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
 };

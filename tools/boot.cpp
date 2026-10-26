@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <fstream>
 #include <iterator>
+#include <algorithm>
 #include <set>
 
 using namespace runtime;
@@ -76,11 +77,21 @@ int main(int argc, char **argv) {
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     bool went_on = system.run([&] {
+        // A pressed for a tenth of each second, to get past the title as the bots do
+        auto now = std::chrono::steady_clock::now();
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+        handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
         handlers.tick(system);
-        return std::chrono::steady_clock::now() > until;
+        return now > until;
     });
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
+    {
+        std::vector<std::pair<uint64_t, uint32_t>> top;
+        for (auto [at, n] : system.interpreted_at) top.push_back({n, at});
+        std::sort(top.rbegin(), top.rend());
+        for (size_t i = 0; i < top.size() && i < 8; i++) std::printf("  interpreted from 0x%08X x%llu\n", top[i].second, (unsigned long long)top[i].first);
+    }
     if (!system.error().empty()) std::printf("error: %s\n", system.error().c_str());
     for (size_t i = 0; i < system.kernel.thread_count(); i++) {
         Thread &t = system.kernel.thread(static_cast<ThreadId>(i));
