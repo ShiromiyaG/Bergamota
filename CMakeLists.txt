@@ -9,6 +9,13 @@ set(CMAKE_C_STANDARD 11)
 # USUM, XY and ORAS ask for (Solstice's docs/lean-runtime.md)
 add_library(recomp_runtime STATIC
     src/kernel.cpp
+    src/svc.cpp
     src/services.cpp
 )
-target_include_directories(recomp_runtime PUBLIC include)
+# third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
+target_include_directories(recomp_runtime PUBLIC include third_party)
+
+enable_testing()
+add_executable(kernel_test tests/kernel_test.cpp)
+target_link_libraries(kernel_test PRIVATE recomp_runtime)
+add_test(NAME kernel COMMAND kernel_test)
