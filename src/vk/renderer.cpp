@@ -31,6 +31,9 @@ const uint32_t VERT_SPV[] = {
 const uint32_t FRAG_SPV[] = {
 #include "pica.frag.inc"
 };
+const uint32_t DEPTH_SPV[] = {
+#include "depth.comp.inc"
+};
 
 constexpr VkDeviceSize VERTEX_RING = 64u << 20, UNIFORM_RING = 8u << 20;
 
@@ -50,15 +53,19 @@ constexpr uint32_t STATE_REGS[] = {
 constexpr uint32_t UNIT_BASE[3] = {0x081, 0x091, 0x099};
 uint32_t unit_format(const Pica &p, int unit) { return p.regs[unit ? UNIT_BASE[unit] + 5 : 0x08E] & 15; }
 
+// four lanes side by side, which the CPU runs at memory speed
 uint64_t hash_bytes(const uint8_t *p, size_t n) {
-    uint64_t h = 0xcbf29ce484222325ull;
+    uint64_t lane[4] = {0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
     size_t i = 0;
-    for (; i + 8 <= n; i += 8) {
-        uint64_t w;
-        std::memcpy(&w, p + i, 8);
-        h = (h ^ w) * 0x100000001b3ull;
-        h ^= h >> 29;
+    for (; i + 32 <= n; i += 32) {
+        for (int k = 0; k < 4; k++) {
+            uint64_t w;
+            std::memcpy(&w, p + i + k * 8, 8);
+            lane[k] = (lane[k] ^ w) * 0x9E3779B97F4A7C15ull;
+            lane[k] ^= lane[k] >> 31;
+        }
     }
+    uint64_t h = lane[0] ^ lane[1] * 3 ^ lane[2] * 5 ^ lane[3] * 7 ^ n;
     for (; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
     return h;
 }
@@ -69,6 +76,7 @@ struct Image {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
+    VkImageView depth = VK_NULL_HANDLE, stencil = VK_NULL_HANDLE; // a depth image's aspects, to sample
     uint32_t width = 0, height = 0;
 };
 
@@ -80,6 +88,9 @@ struct Surface {
     Image image;
     bool dirty = false; // the GPU has drawn what memory has not
     bool stale = false; // memory was written since: loaded again before use
+    // a depth buffer read as a color texture: made from it when it moved on
+    uint64_t version = 0, converted = ~0ull;
+    Image as_color;
     uint32_t offset(uint32_t x, uint32_t y, uint32_t bpp) const {
         return linear ? (y * width + x) * bpp : tiled_offset(x, y, width, bpp);
     }
@@ -118,7 +129,11 @@ struct VulkanRenderer::Impl {
 
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, depth_module = VK_NULL_HANDLE;
+    VkDescriptorSetLayout depth_set = VK_NULL_HANDLE;
+    VkPipelineLayout depth_layout = VK_NULL_HANDLE;
+    VkPipeline depth_pipeline = VK_NULL_HANDLE;
+    VkSampler nearest = VK_NULL_HANDLE;
     std::unordered_map<uint64_t, VkPipeline> pipelines;
     std::unordered_map<uint32_t, VkSampler> samplers;
 
@@ -263,6 +278,27 @@ struct VulkanRenderer::Impl {
         smi.pCode = FRAG_SPV;
         vkCreateShaderModule(device, &smi, nullptr, &frag);
 
+        // depth read as color (depth.comp)
+        VkDescriptorSetLayoutBinding db[3] = {
+            {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        };
+        sli.bindingCount = 3;
+        sli.pBindings = db;
+        vkCreateDescriptorSetLayout(device, &sli, nullptr, &depth_set);
+        pli.pSetLayouts = &depth_set;
+        vkCreatePipelineLayout(device, &pli, nullptr, &depth_layout);
+        smi.codeSize = sizeof DEPTH_SPV;
+        smi.pCode = DEPTH_SPV;
+        vkCreateShaderModule(device, &smi, nullptr, &depth_module);
+        VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+        cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, depth_module, "main", nullptr};
+        cpi.layout = depth_layout;
+        vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &depth_pipeline);
+        VkSamplerCreateInfo nsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        vkCreateSampler(device, &nsi, nullptr, &nearest);
+
         begin();
         blank = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false);
         uint8_t zero[4] = {};
@@ -306,7 +342,8 @@ struct VulkanRenderer::Impl {
         ii.mipLevels = ii.arrayLayers = 1;
         ii.samples = VK_SAMPLE_COUNT_1_BIT;
         ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                   (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                   (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
         vkCreateImage(device, &ii, nullptr, &i.image);
         VkMemoryRequirements req;
         vkGetImageMemoryRequirements(device, i.image, &req);
@@ -321,6 +358,13 @@ struct VulkanRenderer::Impl {
         vi.format = format;
         vi.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1, 0, 1};
         vkCreateImageView(device, &vi, nullptr, &i.view);
+        if (depth) {
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            vkCreateImageView(device, &vi, nullptr, &i.depth);
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
+            vkCreateImageView(device, &vi, nullptr, &i.stencil);
+            vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
         // into the general layout, once
         VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
@@ -340,6 +384,7 @@ struct VulkanRenderer::Impl {
     void destroy(Image &i) {
         if (!i.image) return;
         vkDestroyImageView(device, i.view, nullptr);
+        if (i.depth) vkDestroyImageView(device, i.depth, nullptr), vkDestroyImageView(device, i.stencil, nullptr);
         vkDestroyImage(device, i.image, nullptr);
         vkFreeMemory(device, i.memory, nullptr);
         i = {};
@@ -425,6 +470,7 @@ struct VulkanRenderer::Impl {
 
     // a buffer's memory into its image: rows as memory has them, 8x8 tiles
     void upload(Surface &s) {
+        s.version++;
         const uint8_t *src = memory.host(s.address, s.bytes());
         if (!src) return;
         uint32_t w = s.width, h = s.height;
@@ -550,6 +596,7 @@ struct VulkanRenderer::Impl {
             if (s.dirty) write_back(s);
             if (color_target == &s || depth_target == &s) end_rendering();
             dead.push_back(s.image);
+            if (s.as_color.image) dead.push_back(s.as_color);
             surfaces.erase(surfaces.begin() + i);
         }
         auto s = std::make_unique<Surface>(fresh);
@@ -588,6 +635,7 @@ struct VulkanRenderer::Impl {
             }
             barrier();
             s->dirty = false; // memory gets the same fill
+            s->version++;
             s->stale = false;
         }
     }
@@ -681,15 +729,30 @@ struct VulkanRenderer::Impl {
                 return s->image.view;
             }
         }
+        // a D24S8 buffer read as RGBA8: made on the GPU
+        for (auto &s : surfaces) {
+            if (s->depth && !s->stale && s->format == 3 && format == 0 && s->address == address && s->width == w && s->height == h) {
+                return depth_as_color(*s);
+            }
+        }
         size_t size = size_t(w) * h * texture_bits(format) / 8;
+        if (std::getenv("RUNTIME_VK_DEBUG")) {
+            static int shown = 0;
+            for (auto &s : surfaces) {
+                if (s->dirty && overlaps(s->address, s->bytes(), address, uint32_t(size)) && shown++ < 10)
+                    std::fprintf(stderr, "texture %08X %ux%u fmt %u over surface %08X %ux%u fmt %u depth %d\n", address, w, h, format,
+                                 s->address, s->width, s->height, s->format, s->depth);
+            }
+        }
         cause = 3;
         sync(address, uint32_t(size), false);
         const uint8_t *bytes = memory.host(address, uint32_t(size));
         if (!bytes) return blank.view;
         Texture &t = textures[{address, format, w, h}];
-        // looked at again once a command list, it can have changed
-        if (t.checked_list != p.lists || !t.image.image) {
-            t.checked_list = p.lists;
+        // looked at again once a frame (a frame ends in display transfers), it
+        // can have changed
+        if (t.checked_list != p.transfers || !t.image.image) {
+            t.checked_list = p.transfers;
             uint64_t hash = hash_bytes(bytes, size);
             if (hash != t.hash || !t.image.image) {
                 if (!t.image.image) t.image = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, false);
@@ -700,6 +763,31 @@ struct VulkanRenderer::Impl {
             }
         }
         return t.image.view;
+    }
+
+    VkImageView depth_as_color(Surface &s) {
+        if (!s.as_color.image) s.as_color = image(s.width, s.height, VK_FORMAT_R8G8B8A8_UNORM, false);
+        if (s.converted == s.version) return s.as_color.view;
+        end_rendering();
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_pipeline);
+        VkDescriptorImageInfo images[3] = {
+            {nearest, s.image.depth, VK_IMAGE_LAYOUT_GENERAL},
+            {nearest, s.image.stencil, VK_IMAGE_LAYOUT_GENERAL},
+            {VK_NULL_HANDLE, s.as_color.view, VK_IMAGE_LAYOUT_GENERAL},
+        };
+        VkWriteDescriptorSet writes[3]{};
+        for (int i = 0; i < 3; i++) {
+            writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[i].dstBinding = uint32_t(i);
+            writes[i].descriptorCount = 1;
+            writes[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            writes[i].pImageInfo = &images[i];
+        }
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_layout, 0, 3, writes);
+        vkCmdDispatch(cmd, (s.width + 7) / 8, (s.height + 7) / 8, 1);
+        barrier();
+        s.converted = s.version;
+        return s.as_color.view;
     }
 
     // -- pipelines ---------------------------------------------------------------
@@ -809,10 +897,15 @@ struct VulkanRenderer::Impl {
         bool use_depth = depth_address && (depth_test || depth_write || stencil);
 
         // what the draw reads first, outside a pass
+        auto t0 = std::chrono::steady_clock::now();
         VkImageView views[3];
         for (int u = 0; u < 3; u++) views[u] = texture(p, u);
+        auto t1 = std::chrono::steady_clock::now();
         Surface *color = surface(color_address, w, h, (r[COLOR_BUFFER_FORMAT] >> 16) & 7, false);
         Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
+        auto t2 = std::chrono::steady_clock::now();
+        part[0] += std::chrono::duration<double>(t1 - t0).count();
+        part[1] += std::chrono::duration<double>(t2 - t1).count();
         // a texture that is this pass's target cannot be read inside it
         if (rendering && (color_target != color || depth_target != depth)) end_rendering();
 
@@ -906,12 +999,16 @@ struct VulkanRenderer::Impl {
         // drawn: memory is behind until written back, which the CPU asks for
         // through the guards
         color->dirty = true;
+        color->version++;
         guard(*color);
         if (depth && (depth_write || stencil)) {
             depth->dirty = true;
+            depth->version++;
             guard(*depth);
         }
     }
+
+    double part[2]{}; // textures, surfaces
 
     void guard(Surface &s) {
         uint32_t paddr = s.address, size = s.bytes();
@@ -923,8 +1020,9 @@ struct VulkanRenderer::Impl {
 
     void shutdown() {
         if (!device) return;
+        if (std::getenv("RUNTIME_VK_DEBUG")) std::fprintf(stderr, "render parts: textures %.1f s, surfaces %.1f s\n", part[0], part[1]);
         vkDeviceWaitIdle(device);
-        for (auto &s : surfaces) destroy(s->image);
+        for (auto &s : surfaces) destroy(s->image), destroy(s->as_color);
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
@@ -934,6 +1032,11 @@ struct VulkanRenderer::Impl {
         destroy(uniforms);
         vkDestroyShaderModule(device, vert, nullptr);
         vkDestroyShaderModule(device, frag, nullptr);
+        vkDestroyShaderModule(device, depth_module, nullptr);
+        vkDestroyPipeline(device, depth_pipeline, nullptr);
+        vkDestroyPipelineLayout(device, depth_layout, nullptr);
+        vkDestroyDescriptorSetLayout(device, depth_set, nullptr);
+        vkDestroySampler(device, nearest, nullptr);
         vkDestroyPipelineLayout(device, layout, nullptr);
         vkDestroyDescriptorSetLayout(device, set_layout, nullptr);
         vkDestroyFence(device, fence, nullptr);

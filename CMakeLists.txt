@@ -44,8 +44,13 @@ if(RUNTIME_VULKAN)
             DEPENDS src/vk/pica.${stage}
             VERBATIM)
     endforeach()
+    add_custom_command(
+        OUTPUT ${SHADER_OUT}/depth.comp.inc
+        COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/depth.comp.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/depth.comp
+        DEPENDS src/vk/depth.comp
+        VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/pica/texture.cpp
-        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc)
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
     target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)
