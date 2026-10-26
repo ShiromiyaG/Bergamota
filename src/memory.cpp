@@ -300,14 +300,26 @@ bool Memory::mirror(uint32_t destination, uint32_t source, uint32_t size) {
     return true;
 }
 
+// a page at a time; a page that is not there goes byte by byte, to count
+// the faults
 void Memory::read_bytes(uint32_t a, void *out, uint32_t size) {
     auto *o = static_cast<uint8_t *>(out);
-    for (uint32_t i = 0; i < size; i++) o[i] = read8(a + i);
+    while (size) {
+        uint32_t n = std::min(size, PAGE_SIZE - (a & PAGE_MASK));
+        if (uint8_t *page = read_[a >> PAGE_BITS]) std::memcpy(o, page + (a & PAGE_MASK), n);
+        else for (uint32_t i = 0; i < n; i++) o[i] = read8(a + i);
+        a += n, o += n, size -= n;
+    }
 }
 
 void Memory::write_bytes(uint32_t a, const void *in, uint32_t size) {
     auto *b = static_cast<const uint8_t *>(in);
-    for (uint32_t i = 0; i < size; i++) write8(a + i, b[i]);
+    while (size) {
+        uint32_t n = std::min(size, PAGE_SIZE - (a & PAGE_MASK));
+        if (uint8_t *page = write_[a >> PAGE_BITS]) std::memcpy(page + (a & PAGE_MASK), b, n);
+        else for (uint32_t i = 0; i < n; i++) write8(a + i, b[i]);
+        a += n, b += n, size -= n;
+    }
 }
 
 std::string Memory::read_cstring(uint32_t a, uint32_t max) {

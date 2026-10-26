@@ -201,6 +201,15 @@ int main(int argc, char **argv) {
         for (int16_t s : handlers.audio.output) peak = std::max(peak, std::abs(int(s)));
         std::printf("sound: peak %d over the last %zu samples\n", peak, handlers.audio.output.size() / 2);
     }
+    std::printf("time: code %.1f s, interpreter %.1f s, syscalls %.1f s, scheduler %.1f s, outside %.1f s; %llu slices, %llu syscalls\n",
+                system.profile.code, system.profile.interpreter, system.profile.syscalls, system.profile.schedule,
+                system.profile.outside, (unsigned long long)system.profile.slices, (unsigned long long)system.profile.svcs);
+    for (int n = 0; n < 256; n++) {
+        if (system.profile.by_svc[n] > 0.2) std::printf("  svc 0x%02X %.1f s\n", n, system.profile.by_svc[n]);
+    }
+    for (auto &[key, spent] : handlers.time_spent) {
+        if (spent > 0.2) std::printf("  %s 0x%04X %.1f s\n", key.first.c_str(), key.second, spent);
+    }
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
     {
         std::vector<std::pair<uint64_t, uint32_t>> top;

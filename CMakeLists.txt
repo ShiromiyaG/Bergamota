@@ -1,4 +1,9 @@
 cmake_minimum_required(VERSION 3.25)
+# optimized unless asked otherwise: a Debug runtime runs the games several
+# times slower
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
+endif()
 project(recomp_runtime VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)

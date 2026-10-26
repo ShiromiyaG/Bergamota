@@ -100,6 +100,8 @@ public:
     const std::map<std::pair<std::string, uint32_t>, uint32_t> &unimplemented() const { return unimplemented_; }
     // every command asked for, by service: what ZAKURO_USAGE counts
     std::map<std::pair<std::string, uint32_t>, uint64_t> usage;
+    // and the host time each took, in seconds
+    std::map<std::pair<std::string, uint32_t>, double> time_spent;
 
 private:
     struct Parameter {

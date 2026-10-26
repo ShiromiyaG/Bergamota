@@ -174,8 +174,17 @@ bool System::interpret(Context &c) {
 }
 
 bool System::run(const std::function<bool()> &stop) {
-    while (!kernel.exited() && !stop()) {
-        if (!kernel.schedule()) {
+    using clock = std::chrono::steady_clock;
+    auto seconds = [](clock::time_point from) { return std::chrono::duration<double>(clock::now() - from).count(); };
+    for (;;) {
+        auto before_stop = clock::now();
+        bool stopping = kernel.exited() || stop();
+        profile.outside += seconds(before_stop);
+        if (stopping) break;
+        auto before_schedule = clock::now();
+        bool scheduled = kernel.schedule();
+        profile.schedule += seconds(before_schedule);
+        if (!scheduled) {
             // every thread waits: on a time, or on an outside event the
             // services signal (the caller's stop() lets it raise them)
             auto wake = kernel.next_wakeup();
@@ -215,10 +224,26 @@ bool System::run(const std::function<bool()> &stop) {
         c.budget = config_.slice;
         c.depth = 0;
         uint64_t interpreted_before = interpreted;
+        auto before_code = clock::now();
         if (code) {
-            code(&c);
-        } else if (!interpret(c)) {
-            return false;
+            // the code leaves at a jump it cannot follow: the same thread goes
+            // on from there while its slice lasts, without the scheduler
+            for (;;) {
+                code(&c);
+                profile.slices++;
+                bool left = c.exit == EXIT_NONE || c.exit == EXIT_UNWIND;
+                if (!left || c.budget <= 0 || (c.r[15] == THREAD_EXIT && !c.thumb)) break;
+                code = lookup_(c.r[15] | c.thumb);
+                if (!code) break;
+                c.exit = EXIT_NONE;
+                c.depth = 0;
+            }
+            profile.code += seconds(before_code);
+        } else {
+            bool went_on = interpret(c);
+            profile.interpreter += seconds(before_code);
+            if (!went_on) return false;
+            profile.slices++;
         }
         if (config_.virtual_clock) {
             // what the slice used, a tick an instruction (one at least)
@@ -226,7 +251,12 @@ bool System::run(const std::function<bool()> &stop) {
             virtual_ += uint64_t(std::max<int64_t>(used, 1));
         }
         if (c.exit == EXIT_SVC) {
+            auto before_svc = clock::now();
             kernel.syscall(c.svc);
+            double spent = seconds(before_svc);
+            profile.syscalls += spent;
+            profile.by_svc[c.svc & 0xFF] += spent;
+            profile.svcs++;
         }
         // a slice ran out or the code left at a jump: go on from r15, maybe
         // with another thread

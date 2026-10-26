@@ -7,6 +7,7 @@
 #include "runtime/fs.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <cstdio>
 
@@ -60,7 +61,14 @@ std::vector<uint8_t> CommandBuffer::read_static(uint32_t index, uint32_t size) c
 }
 
 void Services::request(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
+    auto start = std::chrono::steady_clock::now();
     CommandBuffer buffer{system.memory, thread.tls};
+    auto &spent = time_spent[{service, buffer.command()}];
+    struct Timer {
+        double &into;
+        std::chrono::steady_clock::time_point start;
+        ~Timer() { into += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(); }
+    } timer{spent, start};
     usage[{service, buffer.command()}]++;
     bool handled = false;
     if (service == "srv:" || service == "srv:pm") handled = srv(system, buffer);
