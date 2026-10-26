@@ -73,6 +73,6 @@ where they part (screens, service calls, saves).
 
 ## License
 
-MIT (`LICENSE`). Parts are translated from Zakuro (MIT, Copyright (c) 2026
+Written by ShiromiyaG with Claude (Anthropic). MIT (`LICENSE`). Parts are translated from Zakuro (MIT, Copyright (c) 2026
 fearkov, `LICENSE-zakuro`); each such file says so at its top. Nothing
 derived from any game is in this repository.
