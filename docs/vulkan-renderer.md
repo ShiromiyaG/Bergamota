@@ -25,6 +25,16 @@ command lists ──> Pica (front end)            src/pica/
                     cached by address
 ```
 
+## Hybrid, decided 2026-10-26
+
+The renderer translates what the games send the PICA (its registers, shader
+programs and combiner setup) into Vulkan: it works for all three games
+without the engines decompiled. Native rendering comes on top of it, where
+it pays, as hooks in each engine (Solstice's gfl2, the Gen 6 engine for
+Duality and Tidefall; PLAN 6.3): the camera and aspect for widescreen, the
+UI laid out for the single screen, effects of our own. Materials stay PICA
+data either way, their vertex shaders and combiners come from the models.
+
 ## Decisions
 
 - **No shader compilation at run time.** One vertex and one fragment shader,

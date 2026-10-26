@@ -30,6 +30,27 @@ add_library(recomp_runtime STATIC
     src/pica/sketch.cpp
     src/services.cpp
 )
+# the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
+# shaders compiled to SPIR-V here, never while a game runs
+find_package(Vulkan COMPONENTS glslc)
+option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${Vulkan_FOUND})
+if(RUNTIME_VULKAN)
+    set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
+    file(MAKE_DIRECTORY ${SHADER_OUT})
+    foreach(stage vert frag)
+        add_custom_command(
+            OUTPUT ${SHADER_OUT}/pica.${stage}.inc
+            COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/pica.${stage}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica.${stage}
+            DEPENDS src/vk/pica.${stage}
+            VERBATIM)
+    endforeach()
+    target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/pica/texture.cpp
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc)
+    target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
+    target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)
+endif()
+
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
 target_include_directories(recomp_runtime PUBLIC include third_party)
 if(WIN32)

@@ -13,6 +13,9 @@
 #include "runtime/fs.h"
 #include "runtime/pica.h"
 #include "runtime/pica_sketch.h"
+#ifdef RUNTIME_VULKAN
+#include "runtime/vulkan_renderer.h"
+#endif
 #include "runtime/loader.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
@@ -145,6 +148,9 @@ int main(int argc, char **argv) {
     const std::string renderer = env("RUNTIME_RENDERER") ? env("RUNTIME_RENDERER") : "";
     const bool native = renderer == "native" || renderer == "sketch";
     std::unique_ptr<pica::Sketch> sketch;
+#ifdef RUNTIME_VULKAN
+    std::unique_ptr<VulkanRenderer> vulkan;
+#endif
     std::unique_ptr<pica::Pica> pica_gpu;
 #ifdef RUNTIME_ZAKURO_GPU
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
@@ -162,6 +168,13 @@ int main(int argc, char **argv) {
             sketch = std::make_unique<pica::Sketch>();
             pica_gpu->backend = sketch.get();
         }
+#ifdef RUNTIME_VULKAN
+        if (renderer == "native") {
+            vulkan = std::make_unique<VulkanRenderer>(system.memory);
+            if (vulkan->ready()) pica_gpu->backend = vulkan.get();
+            else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
+        }
+#endif
         std::printf("drawing with the runtime's renderer\n");
         handlers.gpu = pica_gpu.get();
         gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
@@ -244,6 +257,13 @@ int main(int argc, char **argv) {
     for (auto &[key, spent] : handlers.time_spent) {
         if (spent > 0.2) std::printf("  %s 0x%04X %.1f s\n", key.first.c_str(), key.second, spent);
     }
+#ifdef RUNTIME_VULKAN
+    if (vulkan) {
+        std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
+                    (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
+                    (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
+    }
+#endif
     if (sketch) {
         std::printf("sketch: %llu draws, %llu vertices shaded, %llu draws skipped\n", (unsigned long long)pica_gpu->draws,
                     (unsigned long long)sketch->shaded(), (unsigned long long)sketch->skipped);
