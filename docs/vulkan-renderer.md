@@ -64,12 +64,18 @@ data either way, their vertex shaders and combiners come from the models.
 
 ## Milestones
 
-1. **Front end.** Command lists, registers, shader and table uploads, fixed
+State (2026-10-26): 1-3 done, 4 next. USUM draws right from the intro to
+the field, without fragment lighting; the player runs it at about 56 fps in
+the field.
+
+1. **Front end.** (done) Command lists, registers, shader and table uploads, fixed
    attributes and immediate mode, and the fill, transfer and copy engines on
    memory. Draws counted, not drawn. Selectable beside the Zakuro bridge.
-2. **Vertex stage.** Attribute loading, the shader interpreter, the geometry
+2. **Vertex stage.** (done; 16 vertices at a time, across the CPU's cores) Attribute loading, the shader interpreter, the geometry
    stage's absence checked, primitive assembly, clipping left to Vulkan.
-3. **First pixels.** Vulkan device, surfaces, textures, the ubershader with
+3. **First pixels.** (done; fills and display transfers on the GPU, a
+   depth buffer read as a texture converted by a compute shader, the screens
+   read back a frame behind) Vulkan device, surfaces, textures, the ubershader with
    TEV, blending and depth/stencil; display transfers from surfaces; the
    screens shown. USUM's title screen and field compared with Zakuro's
    (`tools/compare.py`).

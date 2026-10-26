@@ -1,0 +1,58 @@
+# Tools for measuring and checking
+
+## `boot`
+
+Runs a game without a window and reports how far it got: the modules it
+loaded, where the time went (the game's code, the interpreter, syscalls by
+number, services by command, the renderer), the service commands nothing
+answers yet, and where each thread stands at the end.
+
+```sh
+build/boot <exheader.bin> <code.bin> <recompiled library> <seconds> <game .3ds> <update .cia> <saves folder>
+```
+
+On the host's clock it runs for `seconds`, pressing A for a tenth of each
+second to get past the title. With `RUNTIME_FRAMES` it runs on a virtual
+clock instead (a tick an instruction, as Zakuro counts them): the same input
+gives the same run, and it never sleeps, so it runs as fast as the host can.
+
+| Variable | What it does |
+| --- | --- |
+| `RUNTIME_FRAMES=n` | run n frames on the virtual clock |
+| `RUNTIME_REPLAY=file` | the input of a Zakuro recording (`ZAKURO_RECORD`), frame by frame; its clock becomes the console's |
+| `RUNTIME_SHOTS=folder` | both screens as `<frame>-top.ppm` and `<frame>-bottom.ppm` |
+| `RUNTIME_SHOT_EVERY=n` | every n frames (100) |
+| `RUNTIME_USAGE=file` | the service commands asked for, as Zakuro's `ZAKURO_USAGE` writes them |
+| `RUNTIME_RENDERER=native` | the runtime's Vulkan renderer; `sketch` draws wireframes of the vertex stage on the CPU instead; unset, Zakuro's |
+
+Always point it at a copy of the saves: the game writes to them.
+
+## `tools/compare.py`
+
+Runs the same stretch of a game on the runtime and on Zakuro, with the same
+recorded input, and reports where they part: the screens every so many
+frames (a mean difference above a threshold), the service commands each was
+asked (one side only, or counts far apart), and the save files at the end.
+Zakuro already runs the games, so a difference points at the runtime.
+
+```sh
+python -I tools/compare.py <exheader.bin> <code.bin> <library> <game .3ds> <update .cia> \
+    <saves folder to copy> <recording> <out folder> [--frames 3000] [--every 300]
+```
+
+Needs Pillow. The two clocks count alike but not the same, so timed scenes
+(the intro movie) can differ by a few frames without anything being wrong.
+
+## The player
+
+| Variable | What it does |
+| --- | --- |
+| `RUNTIME_STATS=1` | a line a second: frames shown, the longest gap, time in the GPU, idle, reading the screens, sending the frame |
+
+## The renderer
+
+| Variable | What it does |
+| --- | --- |
+| `RUNTIME_VK_VALIDATION=1` | the Vulkan validation layer (needs the SDK) |
+| `RUNTIME_VK_DEBUG=1` | what falls off the fast paths: transfers and textures that go through memory, write-backs and how long they took |
+| `RUNTIME_VK_NO_PICTURE=1` | read the screens from memory rather than from the GPU |
