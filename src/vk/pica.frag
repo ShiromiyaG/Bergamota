@@ -174,7 +174,7 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40;
+          FOG_COLOR = 40, SCISSOR = 41;
 // TEV_UPDATE (0x0E0) also holds the fog's mode, bits 0-2, 5 for fog, and its
 // depth taken from the far end, bit 16
 
@@ -267,6 +267,13 @@ bool compare(uint func, float a, float b) {
 }
 
 void main() {
+    // the scissor keeping the outside of its rectangle (the inside is the
+    // pipeline's scissor)
+    if (reg(SCISSOR) != 0u) {
+        uvec2 at = uvec2(gl_FragCoord.xy);
+        uint xs = reg(SCISSOR + 1), ys = reg(SCISSOR + 2);
+        if (at.x >= (xs & 0xFFFFu) && at.x < (xs >> 16) && at.y >= (ys & 0xFFFFu) && at.y < (ys >> 16)) discard;
+    }
     // texture 2 reads coordinate set 1 or 2
     vec4 tex[4];
     tex[0] = texel(0, v_uv0);

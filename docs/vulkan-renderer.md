@@ -140,7 +140,10 @@ software rasterizer, 1.6% of pixels off by more than 16.
      ground (up to 2% of a battle frame's pixels);
    - the scissor test: on in every draw, keeping the screen's 240×400 (or
      240×320) of a 256×512 buffer; the rest of the buffer is drawn into
-     but not shown;
+     but not shown. Done: the inside of the rectangle is the pipeline's
+     scissor, the outside a discard in pica.frag, rows turned over as the
+     viewport's and at the scale (pica_scissor); USUM's frames stay the
+     same;
    - cube maps, shadow textures, projected textures, the scissor keeping the
      outside, procedural textures, the shadow mode and gas: none.
 
