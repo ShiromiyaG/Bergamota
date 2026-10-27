@@ -64,12 +64,11 @@ data either way, their vertex shaders and combiners come from the models.
 
 ## Milestones
 
-State (2026-10-27): 1-3 done, 4 under way (fragment lighting, fog and the
-logic op done). USUM
-draws right from the intro to the field, lit; the player runs it at about
-56 fps in the field. In the field, its frames are within a mean of 1.4 (of
-255) of Zakuro's software rasterizer, 1.6% of pixels off by more than 16;
-17.6 and 52% before the lighting.
+State (2026-10-27): 1-5 done, 6 under way. USUM draws right from the intro
+to the field and battles, lit, at up to 4 times the 3DS's resolution,
+shown straight from the GPU; the player keeps about 58 fps in the field.
+In the field, its frames are within a mean of 1.4 (of 255) of Zakuro's
+software rasterizer, 1.6% of pixels off by more than 16.
 
 1. **Front end.** (done) Command lists, registers, shader and table uploads, fixed
    attributes and immediate mode, and the fill, transfer and copy engines on
@@ -119,6 +118,25 @@ draws right from the intro to the field, lit; the player runs it at about
      the phase of textures not drawn 1:1 and edges the scaling down smooths.
    - *Guards*: the CPU's reads of a surface the GPU drew write it back
      first, as they did already.
+
+6. **The rest of the hardware.** What the PICA200 does that the renderer
+   did not, counted first (`boot`'s "draws using" lines), over the three
+   recordings (the intro to the field, 845 thousand draws of gameplay, a
+   battle):
+   - a geometry shader: 2,782 of a battle's 451 thousand draws (none
+     elsewhere), which the renderer dropped without a word; now counted as
+     refused;
+   - textures with mipmap levels: 9-34% of the draws, sampled at level 0
+     only;
+   - the scissor test: on in every draw, keeping the screen's 240×400 (or
+     240×320) of a 256×512 buffer; the rest of the buffer is drawn into
+     but not shown;
+   - cube maps, shadow textures, projected textures, the scissor keeping the
+     outside, procedural textures, the shadow mode and gas: none.
+
+   Next, in that order: the geometry shader, mipmaps, the scissor, then
+   what no USUM draw uses (unit 0's types, procedural textures, the shadow
+   mode, gas), for the other ports.
 
 Zakuro's renderer (`zakuro-dev/crates/zakuro-gpu`) is the reference for the
 hardware's behaviour; the code here is written anew.

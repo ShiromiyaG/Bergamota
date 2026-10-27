@@ -191,8 +191,13 @@ public:
     uint64_t lists = 0, draws = 0, fills = 0, transfers = 0;
     // draws that use parts of the fixed function, to know what the games
     // ask for: fog, gas, the shadow mode, a procedural texture, a logic op
-    // other than copy
-    enum Feature { USES_FOG, USES_GAS, USES_SHADOW, USES_PROCTEX, USES_LOGIC_OP, FEATURES };
+    // other than copy; a geometry shader; a texture with mipmap levels; unit
+    // 0 as a cube map, a shadow texture (2D or cube) or a projected one; the
+    // scissor test keeping the inside of its rectangle, or the outside
+    enum Feature {
+        USES_FOG, USES_GAS, USES_SHADOW, USES_PROCTEX, USES_LOGIC_OP, USES_GEOMETRY, USES_MIPMAP, USES_CUBE,
+        USES_SHADOW_TEXTURE, USES_PROJECTION, USES_SCISSOR, USES_SCISSOR_OUTSIDE, FEATURES
+    };
     uint64_t feature_draws[FEATURES]{};
     double busy = 0; // seconds in command lists and transfers
 

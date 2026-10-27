@@ -1777,8 +1777,12 @@ double since(clock::time_point t) { return std::chrono::duration<double>(clock::
 void VulkanRenderer::draw(Pica &p, bool indexed) {
     if (!ready()) return;
     auto t = clock::now();
-    impl_->stage.draw(p, indexed, impl_->triangles);
+    bool done = impl_->stage.draw(p, indexed, impl_->triangles);
     time_vertices += since(t);
+    if (!done) {
+        refused++;
+        return;
+    }
     t = clock::now();
     impl_->render(p);
     time_render += since(t);
@@ -1786,7 +1790,10 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
 
 void VulkanRenderer::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>> &vertices) {
     if (!ready()) return;
-    impl_->stage.draw_immediate(p, vertices, impl_->triangles);
+    if (!impl_->stage.draw_immediate(p, vertices, impl_->triangles)) {
+        refused++;
+        return;
+    }
     impl_->render(p);
 }
 

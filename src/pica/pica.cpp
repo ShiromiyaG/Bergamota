@@ -158,6 +158,25 @@ void Pica::count_features() {
     feature_draws[USES_PROCTEX] += (regs[0x080] >> 3) & 1;
     // blending off is the logic op's mode; 3 is copy
     feature_draws[USES_LOGIC_OP] += !(op >> 8 & 1) && (regs[LOGIC_OP] & 0xF) != 3;
+    feature_draws[USES_GEOMETRY] += (regs[GEOSTAGE_CONFIG] & 3) == 2;
+    // the units on (bits 0-2): levels past the first (bits 16-19 of each's
+    // level register); unit 0's type in bits 28-30 of its parameters
+    static constexpr uint32_t LEVELS[3] = {0x084, 0x094, 0x09C};
+    uint32_t units = regs[TEXTURE_CONFIG] & 7;
+    bool mipmap = false;
+    for (int u = 0; u < 3; u++) mipmap |= (units >> u & 1) && (regs[LEVELS[u]] >> 16 & 15) != 0;
+    feature_draws[USES_MIPMAP] += mipmap;
+    uint32_t type = units & 1 ? regs[0x083] >> 28 & 7 : 0;
+    feature_draws[USES_CUBE] += type == 1 || type == 4;
+    feature_draws[USES_SHADOW_TEXTURE] += type == 2 || type == 4;
+    feature_draws[USES_PROJECTION] += type == 3;
+    // 0 off, 1 the outside of the rectangle drawn, 3 the inside; the inside
+    // counted when the rectangle (corners inclusive, x in bits 0-9 and y in
+    // 16-25) leaves some of the buffer out
+    uint32_t scissor = regs[0x065] & 3, low = regs[0x066], high = regs[0x067], dims = regs[FRAMEBUFFER_DIMENSIONS];
+    uint32_t width = dims & 0x7FF, height = ((dims >> 12) & 0x3FF) + 1;
+    bool cuts = (low & 0x3FF) || (low >> 16 & 0x3FF) || (high & 0x3FF) + 1 < width || (high >> 16 & 0x3FF) + 1 < height;
+    feature_draws[USES_SCISSOR] += scissor == 3 && cuts;    feature_draws[USES_SCISSOR_OUTSIDE] += scissor == 1;
 }
 
 void Pica::flush_immediate() {
