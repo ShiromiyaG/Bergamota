@@ -34,6 +34,7 @@ struct Settings {
         bool vsync = false;      // waits for the display, which the game, on the same thread, pays for
         bool smooth = true;      // the screens scaled up smoothly, or in sharp pixels
         std::string layout = "both"; // both screens stacked, or "top" alone
+        int scale = 1;               // the game drawn at 1-4 times the 3DS's resolution; a restart
     } video;
     struct {
         int volume = 100; // percent

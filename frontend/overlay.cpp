@@ -3,6 +3,8 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 
+#include <algorithm>
+
 namespace frontend {
 
 bool Overlay::event(const SDL_Event &event) {
@@ -74,6 +76,12 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 moved = true;
             }
             moved |= ImGui::Checkbox("Frame times in the corner", &s.stats);
+            // kept for the next start: the buffers are made at it
+            if (ImGui::SliderInt("Resolution", &s.video.scale, 1, 4, "%dx")) {
+                s.video.scale = std::clamp(s.video.scale, 1, 4);
+                moved = true;
+            }
+            ImGui::TextDisabled("The resolution takes effect the next time the game starts.");
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

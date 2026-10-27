@@ -205,8 +205,12 @@ struct VulkanRenderer::Impl {
     pica::ShaderTables shader_tables{}; // lighting's, fog's
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
-    Impl(VulkanRenderer &s, Memory &m, std::string cache, const PresentTarget *t)
-        : self(s), memory(m), target(t), cache_path(std::move(cache)) {}
+    Impl(VulkanRenderer &s, Memory &m, std::string cache, const PresentTarget *t, uint32_t k)
+        : self(s), memory(m), target(t), cache_path(std::move(cache)), scale(std::clamp(k, 1u, 4u)) {}
+
+    // the buffers the game draws into, at this many times their size; what
+    // goes to and from memory is at their own (upload, write_back)
+    uint32_t scale;
 
     // the window the screens are shown in, when there is one: its surface,
     // the swapchain, and the pass that draws the screens into it
@@ -405,7 +409,7 @@ struct VulkanRenderer::Impl {
 
         }
         for (ScreenCopy &c : screen_copies) {
-            for (Buffer &b : c.buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+            for (Buffer &b : c.buffers) b = buffer(400 * 240 * 4 * scale * scale, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
         }
         cmd = slots[0].cmd;
         vertices = slots[0].vertices;
@@ -988,7 +992,7 @@ struct VulkanRenderer::Impl {
         sc.next = last;
         VkBufferImageCopy c{};
         c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.imageExtent = {fb->width, fb->height, 1};
+        c.imageExtent = {fb->image.width, fb->image.height, 1}; // at the scale
         vkCmdCopyImageToBuffer(cmd, fb->image.image, VK_IMAGE_LAYOUT_GENERAL, sc.buffers[now].buffer, 1, &c);
         barrier();
         sc.serial[now] = submitted + 1;
@@ -1005,11 +1009,13 @@ struct VulkanRenderer::Impl {
         out.height = 240;
         out.rgba.assign(out.width * out.height * 4, 0);
         // the framebuffer is the screen turned on its side: a screen column is
-        // a row of it, bottom to top
+        // a row of it, bottom to top; each pixel from the middle of its block
+        // at the scale
         const uint8_t *src = sc.buffers[last].mapped;
+        uint32_t W = w * scale;
         for (uint32_t x = 0; x < out.width && x < h; x++) {
             for (uint32_t y = 0; y < out.height && y < w; y++) {
-                const uint8_t *p = src + (size_t(x) * w + (w - 1 - y)) * 4;
+                auto p = middle(src, W, W - (y + 1) * scale, x * scale);
                 uint8_t *d = &out.rgba[(size_t(y) * out.width + x) * 4];
                 d[0] = p[0], d[1] = p[1], d[2] = p[2], d[3] = 255;
             }
@@ -1043,6 +1049,34 @@ struct VulkanRenderer::Impl {
 
     void upload_color(Image &i, const uint8_t *rgba, VkDeviceSize size) { copy_in(i, rgba, size, VK_IMAGE_ASPECT_COLOR_BIT); }
 
+    // texels at a buffer's own size made into its image's, each one
+    // scale by scale
+    template <typename T> std::vector<T> enlarge(const std::vector<T> &texels, uint32_t w, uint32_t h, uint32_t per) const {
+        if (scale == 1) return texels;
+        uint32_t W = w * scale, H = h * scale;
+        std::vector<T> out(size_t(W) * H * per);
+        for (uint32_t Y = 0; Y < H; Y++) {
+            for (uint32_t X = 0; X < W; X++) {
+                const T *from = &texels[(size_t(Y / scale) * w + X / scale) * per];
+                std::copy(from, from + per, &out[(size_t(Y) * W + X) * per]);
+            }
+        }
+        return out;
+    }
+
+    // a texel at a buffer's own size from its block in an image at the
+    // scale: the middle one, or the middle four averaged (an even scale has
+    // no middle texel; one beside it is off by a quarter of a texel)
+    std::array<uint8_t, 4> middle(const uint8_t *texels, uint32_t W, uint32_t col, uint32_t row) const {
+        uint32_t lo = (scale - 1) / 2, hi = scale / 2, sum[4] = {}, n = 0;
+        for (uint32_t r = row + lo; r <= row + hi; r++) {
+            for (uint32_t c = col + lo; c <= col + hi; c++, n++) {
+                for (int i = 0; i < 4; i++) sum[i] += texels[(size_t(r) * W + c) * 4 + i];
+            }
+        }
+        return {uint8_t((sum[0] + n / 2) / n), uint8_t((sum[1] + n / 2) / n), uint8_t((sum[2] + n / 2) / n), uint8_t((sum[3] + n / 2) / n)};
+    }
+
     // a buffer's memory into its image: rows as memory has them, 8x8 tiles
     void upload(Surface &s) {
         s.version++;
@@ -1058,6 +1092,7 @@ struct VulkanRenderer::Impl {
                     std::memcpy(&rgba[(size_t(y) * w + x) * 4], c.data(), 4);
                 }
             }
+            rgba = enlarge(rgba, w, h, 4);
             upload_color(s.image, rgba.data(), rgba.size());
             return;
         }
@@ -1075,6 +1110,8 @@ struct VulkanRenderer::Impl {
                 stencil[at] = bpp == 4 ? p[3] : 0;
             }
         }
+        depth = enlarge(depth, w, h, 1);
+        stencil = enlarge(stencil, w, h, 1);
         copy_in(s.image, depth.data(), depth.size() * 4, VK_IMAGE_ASPECT_DEPTH_BIT);
         copy_in(s.image, stencil.data(), stencil.size(), VK_IMAGE_ASPECT_STENCIL_BIT);
     }
@@ -1084,13 +1121,16 @@ struct VulkanRenderer::Impl {
     void write_back(Surface &s) {
         self.write_back_causes[cause]++;
         auto started = std::chrono::steady_clock::now();
-        uint32_t w = s.width, h = s.height;
-        VkDeviceSize texels = VkDeviceSize(w) * h;
+        // the image whole, at its scale; each texel of memory's from the
+        // middle of its block (at), at the buffer's own size
+        uint32_t w = s.width, h = s.height, W = s.image.width;
+        VkDeviceSize texels = VkDeviceSize(W) * s.image.height;
+        auto at = [&](uint32_t x, uint32_t y) { return size_t(y * scale + scale / 2) * W + x * scale + scale / 2; };
         Buffer a = buffer(texels * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true), b{};
         end_rendering();
         VkBufferImageCopy c{};
         c.imageSubresource = {VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
-        c.imageExtent = {w, h, 1};
+        c.imageExtent = {s.image.width, s.image.height, 1};
         vkCmdCopyImageToBuffer(cmd, s.image.image, VK_IMAGE_LAYOUT_GENERAL, a.buffer, 1, &c);
         if (s.depth) {
             b = buffer(texels, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
@@ -1105,8 +1145,7 @@ struct VulkanRenderer::Impl {
                 uint32_t bpp = bytes_per_pixel(s.format);
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < w; x++) {
-                        const uint8_t *p = a.mapped + (size_t(y) * w + x) * 4;
-                        encode_color(s.format, {p[0], p[1], p[2], p[3]}, dst + s.offset(x, y, bpp));
+                        encode_color(s.format, middle(a.mapped, W, x * scale, y * scale), dst + s.offset(x, y, bpp));
                     }
                 }
             } else {
@@ -1114,15 +1153,15 @@ struct VulkanRenderer::Impl {
                 uint32_t bpp = BYTES[s.format & 3];
                 for (uint32_t y = 0; y < h; y++) {
                     for (uint32_t x = 0; x < w; x++) {
-                        size_t at = size_t(y) * w + x;
+                        size_t from = at(x, y);
                         uint32_t v;
-                        std::memcpy(&v, a.mapped + at * 4, 4);
+                        std::memcpy(&v, a.mapped + from * 4, 4);
                         if (depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT) v = uint32_t(std::clamp(std::bit_cast<float>(v), 0.0f, 1.0f) * 16777215.0f + 0.5f);
                         v &= 0xFFFFFF;
                         uint8_t *p = dst + s.offset(x, y, bpp);
                         if (bpp == 2) v >>= 8, p[0] = uint8_t(v), p[1] = uint8_t(v >> 8);
                         else p[0] = uint8_t(v), p[1] = uint8_t(v >> 8), p[2] = uint8_t(v >> 16);
-                        if (bpp == 4) p[3] = b.mapped[at];
+                        if (bpp == 4) p[3] = b.mapped[from];
                     }
                 }
             }
@@ -1184,7 +1223,7 @@ struct VulkanRenderer::Impl {
             surfaces.erase(surfaces.begin() + i);
         }
         auto s = std::make_unique<Surface>(fresh);
-        s->image = image(w, h, depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth);
+        s->image = image(w * scale, h * scale, depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth);
         upload(*s);
         surfaces.push_back(std::move(s));
         return surfaces.back().get();
@@ -1254,15 +1293,17 @@ struct VulkanRenderer::Impl {
         Surface *out = surface(t.output, t.out_width, t.out_height, t.out_format, false, !t.out_tiled);
         if (out == in) return false;
         end_rendering();
+        // in the images' pixels, the buffers' times the scale
+        int32_t k = int32_t(scale);
         VkImageBlit b{};
         b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        b.srcOffsets[0] = {0, int32_t(row), 0};
-        b.srcOffsets[1] = {int32_t(t.copy_width * t.scale_x), int32_t(row + t.copy_height * t.scale_y), 1};
+        b.srcOffsets[0] = {0, int32_t(row) * k, 0};
+        b.srcOffsets[1] = {int32_t(t.copy_width * t.scale_x) * k, int32_t(row + t.copy_height * t.scale_y) * k, 1};
         if (t.flip) {
-            b.dstOffsets[0] = {0, int32_t(t.out_height), 0};
-            b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.out_height - t.copy_height), 1};
+            b.dstOffsets[0] = {0, int32_t(t.out_height) * k, 0};
+            b.dstOffsets[1] = {int32_t(t.copy_width) * k, int32_t(t.out_height - t.copy_height) * k, 1};
         } else {
-            b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.copy_height), 1};
+            b.dstOffsets[1] = {int32_t(t.copy_width) * k, int32_t(t.copy_height) * k, 1};
         }
         bool scaled = t.scale_x > 1 || t.scale_y > 1;
         vkCmdBlitImage(cmd, in->image.image, VK_IMAGE_LAYOUT_GENERAL, out->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &b,
@@ -1350,7 +1391,7 @@ struct VulkanRenderer::Impl {
     }
 
     VkImageView depth_as_color(Surface &s) {
-        if (!s.as_color.image) s.as_color = image(s.width, s.height, VK_FORMAT_R8G8B8A8_UNORM, false);
+        if (!s.as_color.image) s.as_color = image(s.image.width, s.image.height, VK_FORMAT_R8G8B8A8_UNORM, false);
         if (s.converted == s.version) return s.as_color.view;
         end_rendering();
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_pipeline);
@@ -1368,7 +1409,7 @@ struct VulkanRenderer::Impl {
             writes[i].pImageInfo = &images[i];
         }
         push_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_layout, 0, 3, writes);
-        vkCmdDispatch(cmd, (s.width + 7) / 8, (s.height + 7) / 8, 1);
+        vkCmdDispatch(cmd, (s.image.width + 7) / 8, (s.image.height + 7) / 8, 1);
         barrier();
         s.converted = s.version;
         return s.as_color.view;
@@ -1551,7 +1592,7 @@ struct VulkanRenderer::Impl {
             VkRenderingAttachmentInfo da = ca;
             if (depth) da.imageView = depth->image.view;
             VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-            ri.renderArea = {{0, 0}, {w, h}};
+            ri.renderArea = {{0, 0}, {w * scale, h * scale}};
             ri.layerCount = 1;
             ri.colorAttachmentCount = 1;
             ri.pColorAttachments = &ca;
@@ -1575,9 +1616,11 @@ struct VulkanRenderer::Impl {
         // the viewport, rows the PICA's way up
         float vw = f24(r[VIEWPORT_WIDTH]) * 2, vh = f24(r[VIEWPORT_HEIGHT]) * 2;
         float vx = float(int32_t(r[VIEWPORT_XY] << 22) >> 22), vy = float(int32_t((r[VIEWPORT_XY] >> 16) << 22) >> 22);
-        VkViewport viewport{vx, float(h) - (vy + vh), vw, vh, 0, 1};
+        // in the image's pixels, the buffer's times the scale
+        float k = float(scale);
+        VkViewport viewport{vx * k, (float(h) - (vy + vh)) * k, vw * k, vh * k, 0, 1};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
-        VkRect2D scissor{{0, 0}, {w, h}};
+        VkRect2D scissor{{0, 0}, {w * scale, h * scale}};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         uint32_t cull = r[FACE_CULLING] & 3;
         vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
@@ -1694,8 +1737,8 @@ struct VulkanRenderer::Impl {
     }
 };
 
-VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache, const PresentTarget *target)
-    : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache), target)) {
+VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache, const PresentTarget *target, uint32_t scale)
+    : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache), target, scale)) {
     if (!impl_->init()) return;
     // the CPU's accesses to what was drawn bring it down first (memory's guards)
     memory.gpu_sync = [this, &memory](uint32_t vaddr, uint32_t size, bool write) {

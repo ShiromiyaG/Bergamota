@@ -170,7 +170,8 @@ int main(int argc, char **argv) {
         // the compiled pipelines kept beside the settings, between runs
         // RUNTIME_NO_PRESENT: the screens read back and shown by the SDL renderer, as before
         const PresentTarget *shown_in = SDL_getenv("RUNTIME_NO_PRESENT") ? nullptr : &target;
-        vulkan = std::make_unique<VulkanRenderer>(system.memory, frontend::utf8(config_file.parent_path() / "pipelines.bin"), shown_in);
+        vulkan = std::make_unique<VulkanRenderer>(system.memory, frontend::utf8(config_file.parent_path() / "pipelines.bin"), shown_in,
+                                                  uint32_t(settings.video.scale));
         direct = vulkan->presents() && frontend::ui_on_vulkan(window, vulkan->handles());
         if (vulkan->ready()) {
             pica_gpu->backend = vulkan.get();
