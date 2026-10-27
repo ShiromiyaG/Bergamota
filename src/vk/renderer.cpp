@@ -72,6 +72,8 @@ constexpr uint32_t STATE_REGS[] = {
 // 41-43: the scissor keeping the outside of its rectangle: on, then the
 // rectangle's x ends and y ends (in the image's pixels, 16 bits each)
 constexpr size_t SCISSOR_SLOT = 41;
+// 44-49: the procedural texture's registers, 0x0A8 to 0x0AD
+constexpr size_t PROCTEX_SLOT = 44;
 
 // a texture unit's registers: border color, then size, parameters, address
 // and format
@@ -205,7 +207,7 @@ struct VulkanRenderer::Impl {
     pica::LightingBlock light_block{};
     VkDeviceSize light_offset = 0, tables_offset = 0;
     uint64_t light_serial = ~0ull, tables_serial = ~0ull;
-    pica::ShaderTables shader_tables{}; // lighting's, fog's
+    pica::ShaderTables shader_tables{}; // lighting's, fog's, the procedural texture's
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
     Impl(VulkanRenderer &s, Memory &m, std::string cache, const PresentTarget *t, uint32_t k)
@@ -1577,6 +1579,7 @@ struct VulkanRenderer::Impl {
             st.regs[SCISSOR_SLOT + 1] = box.x0 | box.x1 << 16;
             st.regs[SCISSOR_SLOT + 2] = box.y0 | box.y1 << 16;
         }
+        for (uint32_t i = 0; i < 6; i++) st.regs[PROCTEX_SLOT + i] = r[pica::PROCTEX_CONFIG + i];
         pica::LightingBlock lit;
         lighting.decode(r.data(), lit);
         // into the rings; a ring that runs out submits, which leaves what
@@ -1600,6 +1603,7 @@ struct VulkanRenderer::Impl {
                 if (tables_decoded != p.tables_version) {
                     pica::decode_light_tables(p.light_tables, shader_tables.light);
                     pica::decode_fog_table(p.fog_table, shader_tables.fog);
+                    pica::decode_proctex_tables(p.proctex_tables, shader_tables.proctex);
                     tables_decoded = p.tables_version;
                 }
                 tables_offset = take(uniforms, uniform_at, sizeof shader_tables, 256);

@@ -155,7 +155,8 @@ void Pica::count_features() {
     feature_draws[USES_FOG] += fog == 5;
     feature_draws[USES_GAS] += fog == 7 || (op & 3) == 1;
     feature_draws[USES_SHADOW] += (op & 3) == 3;
-    feature_draws[USES_PROCTEX] += (regs[0x080] >> 3) & 1;
+    // texture 3 on: bit 10 (Zakuro's proctex.rs, Citra's texture3_enable)
+    feature_draws[USES_PROCTEX] += (regs[TEXTURE_CONFIG] >> 10) & 1;
     // blending off is the logic op's mode; 3 is copy
     feature_draws[USES_LOGIC_OP] += !(op >> 8 & 1) && (regs[LOGIC_OP] & 0xF) != 3;
     feature_draws[USES_GEOMETRY] += (regs[GEOSTAGE_CONFIG] & 3) == 2;

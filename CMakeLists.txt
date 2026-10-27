@@ -106,6 +106,9 @@ if(RUNTIME_VULKAN)
     add_executable(fixed_function_test tests/fixed_function_test.cpp)
     target_link_libraries(fixed_function_test PRIVATE recomp_runtime)
     add_test(NAME fixed_function COMMAND fixed_function_test)
+    add_executable(render_test tests/render_test.cpp)
+    target_link_libraries(render_test PRIVATE recomp_runtime)
+    add_test(NAME render COMMAND render_test)
 endif()
 
 # boots a game on the runtime and reports how far it gets
