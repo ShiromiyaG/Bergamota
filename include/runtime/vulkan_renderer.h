@@ -11,6 +11,10 @@
 
 namespace runtime {
 
+// the PICA's logic op (GPUREG_LOGIC_OP, in Zakuro's blend.rs order) as a
+// VkLogicOp
+int vk_logic_op(uint32_t pica_op);
+
 class VulkanRenderer : public pica::Backend {
 public:
     explicit VulkanRenderer(Memory &memory);

@@ -150,9 +150,20 @@ void Pica::run(uint32_t paddr, uint32_t size) {
     }
 }
 
+void Pica::count_features() {
+    uint32_t fog = regs[0x0E0] & 7, op = regs[COLOR_OPERATION];
+    feature_draws[USES_FOG] += fog == 5;
+    feature_draws[USES_GAS] += fog == 7 || (op & 3) == 1;
+    feature_draws[USES_SHADOW] += (op & 3) == 3;
+    feature_draws[USES_PROCTEX] += (regs[0x080] >> 3) & 1;
+    // blending off is the logic op's mode; 3 is copy
+    feature_draws[USES_LOGIC_OP] += !(op >> 8 & 1) && (regs[LOGIC_OP] & 0xF) != 3;
+}
+
 void Pica::flush_immediate() {
     if (immediate_vertices_.empty()) return;
     draws++;
+    count_features();
     if (backend) backend->draw_immediate(*this, immediate_vertices_);
     immediate_vertices_.clear();
 }
@@ -169,6 +180,7 @@ void Pica::write(uint32_t reg, uint32_t value, uint32_t mask) {
     case DRAW_ARRAYS:
     case DRAW_ELEMENTS:
         draws++;
+        count_features();
         if (backend) backend->draw(*this, reg == DRAW_ELEMENTS);
         return;
     case CMDBUF_JUMP0:

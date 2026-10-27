@@ -18,7 +18,9 @@ layout(location = 3) out vec2 v_uv2;
 layout(location = 4) out float v_w0;
 layout(location = 5) out vec4 v_quaternion;
 layout(location = 6) out vec3 v_view;
-layout(location = 7) out float v_depth; // the PICA's depth, for the w buffer
+// the PICA's depth, linear across the screen as the hardware takes it (the
+// fog's, and the w buffer's once times w)
+layout(location = 7) noperspective out float v_depth;
 
 // the registers the stages read (see renderer.cpp, State)
 layout(std140, set = 0, binding = 0) uniform State {
