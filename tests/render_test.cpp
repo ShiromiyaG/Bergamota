@@ -1,8 +1,10 @@
 // The fragment stage on the GPU against the CPU: a quad over a 64x64
 // buffer drawn by the renderer, read back, and each pixel compared with
 // what the CPU makes of the same registers. For what no game at hand draws
-// (the procedural texture). Skipped without a Vulkan 1.3 device.
+// (the procedural texture, unit 0's cube maps, shadow and projected
+// textures). Skipped without a Vulkan 1.3 device.
 
+#include "../src/pica/texture.h"
 #include "runtime/memory.h"
 #include "runtime/pica_tables.h"
 #include "runtime/vulkan_renderer.h"
@@ -43,25 +45,28 @@ constexpr uint32_t PLAIN = 0xF | (0b00011011u << 5) | (0b00011011u << 14);
 constexpr uint32_t TEV_STAGES[6] = {0x0C0, 0x0C8, 0x0D0, 0x0D8, 0x0F0, 0x0F8};
 
 // a 64x64 RGBA8 buffer in VRAM, and a vertex shader that passes the
-// position (o0) and texture coordinates 0 (o1)
+// position (o0), texture coordinates 0 (o1) and texture 0's w (o2)
 struct Rig {
     static constexpr uint32_t W = 64, H = 64, AT = map::VRAM_PADDR;
     Memory memory{false, 64 << 20};
     Pica p{memory};
     VulkanRenderer vk{memory};
+    // texture 0's w at the left and the right
+    float w_left = 1, w_right = 1;
 
     Rig() {
-        uint32_t vs[] = {mov(0, 0), mov(1, 1), END};
+        uint32_t vs[] = {mov(0, 0), mov(1, 1), mov(2, 2), END};
         std::copy(std::begin(vs), std::end(vs), p.vertex_shader.program.begin());
         p.vertex_shader.descriptors[0] = PLAIN;
         p.vertex_shader.version++;
         auto &r = p.regs;
-        r[VS_ATTRIBUTE_COUNT] = 1;
-        r[VS_BLOCK + INPUT_MAP_LOW] = 0x10;
-        r[VS_BLOCK + OUTPUT_MASK] = 3;
-        r[OUTPUT_TOTAL] = 2;
+        r[VS_ATTRIBUTE_COUNT] = 2;
+        r[VS_BLOCK + INPUT_MAP_LOW] = 0x210;
+        r[VS_BLOCK + OUTPUT_MASK] = 7;
+        r[OUTPUT_TOTAL] = 3;
         r[OUTPUT_MAP] = 0x03020100;     // x y z w
         r[OUTPUT_MAP + 1] = 0x0F0E0D0C; // u0 v0 u1 v1
+        r[OUTPUT_MAP + 2] = 0x1F1F1F10; // w0, the rest none
         r[FRAMEBUFFER_DIMENSIONS] = W | (H - 1) << 12;
         r[COLOR_BUFFER_ADDRESS] = AT >> 3;
         r[COLOR_BUFFER_FORMAT] = 0; // RGBA8
@@ -83,6 +88,7 @@ struct Rig {
             a[0] = {x, y, -0.5f, 1};
             float u = u0 + (u1 - u0) * (x + 1) / 2, v = v0 + (v1 - v0) * (y + 1) / 2;
             a[1] = {u, v, u, v};
+            a[2] = {w_left + (w_right - w_left) * (x + 1) / 2, 0, 0, 0};
             return a;
         };
         std::vector<std::array<Vec4, 16>> quad = {corner(-1, -1), corner(1, -1), corner(1, 1),
@@ -100,9 +106,14 @@ struct Rig {
 
 // each pixel against what expect gives at its center's coordinates (rows
 // up, as the PICA's: memory's last row is its first); a few may land the
-// other side of a step (a nearest entry, a pulse, the noise's grid)
-void compare(const char *name, Rig &rig, float u0, float v0, float u1, float v1,
-             const std::function<std::array<float, 4>(float, float)> &expect) {
+// other side of a step (a nearest entry, a pulse, the noise's grid). Where
+// unsure says the GPU and the CPU can round to either side of one (two
+// faces of a cube all but tied, a coordinate all but on a texel's edge),
+// the pixel is left out.
+using Expect = std::function<std::array<float, 4>(float, float, float)>;
+using Unsure = std::function<bool(float, float, float)>;
+void compare(const char *name, Rig &rig, float u0, float v0, float u1, float v1, const Expect &expect,
+             const Unsure &unsure = {}) {
     auto got = rig.draw(u0, v0, u1, v1);
     auto near = [](const std::array<uint8_t, 4> &have, const std::array<float, 4> &want) {
         bool same = true;
@@ -112,14 +123,19 @@ void compare(const char *name, Rig &rig, float u0, float v0, float u1, float v1,
     // that it shows something: many colors, and rows read the other way up
     // mostly wrong
     std::vector<uint32_t> colors;
-    uint32_t off = 0, shown = 0, turned = 0;
+    uint32_t off = 0, shown = 0, turned = 0, skipped = 0;
     for (uint32_t y = 0; y < Rig::H; y++) {
         for (uint32_t x = 0; x < Rig::W; x++) {
             float u = u0 + (u1 - u0) * (x + 0.5f) / Rig::W, v = v0 + (v1 - v0) * (Rig::H - 1 - y + 0.5f) / Rig::H;
-            auto want = expect(u, v);
+            float w = rig.w_left + (rig.w_right - rig.w_left) * (x + 0.5f) / Rig::W;
+            if (unsure && unsure(u, v, w)) {
+                skipped++;
+                continue;
+            }
+            auto want = expect(u, v, w);
             const auto &have = got[y * Rig::W + x];
             colors.push_back(std::bit_cast<uint32_t>(have));
-            turned += !near(have, expect(u, v0 + (v1 - v0) * (y + 0.5f) / Rig::H));
+            turned += !near(have, expect(u, v0 + (v1 - v0) * (y + 0.5f) / Rig::H, w));
             if (near(have, want)) continue;
             if (shown++ < 4)
                 std::printf("  %s (%u, %u) u %.3f v %.3f: got %u %u %u %u, want %.0f %.0f %.0f %.0f\n", name, x, y, u, v,
@@ -130,8 +146,10 @@ void compare(const char *name, Rig &rig, float u0, float v0, float u1, float v1,
     uint32_t total = Rig::W * Rig::H;
     std::sort(colors.begin(), colors.end());
     size_t distinct = std::unique(colors.begin(), colors.end()) - colors.begin();
-    std::printf("%s: %u of %u pixels off; %zu colors; turned over, %u off\n", name, off, total, distinct, turned);
+    std::printf("%s: %u of %u pixels off, %u left out; %zu colors; turned over, %u off\n", name, off, total, skipped,
+                distinct, turned);
     CHECK(off * 100 <= total); // 1%
+    CHECK(skipped * 10 <= total); // 10%
     CHECK(distinct >= 16);
 }
 
@@ -182,8 +200,9 @@ void procedural(Rig &rig) {
     fill_tables(p);
     auto tables = std::make_unique<ProcTexTables>();
     decode_proctex_tables(p.proctex_tables, *tables);
-    auto expect = [&](float u, float v) { return proctex_sample(p.regs.data(), *tables, u, v); };
+    auto expect = [&](float u, float v, float) { return proctex_sample(p.regs.data(), *tables, u, v); };
     p.regs[TEXTURE_CONFIG] = 1 << 10; // texture 3, from coordinates 0
+    for (int s = 0; s < 6; s++) p.regs[TEV_STAGES[s]] = s ? 0xF000F : 0x60006; // source 6
     struct Case {
         const char *name;
         uint32_t config, noise_u, noise_v, frequency, lut, offset;
@@ -211,6 +230,195 @@ void procedural(Rig &rig) {
     }
 }
 
+// unit 0's textures: 32x32 RGBA8 in VRAM after the buffer, a face every
+// 64 KiB; bytes from a counter, so every texel differs
+constexpr uint32_t TEXTURE_AT = Rig::AT + 0x100000, SIDE = 32;
+
+struct Faces {
+    std::vector<uint8_t> rgba[6]; // decoded, rows as decode_texture gives them
+};
+
+Faces fill_faces(Rig &rig, uint32_t seed) {
+    Faces f;
+    for (uint32_t face = 0; face < 6; face++) {
+        uint8_t *bytes = rig.memory.host(TEXTURE_AT + face * 0x10000, SIDE * SIDE * 4);
+        uint32_t x = seed * 2654435761u + face * 40503u + 1;
+        for (uint32_t i = 0; i < SIDE * SIDE * 4; i++) {
+            x ^= x << 13, x ^= x >> 17, x ^= x << 5;
+            bytes[i] = uint8_t(x);
+        }
+        f.rgba[face].resize(SIDE * SIDE * 4);
+        decode_texture(0, bytes, SIDE, SIDE, f.rgba[face].data());
+    }
+    return f;
+}
+
+std::array<float, 4> texel_of(const std::vector<uint8_t> &rgba, uint32_t x, uint32_t row) {
+    const uint8_t *t = &rgba[(row * SIDE + x) * 4];
+    return {t[0] / 255.0f, t[1] / 255.0f, t[2] / 255.0f, t[3] / 255.0f};
+}
+
+// nearest, held to the edges: an image's row 0 is decode_texture's first,
+// sampled at 1 - v (as pica.frag's texel)
+std::array<float, 4> flat(const Faces &f, float u, float v) {
+    auto at = [](float c) { return uint32_t(std::clamp(int(std::floor(c * SIDE)), 0, int(SIDE) - 1)); };
+    return texel_of(f.rgba[0], at(u), at(1.0f - v));
+}
+
+// the cube by Vulkan's table of faces (its spec, "Cube Map Face
+// Selection"): the face, and where on it from 0 to 1
+struct CubeAt {
+    int face;
+    float s, t;
+};
+CubeAt cube_at(float x, float y, float z) {
+    float ax = std::abs(x), ay = std::abs(y), az = std::abs(z), sc, tc, ma;
+    int face;
+    if (ax >= ay && ax >= az) face = x >= 0 ? 0 : 1, sc = x >= 0 ? -z : z, tc = -y, ma = ax;
+    else if (ay >= az) face = y >= 0 ? 2 : 3, sc = x, tc = y >= 0 ? z : -z, ma = ay;
+    else face = z >= 0 ? 4 : 5, sc = z >= 0 ? x : -x, tc = -y, ma = az;
+    return {face, 0.5f * sc / ma + 0.5f, 0.5f * tc / ma + 0.5f};
+}
+
+// the faces go in turned over, so the face's row t is decode_texture's
+// SIDE - 1 - t
+std::array<float, 4> cubic(const Faces &f, float x, float y, float z) {
+    auto at = [](float c) { return uint32_t(std::clamp(int(std::floor(c * SIDE)), 0, int(SIDE) - 1)); };
+    CubeAt c = cube_at(x, y, z);
+    return texel_of(f.rgba[c.face], at(c.s), SIDE - 1 - at(c.t));
+}
+
+// the two largest of a direction all but tied: either face
+bool face_tie(float x, float y, float z) {
+    float a[3] = {std::abs(x), std::abs(y), std::abs(z)};
+    std::sort(std::begin(a), std::end(a));
+    return a[2] - a[1] <= 1e-3f * a[2];
+}
+
+// a coordinate from 0 to 1 within a fiftieth of a texel of a texel's edge
+bool on_edge(float c) {
+    float at = c * SIDE, part = at - std::floor(at);
+    return part < 0.02f || part > 0.98f;
+}
+
+bool cube_unsure(float x, float y, float z) {
+    if (face_tie(x, y, z)) return true;
+    CubeAt c = cube_at(x, y, z);
+    return on_edge(c.s) || on_edge(c.t);
+}
+
+// a shadow texel against z: 0 when its depth (red, green, blue) is z or
+// nearer, its penumbra (alpha) elsewhere
+float shadow_compare(const std::vector<uint8_t> &rgba, uint32_t x, uint32_t row, uint32_t z) {
+    const uint8_t *t = &rgba[(row * SIDE + x) * 4];
+    uint32_t depth = uint32_t(t[0]) << 16 | uint32_t(t[1]) << 8 | t[2];
+    return depth <= z ? 0.0f : t[3] / 255.0f;
+}
+
+float mix4(float a, float b, float c, float d, float fx, float fy) {
+    float lo = a + (c - a) * fy, hi = b + (d - b) * fy;
+    return lo + (hi - lo) * fx;
+}
+
+uint32_t shadow_z(float w, uint32_t reg) {
+    int32_t bias = int32_t((reg >> 1 & 0x7FFFFF) << 1);
+    return uint32_t(std::max(0, int32_t(std::min(std::abs(w), 1.0f) * float(0xFFFFFF)) - bias));
+}
+
+// the shadow texture, Citra's reading: rows its way up (its row i is ours
+// SIDE - 1 - i), 1 past the edges
+std::array<float, 4> shadow_flat(const Faces &f, uint32_t reg, float u, float v, float w) {
+    if (!(reg & 1)) u /= w, v /= w;
+    uint32_t z = shadow_z(w, reg);
+    float ax = u * SIDE - 0.5f, ay = v * SIDE - 0.5f, lx = std::floor(ax), ly = std::floor(ay);
+    auto at = [&](int x, int y) {
+        if (x < 0 || y < 0 || x >= int(SIDE) || y >= int(SIDE)) return 1.0f;
+        return shadow_compare(f.rgba[0], uint32_t(x), SIDE - 1 - uint32_t(y), z);
+    };
+    int i = int(lx), j = int(ly);
+    float s = mix4(at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1), ax - lx, ay - ly);
+    return {s, s, s, s};
+}
+
+// the shadow cube: the face by the largest, coordinates on it as Citra
+// works them out, four texels held to its edges; the face's row i is, as it
+// went in turned over, decode_texture's SIDE - 1 - i
+std::array<float, 4> shadow_cubic(const Faces &f, uint32_t reg, float u, float v, float w) {
+    float cx = u, cy = v, cz = w, ax = std::abs(cx), ay = std::abs(cy), az = std::abs(cz), su, sv;
+    int face;
+    if (ax > ay && ax > az) {
+        w = ax, su = -cz, sv = -cy, face = cx > 0 ? 0 : 1;
+        if (cx < 0) su = -su;
+    } else if (ay > az) {
+        w = ay, su = cx, sv = cz, face = cy > 0 ? 2 : 3;
+        if (cy < 0) sv = -sv;
+    } else {
+        w = az, su = -cx, sv = -cy, face = cz > 0 ? 4 : 5;
+        if (cz > 0) su = -su;
+    }
+    int32_t bias = int32_t((reg >> 1 & 0x7FFFFF) << 1);
+    uint32_t z = uint32_t(std::max(0, int32_t(std::min(w, 1.0f) * float(0xFFFFFF)) - bias));
+    float px = SIDE * (su / w * 0.5f + 0.5f) - 0.5f, py = SIDE * (sv / w * 0.5f + 0.5f) - 0.5f;
+    float lx = std::floor(px), ly = std::floor(py);
+    auto at = [&](int x, int y) {
+        x = std::clamp(x, 0, int(SIDE) - 1), y = std::clamp(y, 0, int(SIDE) - 1);
+        return shadow_compare(f.rgba[face], uint32_t(x), SIDE - 1 - uint32_t(y), z);
+    };
+    int i = int(lx), j = int(ly);
+    float s = mix4(at(i, j), at(i + 1, j), at(i, j + 1), at(i + 1, j + 1), px - lx, py - ly);
+    return {s, s, s, s};
+}
+
+void unit0_types(Rig &rig) {
+    Pica &p = rig.p;
+    auto &r = p.regs;
+    r[TEXTURE_CONFIG] = 1; // unit 0 alone
+    for (int s = 0; s < 6; s++) r[TEV_STAGES[s]] = s ? 0xF000F : 0x30003; // source 3, texture 0
+    r[0x082] = SIDE | SIDE << 16;
+    r[0x084] = 0;
+    r[0x085] = TEXTURE_AT >> 3;
+    for (uint32_t f = 1; f < 6; f++) r[0x086 + f - 1] = ((TEXTURE_AT + f * 0x10000) >> 3) & 0x3FFFFF;
+    r[0x08E] = 0; // RGBA8
+    Faces faces = fill_faces(rig, 1);
+    // nearest, clamped to the edge; the type in bits 28-30
+    auto type = [&](uint32_t t) { r[0x083] = t << 28; };
+
+    type(0);
+    rig.w_left = rig.w_right = 1;
+    compare("2D", rig, -0.1f, -0.1f, 1.1f, 1.1f, [&](float u, float v, float) { return flat(faces, u, v); });
+
+    type(3);
+    rig.w_left = 0.6f, rig.w_right = 1.4f;
+    compare("projected", rig, 0.0f, 0.0f, 1.2f, 1.0f, [&](float u, float v, float w) { return flat(faces, u / w, v / w); },
+            [](float u, float v, float w) { return on_edge(u / w) || on_edge(v / w); });
+
+    type(1);
+    rig.w_left = rig.w_right = 0.3f;
+    auto cube = [&](float u, float v, float w) { return cubic(faces, u, v, w); };
+    compare("cube, x and y faces", rig, -1.0f, -1.0f, 1.0f, 1.0f, cube, cube_unsure);
+    rig.w_left = -1.5f, rig.w_right = 1.5f;
+    compare("cube, z faces", rig, -0.9f, -0.8f, 0.9f, 0.8f, cube, cube_unsure);
+
+    type(2);
+    r[0x08B] = 0x1000 << 1 | 1; // orthographic, a bias
+    rig.w_left = 0.1f, rig.w_right = 0.9f;
+    compare("shadow, orthographic", rig, -0.05f, -0.05f, 1.05f, 1.05f,
+            [&](float u, float v, float w) { return shadow_flat(faces, r[0x08B], u, v, w); });
+    r[0x08B] = 0x40000 << 1; // perspective
+    rig.w_left = 0.5f, rig.w_right = 1.0f;
+    compare("shadow, perspective", rig, 0.0f, 0.0f, 0.9f, 0.95f,
+            [&](float u, float v, float w) { return shadow_flat(faces, r[0x08B], u, v, w); });
+
+    type(4);
+    r[0x08B] = 0x2000 << 1;
+    rig.w_left = 0.4f, rig.w_right = 0.4f;
+    auto shadow_cube = [&](float u, float v, float w) { return shadow_cubic(faces, r[0x08B], u, v, w); };
+    compare("shadow cube, x and y faces", rig, -1.0f, -1.0f, 1.0f, 1.0f, shadow_cube, face_tie);
+    rig.w_left = -1.2f, rig.w_right = 1.2f;
+    compare("shadow cube, z faces", rig, -0.7f, -0.7f, 0.7f, 0.7f, shadow_cube, face_tie);
+    r[TEXTURE_CONFIG] = 0;
+}
+
 } // namespace
 
 int main() {
@@ -220,6 +428,7 @@ int main() {
         std::printf("render: no Vulkan 1.3 device, the GPU half skipped\n");
     } else {
         procedural(*rig);
+        unit0_types(*rig);
     }
     if (failures) {
         std::printf("%d failed\n", failures);

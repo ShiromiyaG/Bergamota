@@ -21,6 +21,10 @@ layout(std140, set = 0, binding = 0) uniform State {
     vec4 depth;
 } s;
 layout(set = 0, binding = 1) uniform sampler2D textures[3];
+// unit 0 as a cube map, and its faces (turned over as Citra keeps them) as
+// layers, for the shadow cube's fetches
+layout(set = 0, binding = 4) uniform samplerCube cube;
+layout(set = 0, binding = 5) uniform sampler2DArray faces;
 
 // the lighting, as LightingBlock in pica_lighting.h lays it out
 struct Light {
@@ -177,7 +181,7 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, SCISSOR = 41, PROCTEX = 44;
+          FOG_COLOR = 40, SCISSOR = 41, PROCTEX = 44, SHADOW = 50;
 // TEV_UPDATE (0x0E0) also holds the fog's mode, bits 0-2, 5 for fog, and its
 // depth taken from the far end, bit 16
 
@@ -185,8 +189,81 @@ vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu
 
 // a texture unit's color: v up as the PICA has it, and the border color
 // outside when the unit clamps to it
+// unit 0's shadow textures, as Citra worked them out (written anew): a
+// texel is a depth (its red, green and blue, 24 bits) and a penumbra (its
+// alpha); a fragment's depth z is its w less the bias, and each of four
+// texels around the coordinates gives 0 where its depth is z or nearer, its
+// penumbra elsewhere; the four mixed by where the coordinates fall
+uint shadow_depth(float w) {
+    uint bias = (reg(SHADOW) >> 1 & 0x7FFFFFu) << 1;
+    return uint(max(0, int(min(abs(w), 1.0) * float(0xFFFFFF)) - int(bias)));
+}
+
+float shadow_compare(vec4 texel, uint z) {
+    uvec4 b = uvec4(round(texel * 255.0));
+    uint depth = b.r << 16 | b.g << 8 | b.b;
+    return depth <= z ? 0.0 : float(b.a) / 255.0;
+}
+
+float shadow_mix(vec4 s, vec2 f) {
+    vec2 t = mix(s.xy, s.zw, f.yy);
+    return mix(t.x, t.y, f.x);
+}
+
+// Citra's rows run the other way: its row i is this image's size - 1 - i;
+// past the edges, 1
+float shadow_texel(ivec2 i, ivec2 size, uint z) {
+    if (any(lessThan(i, ivec2(0))) || any(greaterThanEqual(i, size))) return 1.0;
+    return shadow_compare(texelFetch(textures[0], ivec2(i.x, size.y - 1 - i.y), 0), z);
+}
+
+vec4 shadow_2d(vec2 uv, float w) {
+    if ((reg(SHADOW) & 1u) == 0u) uv /= w; // perspective, unless orthographic
+    uint z = shadow_depth(w);
+    ivec2 size = textureSize(textures[0], 0);
+    vec2 at = vec2(size) * uv - 0.5, low = floor(at);
+    ivec2 i = ivec2(low);
+    vec4 s = vec4(shadow_texel(i, size, z), shadow_texel(i + ivec2(1, 0), size, z), shadow_texel(i + ivec2(0, 1), size, z),
+                  shadow_texel(i + ivec2(1, 1), size, z));
+    return vec4(shadow_mix(s, at - low));
+}
+
+// the face by the largest of (u, v, w), the coordinates on it; the four
+// texels held to its edges
+vec4 shadow_cube(vec2 uv, float w) {
+    vec3 c = vec3(uv, w), a = abs(c);
+    int face;
+    if (a.x > a.y && a.x > a.z) {
+        w = a.x, uv = -c.zy, face = c.x > 0.0 ? 0 : 1;
+        if (c.x < 0.0) uv.x = -uv.x;
+    } else if (a.y > a.z) {
+        w = a.y, uv = c.xz, face = c.y > 0.0 ? 2 : 3;
+        if (c.y < 0.0) uv.y = -uv.y;
+    } else {
+        w = a.z, uv = -c.xy, face = c.z > 0.0 ? 4 : 5;
+        if (c.z > 0.0) uv.x = -uv.x;
+    }
+    uint bias = (reg(SHADOW) >> 1 & 0x7FFFFFu) << 1;
+    uint z = uint(max(0, int(min(w, 1.0) * float(0xFFFFFF)) - int(bias)));
+    ivec2 size = textureSize(faces, 0).xy;
+    vec2 at = vec2(size) * (uv / w * 0.5 + 0.5) - 0.5, low = floor(at);
+    ivec2 i = ivec2(low), top = size - 1;
+    vec4 s = vec4(shadow_compare(texelFetch(faces, ivec3(clamp(i, ivec2(0), top), face), 0), z),
+                  shadow_compare(texelFetch(faces, ivec3(clamp(i + ivec2(1, 0), ivec2(0), top), face), 0), z),
+                  shadow_compare(texelFetch(faces, ivec3(clamp(i + ivec2(0, 1), ivec2(0), top), face), 0), z),
+                  shadow_compare(texelFetch(faces, ivec3(clamp(i + ivec2(1, 1), ivec2(0), top), face), 0), z));
+    return vec4(shadow_mix(s, at - low));
+}
+
 vec4 texel(int unit, vec2 uv) {
     if ((reg(TEX_CONFIG) & (1u << unit)) == 0u) return vec4(0.0);
+    // unit 0's type (bits 28-30): a cube map, a shadow texture flat or in a
+    // cube, or one projected (divided by w first)
+    uint type = unit == 0 ? reg(TEX_PARAMS) >> 28 & 7u : 0u;
+    if (type == 1u) return texture(cube, vec3(uv, v_w0));
+    if (type == 2u) return shadow_2d(uv, v_w0);
+    if (type == 4u) return shadow_cube(uv, v_w0);
+    if (type == 3u) uv /= v_w0;
     uint params = reg(TEX_PARAMS + unit);
     // sampled before the border's branch, which goes by the pixel: the
     // level of detail needs its neighbours' coordinates
