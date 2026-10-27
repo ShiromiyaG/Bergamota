@@ -90,10 +90,12 @@ draws right from the intro to the field, lit; the player runs it at about
    test, the depth times w in the w buffer, which is the depth map turned
    off), the logic op (done: a pipeline per operation, on devices with the
    feature). Procedural textures, gas and the shadow mode: none of USUM's
-   draws used them in the intro, the title, the house, the first route and
-   the starter scene (`boot` counts them); fog was in 56% of them. Left for
-   when a game's draws do (battles still to be counted); Zakuro, the
-   reference, has no gas and no shadow mode either.
+   draws used them in the intro, the title, the house, the first route, the
+   starter scene, a town from a finished save and a wild battle in a cave
+   with a Z-move (`boot` counts them, over 1.3 million draws); fog was in
+   about half of them, the logic op in none. Left for when a game's draws
+   do; Zakuro, the reference, has no gas and no shadow mode either. The
+   battle's frames are within a mean of 0.4-4.8 of Zakuro's.
 5. **Performance and scale.** Surfaces at a resolution scale, the swapchain
    presenting surfaces directly, the pipeline cache on disk, the CPU's reads
    of surfaces through the guards.
