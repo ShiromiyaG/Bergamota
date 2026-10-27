@@ -159,7 +159,19 @@ software rasterizer, 1.6% of pixels off by more than 16.
      gave the same values as Zakuro's to a millionth over four set-ups; the
      GPU's frames match it to the pixel (4 of them, 47-1,467 colors each).
 
-   Next: unit 0's types, the shadow mode, gas, for the other ports.
+   - unit 0's types: done. A cube map's six faces (+x at the unit's
+     address, the rest at 0x086-0x08A over the bits they share) go into a
+     cube image turned over, so it is sampled at (u, v, w) as Citra samples
+     its own; a projected texture divides u and v by w; a shadow texture,
+     flat or in a cube, compares four texels' depth (red, green, blue) with
+     w less the bias (0x08B) and mixes their penumbras (alpha), as Citra
+     worked it out (Azahar's shader generator read, the code written anew;
+     Zakuro has none of them). render_test checks each against the CPU's
+     reading of the same: 2D, projected, cube (x and y faces, z faces),
+     shadow (orthographic, perspective) and shadow cube, all to the pixel
+     but the few where a face or a texel's edge is all but tied.
+
+   Next: the shadow mode, gas, for the other ports.
 
 Zakuro's renderer (`zakuro-dev/crates/zakuro-gpu`) is the reference for the
 hardware's behaviour; the code here is written anew.

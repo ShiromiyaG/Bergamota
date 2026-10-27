@@ -74,6 +74,8 @@ constexpr uint32_t STATE_REGS[] = {
 constexpr size_t SCISSOR_SLOT = 41;
 // 44-49: the procedural texture's registers, 0x0A8 to 0x0AD
 constexpr size_t PROCTEX_SLOT = 44;
+// 50: unit 0's shadow register (0x08B): orthographic in bit 0, the bias above
+constexpr size_t SHADOW_SLOT = 50;
 
 // a texture unit's registers: border color, then size, parameters, address
 // and format
@@ -104,6 +106,7 @@ struct Image {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkImageView depth = VK_NULL_HANDLE, stencil = VK_NULL_HANDLE; // a depth image's aspects, to sample
+    VkImageView array = VK_NULL_HANDLE; // a cube's faces as six layers, to fetch from
     uint32_t width = 0, height = 0, levels = 1;
 };
 
@@ -193,6 +196,9 @@ struct VulkanRenderer::Impl {
     std::vector<std::unique_ptr<Surface>> surfaces;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures; // address, format, size, levels
     Image blank; // a unit with no texture
+    Image blank_cube; // unit 0 as no cube
+    // unit 0's cube maps: the six faces' addresses, format, size, levels
+    std::map<std::array<uint32_t, 9>, Texture> cubes;
 
     bool recording = false;
     bool rendering = false;
@@ -421,16 +427,18 @@ struct VulkanRenderer::Impl {
         uniforms = slots[0].uniforms;
 
         // the one layout: the state, the three textures, the lighting and
-        // its tables
-        VkDescriptorSetLayoutBinding bindings[4] = {
+        // its tables, unit 0 as a cube and its faces as an array
+        VkDescriptorSetLayoutBinding bindings[6] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sli.bindingCount = 4;
+        sli.bindingCount = 6;
         sli.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -470,6 +478,8 @@ struct VulkanRenderer::Impl {
         blank = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false);
         uint8_t zero[4] = {};
         upload_color(blank, zero, 4);
+        blank_cube = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false, 1, true);
+        for (uint32_t f = 0; f < 6; f++) copy_in(blank_cube, zero, 4, VK_IMAGE_ASPECT_COLOR_BIT, 0, f);
         if (window_surface && !make_present()) {
             std::fprintf(stderr, "vulkan: the window could not be shown in, the screens read back instead\n");
             drop_present();
@@ -824,15 +834,18 @@ struct VulkanRenderer::Impl {
     }
 
     // images stay in the general layout: attachment, sampled and copied alike
-    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth, uint32_t levels = 1) {
+    // cube: six faces, seen as a cube and as an array of six
+    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth, uint32_t levels = 1, bool cube = false) {
         Image i;
         i.width = w, i.height = h, i.levels = levels;
+        uint32_t layers = cube ? 6 : 1;
         VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ii.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
         ii.imageType = VK_IMAGE_TYPE_2D;
         ii.format = format;
         ii.extent = {w, h, 1};
         ii.mipLevels = levels;
-        ii.arrayLayers = 1;
+        ii.arrayLayers = layers;
         ii.samples = VK_SAMPLE_COUNT_1_BIT;
         ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                    VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -847,10 +860,14 @@ struct VulkanRenderer::Impl {
         vkBindImageMemory(device, i.image, i.memory, 0);
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
         vi.image = i.image;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.viewType = cube ? VK_IMAGE_VIEW_TYPE_CUBE : VK_IMAGE_VIEW_TYPE_2D;
         vi.format = format;
-        vi.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, levels, 0, 1};
+        vi.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, levels, 0, layers};
         vkCreateImageView(device, &vi, nullptr, &i.view);
+        if (cube) {
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+            vkCreateImageView(device, &vi, nullptr, &i.array);
+        }
         if (depth) {
             vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
             vkCreateImageView(device, &vi, nullptr, &i.depth);
@@ -878,6 +895,7 @@ struct VulkanRenderer::Impl {
         if (!i.image) return;
         vkDestroyImageView(device, i.view, nullptr);
         if (i.depth) vkDestroyImageView(device, i.depth, nullptr), vkDestroyImageView(device, i.stencil, nullptr);
+        if (i.array) vkDestroyImageView(device, i.array, nullptr);
         vkDestroyImage(device, i.image, nullptr);
         vkFreeMemory(device, i.memory, nullptr);
         i = {};
@@ -1041,12 +1059,12 @@ struct VulkanRenderer::Impl {
 
     // -- moving pixels between memory and images ------------------------------
 
-    void copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect, uint32_t level = 0) {
+    void copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect, uint32_t level = 0, uint32_t layer = 0) {
         Buffer b = buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         std::memcpy(b.mapped, bytes, size);
         end_rendering();
         VkBufferImageCopy c{};
-        c.imageSubresource = {aspect, level, 0, 1};
+        c.imageSubresource = {aspect, level, layer, 1};
         c.imageExtent = {std::max(i.width >> level, 1u), std::max(i.height >> level, 1u), 1};
         vkCmdCopyBufferToImage(cmd, b.buffer, i.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         barrier();
@@ -1355,9 +1373,61 @@ struct VulkanRenderer::Impl {
         return s;
     }
 
+    // unit 0's type (bits 28-30 of its parameters): a cube map, or a
+    // shadow one, reads six faces
+    static bool cube_type(const Pica &p) {
+        uint32_t type = p.regs[UNIT_BASE[0] + 2] >> 28 & 7;
+        return type == 1 || type == 4;
+    }
+
+    // unit 0's six faces: +x at its address, the other five at 0x086-0x08A
+    // (bits 0-21, the address's above them shared), each turned over as it
+    // goes in, so that the cube is sampled as Citra samples it (its images
+    // keep a texture's last row first)
+    const Image &cube_texture(Pica &p) {
+        if (!(p.regs[TEXTURE_CONFIG] & 1) || !cube_type(p)) return blank_cube;
+        uint32_t dims = p.regs[UNIT_BASE[0] + 1], h = dims & 0x7FF, w = (dims >> 16) & 0x7FF, format = unit_format(p, 0);
+        uint32_t base = p.regs[UNIT_BASE[0] + 4] & 0x0FFFFFFF;
+        if (!w || w != h || !base) return blank_cube;
+        std::vector<Level> levels = texture_levels(format, w, h, p.regs[UNIT_BASE[0] + 3] >> 16 & 15);
+        uint32_t size = texture_bytes(format, levels);
+        std::array<uint32_t, 9> key{};
+        uint64_t hash = 0;
+        const uint8_t *bytes[6];
+        for (uint32_t f = 0; f < 6; f++) {
+            uint32_t at = f ? (base & ~0x3FFFFFu) | (p.regs[0x086 + f - 1] & 0x3FFFFF) : base;
+            key[f] = at << 3;
+            cause = 3;
+            sync(key[f], size, false);
+            bytes[f] = memory.host(key[f], size);
+            if (!bytes[f]) return blank_cube;
+            hash = hash * 31 + hash_bytes(bytes[f], size);
+        }
+        key[6] = format, key[7] = w, key[8] = uint32_t(levels.size());
+        Texture &t = cubes[key];
+        if (t.checked_list == p.transfers && t.image.image) return t.image;
+        t.checked_list = p.transfers;
+        if (hash == t.hash && t.image.image) return t.image;
+        if (!t.image.image) t.image = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, false, uint32_t(levels.size()), true);
+        for (uint32_t f = 0; f < 6; f++) {
+            for (uint32_t l = 0; l < levels.size(); l++) {
+                const Level &level = levels[l];
+                std::vector<uint8_t> rgba(size_t(level.width) * level.height * 4), turned(rgba.size());
+                decode_texture(format, bytes[f] + level.offset, level.width, level.height, rgba.data());
+                size_t row = size_t(level.width) * 4;
+                for (uint32_t y = 0; y < level.height; y++)
+                    std::memcpy(&turned[y * row], &rgba[(level.height - 1 - y) * row], row);
+                copy_in(t.image, turned.data(), turned.size(), VK_IMAGE_ASPECT_COLOR_BIT, l, f);
+            }
+        }
+        t.hash = hash;
+        return t.image;
+    }
+
     // what a unit samples: a buffer drawn there, or the texture in memory
     VkImageView texture(Pica &p, int unit) {
         if (!(p.regs[TEXTURE_CONFIG] >> unit & 1)) return blank.view;
+        if (unit == 0 && cube_type(p)) return blank.view; // cube_texture's
         uint32_t base = UNIT_BASE[unit], dims = p.regs[base + 1];
         uint32_t h = dims & 0x7FF, w = (dims >> 16) & 0x7FF, format = unit_format(p, unit);
         uint32_t address = (p.regs[base + 4] & 0x0FFFFFFF) << 3;
@@ -1554,6 +1624,7 @@ struct VulkanRenderer::Impl {
         auto t0 = std::chrono::steady_clock::now();
         VkImageView views[3];
         for (int u = 0; u < 3; u++) views[u] = texture(p, u);
+        const Image &cube = cube_texture(p);
         auto t1 = std::chrono::steady_clock::now();
         Surface *color = surface(color_address, w, h, (r[COLOR_BUFFER_FORMAT] >> 16) & 7, false);
         Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
@@ -1580,6 +1651,7 @@ struct VulkanRenderer::Impl {
             st.regs[SCISSOR_SLOT + 2] = box.y0 | box.y1 << 16;
         }
         for (uint32_t i = 0; i < 6; i++) st.regs[PROCTEX_SLOT + i] = r[pica::PROCTEX_CONFIG + i];
+        st.regs[SHADOW_SLOT] = r[0x08B];
         pica::LightingBlock lit;
         lighting.decode(r.data(), lit);
         // into the rings; a ring that runs out submits, which leaves what
@@ -1682,7 +1754,9 @@ struct VulkanRenderer::Impl {
         for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2], r[UNIT_BASE[u] + 3]), views[u], VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
         VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof shader_tables};
-        VkWriteDescriptorSet writes[4]{};
+        VkDescriptorImageInfo faces[2] = {{images[0].sampler, cube.view, VK_IMAGE_LAYOUT_GENERAL},
+                                          {nearest, cube.array, VK_IMAGE_LAYOUT_GENERAL}};
+        VkWriteDescriptorSet writes[6]{};
         for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstBinding = 0;
         writes[0].descriptorCount = 1;
@@ -1700,7 +1774,13 @@ struct VulkanRenderer::Impl {
         writes[3].descriptorCount = 1;
         writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         writes[3].pBufferInfo = &tables_info;
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
+        for (int i = 0; i < 2; i++) {
+            writes[4 + i].dstBinding = uint32_t(4 + i);
+            writes[4 + i].descriptorCount = 1;
+            writes[4 + i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[4 + i].pImageInfo = &faces[i];
+        }
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 6, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.triangles += triangles.size() / 3;
@@ -1735,6 +1815,8 @@ struct VulkanRenderer::Impl {
         for (auto &s : surfaces) destroy(s->image), destroy(s->as_color);
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
+        destroy(blank_cube);
+        for (auto &[key, t] : cubes) destroy(t.image);
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
         save_cache();
         if (cache) vkDestroyPipelineCache(device, cache, nullptr);
