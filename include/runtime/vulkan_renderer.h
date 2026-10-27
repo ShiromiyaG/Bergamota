@@ -90,7 +90,9 @@ public:
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
-    // draws the vertex stage cannot do (a geometry shader mode other than 0), not drawn
+    // draws not drawn: the vertex stage cannot do them (a geometry shader
+    // mode other than 0), or the device has no fragment atomics for the
+    // shadow mode, or its buffer is not RGBA8
     uint64_t refused = 0;
     // pipelines made this run, and the seconds the driver took making them
     uint64_t pipelines = 0;

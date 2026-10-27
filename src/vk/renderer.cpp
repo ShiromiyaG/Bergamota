@@ -76,6 +76,9 @@ constexpr size_t SCISSOR_SLOT = 41;
 constexpr size_t PROCTEX_SLOT = 44;
 // 50: unit 0's shadow register (0x08B): orthographic in bit 0, the bias above
 constexpr size_t SHADOW_SLOT = 50;
+// 51: the shadow mode's penumbra bias (0x130: constant, linear, 16-bit
+// floats); 52: the shadow mode on (the output merger's mode, 0x100, is 3)
+constexpr size_t PENUMBRA_SLOT = 51, SHADOW_MODE_SLOT = 52;
 
 // a texture unit's registers: border color, then size, parameters, address
 // and format
@@ -107,6 +110,7 @@ struct Image {
     VkImageView view = VK_NULL_HANDLE;
     VkImageView depth = VK_NULL_HANDLE, stencil = VK_NULL_HANDLE; // a depth image's aspects, to sample
     VkImageView array = VK_NULL_HANDLE; // a cube's faces as six layers, to fetch from
+    VkImageView words = VK_NULL_HANDLE; // a color buffer's texels as 32-bit words, for the shadow mode
     uint32_t width = 0, height = 0, levels = 1;
 };
 
@@ -148,6 +152,7 @@ struct VulkanRenderer::Impl {
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     bool logic_ops = false; // the device's logicOp feature
+    bool shadow_mode = false; // its fragmentStoresAndAtomics, which the shadow mode needs
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
     uint32_t family = 0;
@@ -197,11 +202,13 @@ struct VulkanRenderer::Impl {
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures; // address, format, size, levels
     Image blank; // a unit with no texture
     Image blank_cube; // unit 0 as no cube
+    Image blank_words; // the shadow buffer when not in the shadow mode
     // unit 0's cube maps: the six faces' addresses, format, size, levels
     std::map<std::array<uint32_t, 9>, Texture> cubes;
 
     bool recording = false;
     bool rendering = false;
+    bool shadow_pass = false; // the pass is the shadow mode's: no color attachment
     Surface *color_target = nullptr, *depth_target = nullptr;
 
     VertexStage stage;
@@ -385,6 +392,9 @@ struct VulkanRenderer::Impl {
         wanted.logicOp = has.logicOp;
         logic_ops = has.logicOp;
         if (!logic_ops) std::fprintf(stderr, "vulkan: no logic ops on this device, drawn as copies\n");
+        // the shadow mode writes its buffer from the fragment shader, atomically
+        wanted.fragmentStoresAndAtomics = has.fragmentStoresAndAtomics;
+        shadow_mode = has.fragmentStoresAndAtomics;
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         dci.pNext = &v13;
         dci.pEnabledFeatures = &wanted;
@@ -427,18 +437,20 @@ struct VulkanRenderer::Impl {
         uniforms = slots[0].uniforms;
 
         // the one layout: the state, the three textures, the lighting and
-        // its tables, unit 0 as a cube and its faces as an array
-        VkDescriptorSetLayoutBinding bindings[6] = {
+        // its tables, unit 0 as a cube and its faces as an array, the shadow
+        // buffer
+        VkDescriptorSetLayoutBinding bindings[7] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {6, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sli.bindingCount = 6;
+        sli.bindingCount = 7;
         sli.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -479,6 +491,7 @@ struct VulkanRenderer::Impl {
         uint8_t zero[4] = {};
         upload_color(blank, zero, 4);
         blank_cube = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false, 1, true);
+        blank_words = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false, 1, false, true);
         for (uint32_t f = 0; f < 6; f++) copy_in(blank_cube, zero, 4, VK_IMAGE_ASPECT_COLOR_BIT, 0, f);
         if (window_surface && !make_present()) {
             std::fprintf(stderr, "vulkan: the window could not be shown in, the screens read back instead\n");
@@ -835,12 +848,13 @@ struct VulkanRenderer::Impl {
 
     // images stay in the general layout: attachment, sampled and copied alike
     // cube: six faces, seen as a cube and as an array of six
-    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth, uint32_t levels = 1, bool cube = false) {
+    // words: an RGBA8 one seen as 32-bit words too
+    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth, uint32_t levels = 1, bool cube = false, bool words = false) {
         Image i;
         i.width = w, i.height = h, i.levels = levels;
         uint32_t layers = cube ? 6 : 1;
         VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ii.flags = cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+        ii.flags = (cube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0) | (words ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0);
         ii.imageType = VK_IMAGE_TYPE_2D;
         ii.format = format;
         ii.extent = {w, h, 1};
@@ -867,6 +881,11 @@ struct VulkanRenderer::Impl {
         if (cube) {
             vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
             vkCreateImageView(device, &vi, nullptr, &i.array);
+        }
+        if (words) {
+            vi.format = VK_FORMAT_R32_UINT;
+            vkCreateImageView(device, &vi, nullptr, &i.words);
+            vi.format = format;
         }
         if (depth) {
             vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -896,6 +915,7 @@ struct VulkanRenderer::Impl {
         vkDestroyImageView(device, i.view, nullptr);
         if (i.depth) vkDestroyImageView(device, i.depth, nullptr), vkDestroyImageView(device, i.stencil, nullptr);
         if (i.array) vkDestroyImageView(device, i.array, nullptr);
+        if (i.words) vkDestroyImageView(device, i.words, nullptr);
         vkDestroyImage(device, i.image, nullptr);
         vkFreeMemory(device, i.memory, nullptr);
         i = {};
@@ -1248,7 +1268,7 @@ struct VulkanRenderer::Impl {
             surfaces.erase(surfaces.begin() + i);
         }
         auto s = std::make_unique<Surface>(fresh);
-        s->image = image(w * scale, h * scale, depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth);
+        s->image = image(w * scale, h * scale, depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth, 1, false, !depth);
         upload(*s);
         surfaces.push_back(std::move(s));
         return surfaces.back().get();
@@ -1560,8 +1580,10 @@ struct VulkanRenderer::Impl {
         blend.srcAlphaBlendFactor = FACTOR[(func >> 24) & 15];
         blend.dstAlphaBlendFactor = FACTOR[(func >> 28) & 15];
         blend.colorWriteMask = (key >> 4) & 15;
+        // the shadow mode (bit 46): no color attachment
+        bool shadow = (key >> 46) & 1;
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 1;
+        cb.attachmentCount = shadow ? 0 : 1;
         cb.pAttachments = &blend;
         // a logic op (bit 41 on, the PICA's operation in bits 42-45)
         cb.logicOpEnable = (key >> 41) & 1;
@@ -1577,8 +1599,8 @@ struct VulkanRenderer::Impl {
         dyn.pDynamicStates = dynamic;
         VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
         VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-        ri.colorAttachmentCount = 1;
-        ri.pColorAttachmentFormats = &color_format;
+        ri.colorAttachmentCount = shadow ? 0 : 1;
+        ri.pColorAttachmentFormats = shadow ? nullptr : &color_format;
         ri.depthAttachmentFormat = has_depth ? depth_format : VK_FORMAT_UNDEFINED;
         ri.stencilAttachmentFormat = has_depth ? depth_format : VK_FORMAT_UNDEFINED;
         VkGraphicsPipelineCreateInfo gi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
@@ -1619,6 +1641,13 @@ struct VulkanRenderer::Impl {
         bool depth_test = mask_reg & 1, depth_write = (mask_reg >> 12) & 1 && (r[DEPTH_STENCIL_WRITE] & 2);
         bool stencil = (stencil_reg & 1) && (r[DEPTH_BUFFER_FORMAT] & 3) == 3;
         bool use_depth = depth_address && (depth_test || depth_write || stencil);
+        // the shadow mode: the color buffer (RGBA8) holds a depth and a
+        // penumbra a pixel, which the fragment shader writes itself
+        bool shadow = (r[COLOR_OPERATION] & 3) == 3;
+        if (shadow && (!shadow_mode || (r[COLOR_BUFFER_FORMAT] >> 16 & 7) != 0)) {
+            self.refused++;
+            return;
+        }
 
         // what the draw reads first, outside a pass
         auto t0 = std::chrono::steady_clock::now();
@@ -1632,7 +1661,7 @@ struct VulkanRenderer::Impl {
         part[0] += std::chrono::duration<double>(t1 - t0).count();
         part[1] += std::chrono::duration<double>(t2 - t1).count();
         // a texture that is this pass's target cannot be read inside it
-        if (rendering && (color_target != color || depth_target != depth)) end_rendering();
+        if (rendering && (color_target != color || depth_target != depth || shadow_pass != shadow)) end_rendering();
 
         VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
         if (vsize > VERTEX_RING) return;
@@ -1652,6 +1681,8 @@ struct VulkanRenderer::Impl {
         }
         for (uint32_t i = 0; i < 6; i++) st.regs[PROCTEX_SLOT + i] = r[pica::PROCTEX_CONFIG + i];
         st.regs[SHADOW_SLOT] = r[0x08B];
+        st.regs[PENUMBRA_SLOT] = r[0x130];
+        st.regs[SHADOW_MODE_SLOT] = shadow;
         pica::LightingBlock lit;
         lighting.decode(r.data(), lit);
         // into the rings; a ring that runs out submits, which leaves what
@@ -1697,8 +1728,11 @@ struct VulkanRenderer::Impl {
             VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
             ri.renderArea = {{0, 0}, {w * scale, h * scale}};
             ri.layerCount = 1;
-            ri.colorAttachmentCount = 1;
-            ri.pColorAttachments = &ca;
+            // the shadow mode's buffer is written as a storage image alone: an
+            // attachment's store would undo it
+            ri.colorAttachmentCount = shadow ? 0 : 1;
+            ri.pColorAttachments = shadow ? nullptr : &ca;
+            shadow_pass = shadow;
             ri.pDepthAttachment = depth ? &da : nullptr;
             ri.pStencilAttachment = depth ? &da : nullptr;
             vkCmdBeginRendering(cmd, &ri);
@@ -1713,7 +1747,9 @@ struct VulkanRenderer::Impl {
         uint32_t op = r[LOGIC_OP] & 15;
         bool logic = !blend && op != 3 && logic_ops;
         uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
-                       uint64_t(depth != nullptr) << 40 | uint64_t(logic) << 41 | uint64_t(logic ? op : 0) << 42;
+                       uint64_t(depth != nullptr) << 40 | uint64_t(logic) << 41 | uint64_t(logic ? op : 0) << 42 |
+                       uint64_t(shadow) << 46;
+        if (shadow) key = uint64_t(depth != nullptr) << 40 | uint64_t(1) << 46;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(key, depth != nullptr));
 
         // the viewport, rows the PICA's way up
@@ -1756,7 +1792,8 @@ struct VulkanRenderer::Impl {
         VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof shader_tables};
         VkDescriptorImageInfo faces[2] = {{images[0].sampler, cube.view, VK_IMAGE_LAYOUT_GENERAL},
                                           {nearest, cube.array, VK_IMAGE_LAYOUT_GENERAL}};
-        VkWriteDescriptorSet writes[6]{};
+        VkDescriptorImageInfo words{VK_NULL_HANDLE, shadow ? color->image.words : blank_words.words, VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet writes[7]{};
         for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstBinding = 0;
         writes[0].descriptorCount = 1;
@@ -1780,7 +1817,11 @@ struct VulkanRenderer::Impl {
             writes[4 + i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             writes[4 + i].pImageInfo = &faces[i];
         }
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 6, writes);
+        writes[6].dstBinding = 6;
+        writes[6].descriptorCount = 1;
+        writes[6].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        writes[6].pImageInfo = &words;
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 7, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.triangles += triangles.size() / 3;
@@ -1816,6 +1857,7 @@ struct VulkanRenderer::Impl {
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
         destroy(blank_cube);
+        destroy(blank_words);
         for (auto &[key, t] : cubes) destroy(t.image);
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
         save_cache();
