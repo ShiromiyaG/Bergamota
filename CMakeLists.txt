@@ -30,6 +30,7 @@ add_library(recomp_runtime STATIC
     src/pica/batch.cpp
     src/pica/vertex.cpp
     src/pica/lighting.cpp
+    src/pica/tables.cpp
     src/pica/sketch.cpp
     src/services.cpp
 )
@@ -95,6 +96,11 @@ add_test(NAME system COMMAND system_test)
 add_executable(lighting_test tests/lighting_test.cpp)
 target_link_libraries(lighting_test PRIVATE recomp_runtime)
 add_test(NAME lighting COMMAND lighting_test)
+if(RUNTIME_VULKAN)
+    add_executable(fixed_function_test tests/fixed_function_test.cpp)
+    target_link_libraries(fixed_function_test PRIVATE recomp_runtime)
+    add_test(NAME fixed_function COMMAND fixed_function_test)
+endif()
 add_executable(decomp_test tests/decomp_test.cpp)
 target_link_libraries(decomp_test PRIVATE recomp_runtime)
 add_test(NAME decomp COMMAND decomp_test)

@@ -12,7 +12,7 @@ layout(location = 3) in vec2 v_uv2;
 layout(location = 4) in float v_w0;
 layout(location = 5) in vec4 v_quaternion;
 layout(location = 6) in vec3 v_view;
-layout(location = 7) in float v_depth;
+layout(location = 7) noperspective in float v_depth;
 
 layout(location = 0) out vec4 out_color;
 
@@ -36,6 +36,8 @@ layout(std140, set = 0, binding = 2) uniform Lighting {
 } l;
 // the 24 tables, each entry a value and the step to the next
 layout(std430, set = 0, binding = 3) readonly buffer Tables { vec2 entries[]; } t;
+// where the fog's table starts in it, after the 24 lighting tables
+const int FOG_TABLE = 24 * 256;
 const int D0 = 0, D1 = 1, FRESNEL = 3, REFLECT_BLUE = 4, REFLECT_GREEN = 5, REFLECT_RED = 6, SPOTLIGHT = 8, DISTANCE = 16;
 const int LOOKUP_D0 = 0, LOOKUP_D1 = 1, LOOKUP_FRESNEL = 2, LOOKUP_RED = 3, LOOKUP_GREEN = 4, LOOKUP_BLUE = 5, LOOKUP_SPOT = 6;
 
@@ -171,7 +173,10 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
-const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37;
+const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
+          FOG_COLOR = 40;
+// TEV_UPDATE (0x0E0) also holds the fog's mode, bits 0-2, 5 for fog, and its
+// depth taken from the far end, bit 16
 
 vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) / 255.0; }
 
@@ -315,5 +320,17 @@ void main() {
     // the alpha test, against an 8-bit reference
     uint test = reg(ALPHA_TEST);
     if ((test & 1u) != 0u && !compare((test >> 4) & 7u, round(previous.a * 255.0), float((test >> 8) & 0xFFu))) discard;
+
+    // the fog, by the depth through its table, into the color but not the
+    // alpha (after Zakuro's fog.rs); gas (mode 7) is left out, as there
+    uint fog = reg(TEV_UPDATE);
+    if ((fog & 7u) == 5u) {
+        float d = s.depth.z != 0.0 ? clamp(v_depth / gl_FragCoord.w, 0.0, 1.0) : gl_FragCoord.z;
+        float index = ((fog & 0x10000u) != 0u ? 1.0 - d : d) * 128.0;
+        float e = clamp(floor(index), 0.0, 127.0);
+        vec2 entry = t.entries[FOG_TABLE + int(e)];
+        float factor = clamp(entry.x + entry.y * (index - e), 0.0, 1.0);
+        previous.rgb = factor * previous.rgb + (1.0 - factor) * unpack(reg(FOG_COLOR)).rgb;
+    }
     out_color = previous;
 }

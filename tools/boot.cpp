@@ -263,6 +263,14 @@ int main(int argc, char **argv) {
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
     std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy(), (unsigned long long)gpu.lists(), system.idle);
 #endif
+    if (pica_gpu) {
+        const auto &f = pica_gpu->feature_draws;
+        std::printf("draws using fog %llu, gas %llu, the shadow mode %llu, a procedural texture %llu, a logic op %llu "
+                    "(of %llu)\n",
+                    (unsigned long long)f[pica::Pica::USES_FOG], (unsigned long long)f[pica::Pica::USES_GAS],
+                    (unsigned long long)f[pica::Pica::USES_SHADOW], (unsigned long long)f[pica::Pica::USES_PROCTEX],
+                    (unsigned long long)f[pica::Pica::USES_LOGIC_OP], (unsigned long long)pica_gpu->draws);
+    }
     {
         int peak = 0;
         for (int16_t s : handlers.audio.output) peak = std::max(peak, std::abs(int(s)));

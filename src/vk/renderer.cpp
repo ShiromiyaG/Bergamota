@@ -5,6 +5,7 @@
 #include "runtime/vulkan_renderer.h"
 #include "runtime/memory.h"
 #include "runtime/pica_lighting.h"
+#include "runtime/pica_tables.h"
 
 #include "../pica/texture.h"
 #include "../pica/vertex.h"
@@ -23,6 +24,16 @@
 namespace runtime {
 
 using namespace pica;
+
+int vk_logic_op(uint32_t pica_op) {
+    static constexpr VkLogicOp OPS[16] = {
+        VK_LOGIC_OP_CLEAR,         VK_LOGIC_OP_AND,  VK_LOGIC_OP_AND_REVERSE, VK_LOGIC_OP_COPY,
+        VK_LOGIC_OP_SET,           VK_LOGIC_OP_COPY_INVERTED, VK_LOGIC_OP_NO_OP, VK_LOGIC_OP_INVERT,
+        VK_LOGIC_OP_NAND,          VK_LOGIC_OP_OR,   VK_LOGIC_OP_NOR,         VK_LOGIC_OP_XOR,
+        VK_LOGIC_OP_EQUIVALENT,    VK_LOGIC_OP_AND_INVERTED, VK_LOGIC_OP_OR_REVERSE, VK_LOGIC_OP_OR_INVERTED,
+    };
+    return OPS[pica_op & 15];
+}
 
 namespace {
 
@@ -47,6 +58,7 @@ constexpr uint32_t STATE_REGS[] = {
     0x0C0, 0x0C1, 0x0C2, 0x0C3, 0x0C4, 0x0C8, 0x0C9, 0x0CA, 0x0CB, 0x0CC, 0x0D0, 0x0D1, 0x0D2, 0x0D3, 0x0D4,
     0x0D8, 0x0D9, 0x0DA, 0x0DB, 0x0DC, 0x0F0, 0x0F1, 0x0F2, 0x0F3, 0x0F4, 0x0F8, 0x0F9, 0x0FA, 0x0FB, 0x0FC,
     0x0E0, 0x0FD, 0x104, 0x080, 0x083, 0x093, 0x09B, 0x081, 0x091, 0x099,
+    0x0E1, // 40: the fog's color
 };
 
 // a texture unit's registers: border color, then size, parameters, address
@@ -118,6 +130,7 @@ struct VulkanRenderer::Impl {
     Memory &memory;
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
+    bool logic_ops = false; // the device's logicOp feature
     VkDevice device = VK_NULL_HANDLE;
     VkQueue queue = VK_NULL_HANDLE;
     uint32_t family = 0;
@@ -180,7 +193,7 @@ struct VulkanRenderer::Impl {
     pica::LightingBlock light_block{};
     VkDeviceSize light_offset = 0, tables_offset = 0;
     uint64_t light_serial = ~0ull, tables_serial = ~0ull;
-    pica::LightTables light_tables{};
+    pica::ShaderTables shader_tables{}; // lighting's, fog's
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
     Impl(VulkanRenderer &s, Memory &m) : self(s), memory(m) {}
@@ -256,8 +269,15 @@ struct VulkanRenderer::Impl {
         eds.extendedDynamicState = VK_TRUE;
         v13.pNext = &eds;
         const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
+        // logic ops where the device has them, the output merger's other mode
+        VkPhysicalDeviceFeatures has{}, wanted{};
+        vkGetPhysicalDeviceFeatures(physical, &has);
+        wanted.logicOp = has.logicOp;
+        logic_ops = has.logicOp;
+        if (!logic_ops) std::fprintf(stderr, "vulkan: no logic ops on this device, drawn as copies\n");
         VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
         dci.pNext = &v13;
+        dci.pEnabledFeatures = &wanted;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
         dci.enabledExtensionCount = 2;
@@ -992,6 +1012,9 @@ struct VulkanRenderer::Impl {
         VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         cb.attachmentCount = 1;
         cb.pAttachments = &blend;
+        // a logic op (bit 41 on, the PICA's operation in bits 42-45)
+        cb.logicOpEnable = (key >> 41) & 1;
+        cb.logicOp = VkLogicOp(vk_logic_op(uint32_t(key >> 42) & 15));
         VkDynamicState dynamic[] = {
             VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_FRONT_FACE,
             VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE, VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP,
@@ -1060,7 +1083,8 @@ struct VulkanRenderer::Impl {
         for (size_t i = 0; i < std::size(STATE_REGS); i++) st.regs[i] = r[STATE_REGS[i]];
         st.depth[0] = f24(r[DEPTH_RANGE]);
         st.depth[1] = f24(r[DEPTH_NEAR]);
-        st.depth[2] = float(r[DEPTHMAP_ENABLE] & 1);
+        // the w buffer is the depth map turned off (Zakuro's DepthMap::read)
+        st.depth[2] = float(!(r[DEPTHMAP_ENABLE] & 1));
         pica::LightingBlock lit;
         lighting.decode(r.data(), lit);
         // into the rings; a ring that runs out submits, which leaves what
@@ -1082,11 +1106,12 @@ struct VulkanRenderer::Impl {
             }
             if (tables_serial != submitted || tables_sent != p.tables_version) {
                 if (tables_decoded != p.tables_version) {
-                    pica::decode_light_tables(p.light_tables, light_tables);
+                    pica::decode_light_tables(p.light_tables, shader_tables.light);
+                    pica::decode_fog_table(p.fog_table, shader_tables.fog);
                     tables_decoded = p.tables_version;
                 }
-                tables_offset = take(uniforms, uniform_at, sizeof light_tables, 256);
-                std::memcpy(uniforms.mapped + tables_offset, light_tables.data(), sizeof light_tables);
+                tables_offset = take(uniforms, uniform_at, sizeof shader_tables, 256);
+                std::memcpy(uniforms.mapped + tables_offset, &shader_tables, sizeof shader_tables);
                 tables_sent = p.tables_version;
                 tables_serial = submitted;
             }
@@ -1116,8 +1141,11 @@ struct VulkanRenderer::Impl {
         // the pipeline: blending (or not, for the logic op) and the color mask
         bool blend = (r[COLOR_OPERATION] >> 8) & 1;
         uint32_t color_mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
+        // blending off is the logic op's mode; copy (3) is drawing without one
+        uint32_t op = r[LOGIC_OP] & 15;
+        bool logic = !blend && op != 3 && logic_ops;
         uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
-                       uint64_t(depth != nullptr) << 40;
+                       uint64_t(depth != nullptr) << 40 | uint64_t(logic) << 41 | uint64_t(logic ? op : 0) << 42;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(key, depth != nullptr));
 
         // the viewport, rows the PICA's way up
@@ -1154,7 +1182,7 @@ struct VulkanRenderer::Impl {
         VkDescriptorImageInfo images[3];
         for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
-        VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
+        VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof shader_tables};
         VkWriteDescriptorSet writes[4]{};
         for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstBinding = 0;

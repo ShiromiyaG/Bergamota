@@ -64,7 +64,8 @@ data either way, their vertex shaders and combiners come from the models.
 
 ## Milestones
 
-State (2026-10-27): 1-3 done, 4 under way (fragment lighting done). USUM
+State (2026-10-27): 1-3 done, 4 under way (fragment lighting, fog and the
+logic op done). USUM
 draws right from the intro to the field, lit; the player runs it at about
 56 fps in the field. In the field, its frames are within a mean of 1.4 (of
 255) of Zakuro's software rasterizer, 1.6% of pixels off by more than 16;
@@ -85,7 +86,16 @@ draws right from the intro to the field, lit; the player runs it at about
    decoded on the CPU into a block, `pica_lighting.h`, when the registers
    change; the 24 tables in a storage buffer, sent when they change; the
    shading per fragment in `pica.frag`, bump and shadow inputs included),
-   fog and gas, procedural textures, shadows, the logic op.
+   fog (done: its table after the lighting's, applied after the alpha
+   test, the depth times w in the w buffer, which is the depth map turned
+   off), the logic op (done: a pipeline per operation, on devices with the
+   feature). Procedural textures, gas and the shadow mode: none of USUM's
+   draws used them in the intro, the title, the house, the first route, the
+   starter scene, a town from a finished save and a wild battle in a cave
+   with a Z-move (`boot` counts them, over 1.3 million draws); fog was in
+   about half of them, the logic op in none. Left for when a game's draws
+   do; Zakuro, the reference, has no gas and no shadow mode either. The
+   battle's frames are within a mean of 0.4-4.8 of Zakuro's.
 5. **Performance and scale.** Surfaces at a resolution scale, the swapchain
    presenting surfaces directly, the pipeline cache on disk, the CPU's reads
    of surfaces through the guards.

@@ -189,9 +189,15 @@ public:
 
     // counters
     uint64_t lists = 0, draws = 0, fills = 0, transfers = 0;
+    // draws that use parts of the fixed function, to know what the games
+    // ask for: fog, gas, the shadow mode, a procedural texture, a logic op
+    // other than copy
+    enum Feature { USES_FOG, USES_GAS, USES_SHADOW, USES_PROCTEX, USES_LOGIC_OP, FEATURES };
+    uint64_t feature_draws[FEATURES]{};
     double busy = 0; // seconds in command lists and transfers
 
 private:
+    void count_features();
     void run(uint32_t paddr, uint32_t size);
     void write(uint32_t reg, uint32_t value, uint32_t mask);
     void flush_immediate();
