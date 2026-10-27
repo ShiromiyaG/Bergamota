@@ -111,6 +111,7 @@ void Runner::run(const ShaderUnit &unit, const Program &program) {
     address_[0] = address_[1] = address_[2] = 0;
     cond_[0] = cond_[1] = false;
     blocks_.clear();
+    slot_ = 0, primitive_ = winding_ = false;
     uint32_t pc = unit.entry;
     for (uint32_t budget = 0; budget < 0x10000; budget++) {
         // blocks ending here: loops go round again, the rest return
@@ -135,7 +136,22 @@ void Runner::run(const ShaderUnit &unit, const Program &program) {
         };
         switch (d.op) {
         case END: return;
-        case NOP: case EMIT: case SETEMIT: break; // the geometry stage's, not run here
+        case NOP: break;
+        // the geometry shader's: vertex 0-2 (bits 24-25), ending a triangle
+        // (bit 23), the triangle's first two turned round (bit 22, as
+        // Citra has it; Zakuro leaves them); the vertex shader has none
+        case SETEMIT:
+            slot_ = std::min((w >> 24) & 3, 2u), primitive_ = (w >> 23) & 1, winding_ = (w >> 22) & 1;
+            break;
+        case EMIT:
+            if (!emitted) break;
+            slots_[slot_] = output;
+            if (primitive_) {
+                emitted->push_back(slots_[winding_ ? 1 : 0]);
+                emitted->push_back(slots_[winding_ ? 0 : 1]);
+                emitted->push_back(slots_[2]);
+            }
+            break;
         case CALL: case CALLC: case CALLU: {
             bool go = d.op == CALL || (d.op == CALLU ? bool(unit.bools >> ((w >> 22) & 0xF) & 1) : condition(w));
             if (go) next = enter(target, count, pc + 1);
