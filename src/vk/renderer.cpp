@@ -69,6 +69,9 @@ constexpr uint32_t STATE_REGS[] = {
     0x0E0, 0x0FD, 0x104, 0x080, 0x083, 0x093, 0x09B, 0x081, 0x091, 0x099,
     0x0E1, // 40: the fog's color
 };
+// 41-43: the scissor keeping the outside of its rectangle: on, then the
+// rectangle's x ends and y ends (in the image's pixels, 16 bits each)
+constexpr size_t SCISSOR_SLOT = 41;
 
 // a texture unit's registers: border color, then size, parameters, address
 // and format
@@ -1566,6 +1569,14 @@ struct VulkanRenderer::Impl {
         st.depth[1] = f24(r[DEPTH_NEAR]);
         // the w buffer is the depth map turned off (Zakuro's DepthMap::read)
         st.depth[2] = float(!(r[DEPTHMAP_ENABLE] & 1));
+        // the scissor: the inside of its rectangle in the pipeline's, the
+        // outside left out by the shader
+        ScissorBox box = pica_scissor(r[0x065], r[0x066], r[0x067], w, h, scale);
+        if (box.mode == 1) {
+            st.regs[SCISSOR_SLOT] = 1;
+            st.regs[SCISSOR_SLOT + 1] = box.x0 | box.x1 << 16;
+            st.regs[SCISSOR_SLOT + 2] = box.y0 | box.y1 << 16;
+        }
         pica::LightingBlock lit;
         lighting.decode(r.data(), lit);
         // into the rings; a ring that runs out submits, which leaves what
@@ -1637,6 +1648,7 @@ struct VulkanRenderer::Impl {
         VkViewport viewport{vx * k, (float(h) - (vy + vh)) * k, vw * k, vh * k, 0, 1};
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         VkRect2D scissor{{0, 0}, {w * scale, h * scale}};
+        if (box.mode == 3) scissor = {{int32_t(box.x0), int32_t(box.y0)}, {box.x1 - box.x0, box.y1 - box.y0}};
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         uint32_t cull = r[FACE_CULLING] & 3;
         vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);
@@ -1752,6 +1764,20 @@ struct VulkanRenderer::Impl {
         device = VK_NULL_HANDLE;
     }
 };
+
+ScissorBox pica_scissor(uint32_t mode, uint32_t low, uint32_t high, uint32_t w, uint32_t h, uint32_t scale) {
+    ScissorBox b{mode & 3, 0, 0, 0, 0};
+    if (b.mode != 1 && b.mode != 3) return {0, 0, 0, w * scale, h * scale};
+    // x in bits 0-9, y in 16-25; held to the buffer, an empty one when the
+    // corners cross
+    uint32_t left = low & 0x3FF, bottom = low >> 16 & 0x3FF;
+    uint32_t right = std::min((high & 0x3FF) + 1, w), top = std::min((high >> 16 & 0x3FF) + 1, h);
+    left = std::min(left, right), bottom = std::min(bottom, top);
+    // rows turned over as the viewport's are
+    b.x0 = left * scale, b.x1 = right * scale;
+    b.y0 = (h - top) * scale, b.y1 = (h - bottom) * scale;
+    return b;
+}
 
 VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache, const PresentTarget *target, uint32_t scale)
     : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache), target, scale)) {

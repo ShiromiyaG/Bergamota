@@ -51,6 +51,24 @@ void mipmap_levels() {
     CHECK(etc.size() == 2 && etc[1].offset == 64 * 64 / 2 && texture_bytes(12, etc) == (64 * 64 + 32 * 32) / 2);
 }
 
+// USUM's: the top screen's 240x400 of a 256x512 buffer, rows turned over
+// (the bottom 400 of the image), at 1 and 2 times; crossed corners, empty;
+// off, the whole buffer
+void scissor() {
+    ScissorBox b = pica_scissor(3, 0, 399 << 16 | 239, 256, 512, 1);
+    CHECK(b.mode == 3 && b.x0 == 0 && b.x1 == 240 && b.y0 == 112 && b.y1 == 512);
+    b = pica_scissor(3, 0, 399 << 16 | 239, 256, 512, 2);
+    CHECK(b.x1 == 480 && b.y0 == 224 && b.y1 == 1024);
+    b = pica_scissor(1, 20 << 16 | 10, 29 << 16 | 19, 256, 512, 1);
+    CHECK(b.mode == 1 && b.x0 == 10 && b.x1 == 20 && b.y0 == 482 && b.y1 == 492);
+    b = pica_scissor(3, 50, 10, 256, 512, 1);
+    CHECK(b.x0 == b.x1);
+    b = pica_scissor(3, 0, 1023 << 16 | 1023, 256, 512, 1);
+    CHECK(b.x1 == 256 && b.y0 == 0 && b.y1 == 512);
+    b = pica_scissor(0, 5, 5, 256, 512, 2);
+    CHECK(b.mode == 0 && b.x0 == 0 && b.x1 == 512 && b.y1 == 1024);
+}
+
 void logic_ops() {
     // blend.rs order: clear, and, and reverse, copy, set, copy inverted,
     // noop, invert, nand, or, nor, xor, equivalent, and inverted, or
@@ -70,6 +88,7 @@ void logic_ops() {
 int main() {
     fog_table();
     mipmap_levels();
+    scissor();
     logic_ops();
     if (failures) std::printf("%d failed\n", failures);
     return failures ? 1 : 0;

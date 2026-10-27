@@ -45,6 +45,15 @@ struct VulkanHandles {
 // VkLogicOp
 int vk_logic_op(uint32_t pica_op);
 
+// the PICA's scissor test (GPUREG_SCISSORTEST_MODE, _POS1, _POS2: corners
+// inclusive, rows up from the bottom) as a rectangle of an image of a w by
+// h buffer at a scale, rows down, its ends exclusive; mode: 0 off, 1 the
+// outside of it drawn, 3 the inside
+struct ScissorBox {
+    uint32_t mode, x0, y0, x1, y1;
+};
+ScissorBox pica_scissor(uint32_t mode, uint32_t low, uint32_t high, uint32_t w, uint32_t h, uint32_t scale);
+
 class VulkanRenderer : public pica::Backend {
 public:
     // pipeline_cache: a file the compiled pipelines are kept in between runs
