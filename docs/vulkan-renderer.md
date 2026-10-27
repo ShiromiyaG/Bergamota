@@ -131,7 +131,13 @@ software rasterizer, 1.6% of pixels off by more than 16.
      finds every particle past its life, so the geometry shader emits
      nothing there and the frames stay the same;
    - textures with mipmap levels: 9-34% of the draws, sampled at level 0
-     only;
+     only. Done: the levels after the first in memory, each half the last
+     and none smaller than a tile, into the image's levels; the sampler
+     from the level register (bias, most and least level) and the filter
+     between levels (bit 24). Sampled before the border's branch, which
+     goes by the pixel. Zakuro has none: what changed are the textures drawn
+     smaller than their size, the edges of alpha-tested leaves and far
+     ground (up to 2% of a battle frame's pixels);
    - the scissor test: on in every draw, keeping the screen's 240×400 (or
      240×320) of a 256×512 buffer; the rest of the buffer is drawn into
      but not shown;
