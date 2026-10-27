@@ -1,6 +1,7 @@
 // The rest of the fixed function without a GPU: the fog's table as the
 // registers write it (Zakuro's fog.rs tests), and the logic ops as Vulkan's.
 
+#include "../src/pica/texture.h"
 #include "runtime/pica_tables.h"
 #include "runtime/vulkan_renderer.h"
 
@@ -35,6 +36,21 @@ void fog_table() {
     CHECK(t[0][0] == 0.0f && t[0][1] == 0.0f);
 }
 
+// a 64x32 RGBA8 texture's levels: each after the last, halved, down to a
+// tile; ETC1 (4 bits) takes an eighth as many bytes
+void mipmap_levels() {
+    auto levels = texture_levels(0, 64, 32, 15);
+    CHECK(levels.size() == 3);
+    if (levels.size() == 3) {
+        CHECK(levels[1].offset == 64 * 32 * 4 && levels[1].width == 32 && levels[1].height == 16);
+        CHECK(levels[2].offset == 64 * 32 * 4 + 32 * 16 * 4 && levels[2].width == 16 && levels[2].height == 8);
+    }
+    CHECK(texture_bytes(0, levels) == (64 * 32 + 32 * 16 + 16 * 8) * 4);
+    CHECK(texture_levels(0, 64, 32, 0).size() == 1);
+    auto etc = texture_levels(12, 64, 64, 1);
+    CHECK(etc.size() == 2 && etc[1].offset == 64 * 64 / 2 && texture_bytes(12, etc) == (64 * 64 + 32 * 32) / 2);
+}
+
 void logic_ops() {
     // blend.rs order: clear, and, and reverse, copy, set, copy inverted,
     // noop, invert, nand, or, nor, xor, equivalent, and inverted, or
@@ -53,6 +69,7 @@ void logic_ops() {
 
 int main() {
     fog_table();
+    mipmap_levels();
     logic_ops();
     if (failures) std::printf("%d failed\n", failures);
     return failures ? 1 : 0;

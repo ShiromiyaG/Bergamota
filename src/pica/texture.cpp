@@ -13,6 +13,23 @@ uint32_t texture_bits(uint32_t format) {
     return BITS[format & 15];
 }
 
+std::vector<Level> texture_levels(uint32_t format, uint32_t width, uint32_t height, uint32_t max_level) {
+    std::vector<Level> levels;
+    uint32_t offset = 0;
+    for (uint32_t l = 0; l <= max_level; l++) {
+        uint32_t w = width >> l, h = height >> l;
+        if (l && (w < 8 || h < 8)) break;
+        levels.push_back({offset, w, h});
+        offset += w * h * texture_bits(format) / 8;
+    }
+    return levels;
+}
+
+uint32_t texture_bytes(uint32_t format, const std::vector<Level> &levels) {
+    const Level &last = levels.back();
+    return last.offset + last.width * last.height * texture_bits(format) / 8;
+}
+
 namespace {
 
 uint8_t x4(uint32_t v) { return uint8_t(v << 4 | v); }

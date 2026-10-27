@@ -99,7 +99,7 @@ struct Image {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkImageView depth = VK_NULL_HANDLE, stencil = VK_NULL_HANDLE; // a depth image's aspects, to sample
-    uint32_t width = 0, height = 0;
+    uint32_t width = 0, height = 0, levels = 1;
 };
 
 // a color or depth buffer of the PICA's, on the GPU
@@ -178,7 +178,7 @@ struct VulkanRenderer::Impl {
     VkPipeline depth_pipeline = VK_NULL_HANDLE;
     VkSampler nearest = VK_NULL_HANDLE;
     std::unordered_map<uint64_t, VkPipeline> pipelines;
-    std::unordered_map<uint32_t, VkSampler> samplers;
+    std::unordered_map<uint64_t, VkSampler> samplers;
 
     Buffer vertices, uniforms;
     VkDeviceSize vertex_at = 0, uniform_at = 0;
@@ -186,7 +186,7 @@ struct VulkanRenderer::Impl {
     std::vector<Image> dead;     // the same for images let go
 
     std::vector<std::unique_ptr<Surface>> surfaces;
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures; // address, format, size, levels
     Image blank; // a unit with no texture
 
     bool recording = false;
@@ -741,8 +741,9 @@ struct VulkanRenderer::Impl {
         vkCmdSetViewport(cmd, 0, 1, &viewport);
         vkCmdSetScissor(cmd, 0, 1, &scissor);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline);
-        // smooth: linear filtering, clamped (bits 1-2 of a unit's parameters)
-        VkSampler filter = sampler(smooth ? 6 : 0);
+        // smooth: linear filtering, clamped (bits 1-2 of a unit's parameters),
+        // one level
+        VkSampler filter = sampler(smooth ? 6 : 0, 0);
         for (int s = 0; s < count && s < 2; s++) {
             if (!views[s]) continue;
             VkDescriptorImageInfo info{filter, views[s], VK_IMAGE_LAYOUT_GENERAL};
@@ -818,14 +819,15 @@ struct VulkanRenderer::Impl {
     }
 
     // images stay in the general layout: attachment, sampled and copied alike
-    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth) {
+    Image image(uint32_t w, uint32_t h, VkFormat format, bool depth, uint32_t levels = 1) {
         Image i;
-        i.width = w, i.height = h;
+        i.width = w, i.height = h, i.levels = levels;
         VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ii.imageType = VK_IMAGE_TYPE_2D;
         ii.format = format;
         ii.extent = {w, h, 1};
-        ii.mipLevels = ii.arrayLayers = 1;
+        ii.mipLevels = levels;
+        ii.arrayLayers = 1;
         ii.samples = VK_SAMPLE_COUNT_1_BIT;
         ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                    VK_IMAGE_USAGE_SAMPLED_BIT |
@@ -842,7 +844,7 @@ struct VulkanRenderer::Impl {
         vi.image = i.image;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vi.format = format;
-        vi.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 1, 0, 1};
+        vi.subresourceRange = {VkImageAspectFlags(depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, levels, 0, 1};
         vkCreateImageView(device, &vi, nullptr, &i.view);
         if (depth) {
             vi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -1034,13 +1036,13 @@ struct VulkanRenderer::Impl {
 
     // -- moving pixels between memory and images ------------------------------
 
-    void copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect) {
+    void copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect, uint32_t level = 0) {
         Buffer b = buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
         std::memcpy(b.mapped, bytes, size);
         end_rendering();
         VkBufferImageCopy c{};
-        c.imageSubresource = {aspect, 0, 0, 1};
-        c.imageExtent = {i.width, i.height, 1};
+        c.imageSubresource = {aspect, level, 0, 1};
+        c.imageExtent = {std::max(i.width >> level, 1u), std::max(i.height >> level, 1u), 1};
         vkCmdCopyBufferToImage(cmd, b.buffer, i.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         barrier();
         staging.push_back(b);
@@ -1314,9 +1316,12 @@ struct VulkanRenderer::Impl {
         return true;
     }
 
-    VkSampler sampler(uint32_t params) {
-        // filters in bits 1-2, the wraps for t and s in 8-10 and 12-14
-        uint32_t key = params & 0x7706;
+    // a unit's sampler from its parameters and its level register
+    VkSampler sampler(uint32_t params, uint32_t lod) {
+        // filters in bits 1-2 and between levels in 24, the wraps for t and s
+        // in 8-10 and 12-14; the bias in the level register's bits 0-12,
+        // the most and least levels in 16-19 and 24-27
+        uint64_t key = (params & 0x01007706) | uint64_t(lod & 0x0F0F1FFF) << 32;
         auto it = samplers.find(key);
         if (it != samplers.end()) return it->second;
         auto wrap = [](uint32_t w) {
@@ -1332,7 +1337,13 @@ struct VulkanRenderer::Impl {
         si.addressModeU = wrap(params >> 12);
         si.addressModeV = wrap(params >> 8);
         si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        si.maxLod = 0;
+        // the bias a signed 1.4.8; levels past what an image has are clamped
+        // to its last (a buffer drawn into has one)
+        si.mipmapMode = params >> 24 & 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.mipLodBias = std::clamp(float(int32_t(lod << 19) >> 19) / 256.0f, -15.0f, 15.0f);
+        uint32_t most = lod >> 16 & 15;
+        si.minLod = float(std::min(lod >> 24 & 15, most));
+        si.maxLod = float(most);
         VkSampler s;
         vkCreateSampler(device, &si, nullptr, &s);
         samplers[key] = s;
@@ -1360,7 +1371,9 @@ struct VulkanRenderer::Impl {
                 return depth_as_color(*s);
             }
         }
-        size_t size = size_t(w) * h * texture_bits(format) / 8;
+        // with its mipmap levels after it (the level register's bits 16-19)
+        std::vector<Level> levels = texture_levels(format, w, h, p.regs[base + 3] >> 16 & 15);
+        size_t size = texture_bytes(format, levels);
         if (std::getenv("RUNTIME_VK_DEBUG")) {
             static int shown = 0;
             for (auto &s : surfaces) {
@@ -1373,17 +1386,20 @@ struct VulkanRenderer::Impl {
         sync(address, uint32_t(size), false);
         const uint8_t *bytes = memory.host(address, uint32_t(size));
         if (!bytes) return blank.view;
-        Texture &t = textures[{address, format, w, h}];
+        Texture &t = textures[{address, format, w, h, uint32_t(levels.size())}];
         // looked at again once a frame (a frame ends in display transfers), it
         // can have changed
         if (t.checked_list != p.transfers || !t.image.image) {
             t.checked_list = p.transfers;
             uint64_t hash = hash_bytes(bytes, size);
             if (hash != t.hash || !t.image.image) {
-                if (!t.image.image) t.image = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, false);
-                std::vector<uint8_t> rgba(size_t(w) * h * 4);
-                decode_texture(format, bytes, w, h, rgba.data());
-                upload_color(t.image, rgba.data(), rgba.size());
+                if (!t.image.image) t.image = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, false, uint32_t(levels.size()));
+                for (uint32_t l = 0; l < levels.size(); l++) {
+                    const Level &level = levels[l];
+                    std::vector<uint8_t> rgba(size_t(level.width) * level.height * 4);
+                    decode_texture(format, bytes + level.offset, level.width, level.height, rgba.data());
+                    copy_in(t.image, rgba.data(), rgba.size(), VK_IMAGE_ASPECT_COLOR_BIT, l);
+                }
                 t.hash = hash;
             }
         }
@@ -1647,7 +1663,7 @@ struct VulkanRenderer::Impl {
 
         VkDescriptorBufferInfo state_info{uniforms.buffer, uoff, sizeof st};
         VkDescriptorImageInfo images[3];
-        for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
+        for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2], r[UNIT_BASE[u] + 3]), views[u], VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
         VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof shader_tables};
         VkWriteDescriptorSet writes[4]{};

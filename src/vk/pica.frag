@@ -185,11 +185,14 @@ vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu
 vec4 texel(int unit, vec2 uv) {
     if ((reg(TEX_CONFIG) & (1u << unit)) == 0u) return vec4(0.0);
     uint params = reg(TEX_PARAMS + unit);
+    // sampled before the border's branch, which goes by the pixel: the
+    // level of detail needs its neighbours' coordinates
+    vec4 sampled = texture(textures[unit], vec2(uv.x, 1.0 - uv.y));
     bool border_s = ((params >> 12) & 3u) == 1u, border_t = ((params >> 8) & 3u) == 1u;
     if ((border_s && (uv.x < 0.0 || uv.x > 1.0)) || (border_t && (uv.y < 0.0 || uv.y > 1.0))) {
         return unpack(reg(TEX_BORDER + unit));
     }
-    return texture(textures[unit], vec2(uv.x, 1.0 - uv.y));
+    return sampled;
 }
 
 vec3 color_operand(vec4 v, uint op) {
