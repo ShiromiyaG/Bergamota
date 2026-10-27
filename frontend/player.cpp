@@ -149,7 +149,8 @@ int main(int argc, char **argv) {
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
     if (settings.video.renderer != "zakuro") {
         pica_gpu = std::make_unique<pica::Pica>(system.memory);
-        vulkan = std::make_unique<VulkanRenderer>(system.memory);
+        // the compiled pipelines kept beside the settings, between runs
+        vulkan = std::make_unique<VulkanRenderer>(system.memory, frontend::utf8(config_file.parent_path() / "pipelines.bin"));
         if (vulkan->ready()) {
             pica_gpu->backend = vulkan.get();
             handlers.gpu = pica_gpu.get();

@@ -189,7 +189,8 @@ int main(int argc, char **argv) {
         }
 #ifdef RUNTIME_VULKAN
         if (renderer == "native") {
-            vulkan = std::make_unique<VulkanRenderer>(system.memory);
+            // RUNTIME_PIPELINE_CACHE=file: the compiled pipelines kept between runs
+            vulkan = std::make_unique<VulkanRenderer>(system.memory, env("RUNTIME_PIPELINE_CACHE") ? env("RUNTIME_PIPELINE_CACHE") : "");
             if (vulkan->ready()) pica_gpu->backend = vulkan.get();
             else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
         }
@@ -291,6 +292,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
                     (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
         std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s\n", vulkan->time_vertices, vulkan->time_render, vulkan->time_sync);
+        std::printf("vulkan pipelines: %llu made in %.3f s\n", (unsigned long long)vulkan->pipelines, vulkan->time_pipelines);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],
                     (unsigned long long)vulkan->write_back_causes[1], (unsigned long long)vulkan->write_back_causes[2],
                     (unsigned long long)vulkan->write_back_causes[3]);
