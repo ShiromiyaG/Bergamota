@@ -64,9 +64,11 @@ data either way, their vertex shaders and combiners come from the models.
 
 ## Milestones
 
-State (2026-10-26): 1-3 done, 4 next. USUM draws right from the intro to
-the field, without fragment lighting; the player runs it at about 56 fps in
-the field.
+State (2026-10-27): 1-3 done, 4 under way (fragment lighting done). USUM
+draws right from the intro to the field, lit; the player runs it at about
+56 fps in the field. In the field, its frames are within a mean of 1.4 (of
+255) of Zakuro's software rasterizer, 1.6% of pixels off by more than 16;
+17.6 and 52% before the lighting.
 
 1. **Front end.** (done) Command lists, registers, shader and table uploads, fixed
    attributes and immediate mode, and the fill, transfer and copy engines on
@@ -79,8 +81,11 @@ the field.
    TEV, blending and depth/stencil; display transfers from surfaces; the
    screens shown. USUM's title screen and field compared with Zakuro's
    (`tools/compare.py`).
-4. **The rest of the fixed function.** Fragment lighting, fog and gas,
-   procedural textures, shadows, the logic op.
+4. **The rest of the fixed function.** Fragment lighting (done: the lights
+   decoded on the CPU into a block, `pica_lighting.h`, when the registers
+   change; the 24 tables in a storage buffer, sent when they change; the
+   shading per fragment in `pica.frag`, bump and shadow inputs included),
+   fog and gas, procedural textures, shadows, the logic op.
 5. **Performance and scale.** Surfaces at a resolution scale, the swapchain
    presenting surfaces directly, the pipeline cache on disk, the CPU's reads
    of surfaces through the guards.

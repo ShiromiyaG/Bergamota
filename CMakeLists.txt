@@ -29,6 +29,7 @@ add_library(recomp_runtime STATIC
     src/pica/shader.cpp
     src/pica/batch.cpp
     src/pica/vertex.cpp
+    src/pica/lighting.cpp
     src/pica/sketch.cpp
     src/services.cpp
 )
@@ -91,6 +92,9 @@ add_test(NAME kernel COMMAND kernel_test)
 add_executable(system_test tests/system_test.cpp)
 target_link_libraries(system_test PRIVATE recomp_runtime)
 add_test(NAME system COMMAND system_test)
+add_executable(lighting_test tests/lighting_test.cpp)
+target_link_libraries(lighting_test PRIVATE recomp_runtime)
+add_test(NAME lighting COMMAND lighting_test)
 add_executable(decomp_test tests/decomp_test.cpp)
 target_link_libraries(decomp_test PRIVATE recomp_runtime)
 add_test(NAME decomp COMMAND decomp_test)

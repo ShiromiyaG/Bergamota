@@ -4,6 +4,7 @@
 
 #include "runtime/vulkan_renderer.h"
 #include "runtime/memory.h"
+#include "runtime/pica_lighting.h"
 
 #include "../pica/texture.h"
 #include "../pica/vertex.h"
@@ -173,6 +174,15 @@ struct VulkanRenderer::Impl {
     VertexStage stage;
     std::vector<Vertex> triangles;
 
+    // the fragment lighting: what was last decoded, and where in the
+    // uniform ring it and the tables went, for the submission they went with
+    pica::LightingDecoder lighting;
+    pica::LightingBlock light_block{};
+    VkDeviceSize light_offset = 0, tables_offset = 0;
+    uint64_t light_serial = ~0ull, tables_serial = ~0ull;
+    pica::LightTables light_tables{};
+    uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
+
     Impl(VulkanRenderer &s, Memory &m) : self(s), memory(m) {}
 
     bool fail(const char *what, VkResult r) {
@@ -274,7 +284,8 @@ struct VulkanRenderer::Impl {
             vkAllocateCommandBuffers(device, &cai, &s.cmd);
             vkCreateFence(device, &fci, nullptr, &s.fence);
             s.vertices = buffer(VERTEX_RING, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-            s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+            // the state and lighting blocks, and the lighting tables read as storage
+            s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
         }
         for (ScreenCopy &c : screen_copies) {
@@ -284,14 +295,17 @@ struct VulkanRenderer::Impl {
         vertices = slots[0].vertices;
         uniforms = slots[0].uniforms;
 
-        // the one layout: the state, and the three textures
-        VkDescriptorSetLayoutBinding bindings[2] = {
+        // the one layout: the state, the three textures, the lighting and
+        // its tables
+        VkDescriptorSetLayoutBinding bindings[4] = {
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
             {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+            {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         };
         VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        sli.bindingCount = 2;
+        sli.bindingCount = 4;
         sli.pBindings = bindings;
         vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -1042,15 +1056,42 @@ struct VulkanRenderer::Impl {
 
         VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
         if (vsize > VERTEX_RING) return;
-        VkDeviceSize voff = take(vertices, vertex_at, vsize, 16);
-        std::memcpy(vertices.mapped + voff, triangles.data(), vsize);
         State st{};
         for (size_t i = 0; i < std::size(STATE_REGS); i++) st.regs[i] = r[STATE_REGS[i]];
         st.depth[0] = f24(r[DEPTH_RANGE]);
         st.depth[1] = f24(r[DEPTH_NEAR]);
         st.depth[2] = float(r[DEPTHMAP_ENABLE] & 1);
-        VkDeviceSize uoff = take(uniforms, uniform_at, sizeof st, 256);
-        std::memcpy(uniforms.mapped + uoff, &st, sizeof st);
+        pica::LightingBlock lit;
+        lighting.decode(r.data(), lit);
+        // into the rings; a ring that runs out submits, which leaves what
+        // went before in the other slot, so then it all goes again
+        VkDeviceSize voff, uoff;
+        for (;;) {
+            uint64_t serial = submitted;
+            voff = take(vertices, vertex_at, vsize, 16);
+            std::memcpy(vertices.mapped + voff, triangles.data(), vsize);
+            uoff = take(uniforms, uniform_at, sizeof st, 256);
+            std::memcpy(uniforms.mapped + uoff, &st, sizeof st);
+            // the lighting block and the tables, kept while they and the
+            // slot stay the same: most draws in a row share them
+            if (light_serial != submitted || std::memcmp(&lit, &light_block, sizeof lit) != 0) {
+                light_offset = take(uniforms, uniform_at, sizeof lit, 256);
+                std::memcpy(uniforms.mapped + light_offset, &lit, sizeof lit);
+                light_block = lit;
+                light_serial = submitted;
+            }
+            if (tables_serial != submitted || tables_sent != p.tables_version) {
+                if (tables_decoded != p.tables_version) {
+                    pica::decode_light_tables(p.light_tables, light_tables);
+                    tables_decoded = p.tables_version;
+                }
+                tables_offset = take(uniforms, uniform_at, sizeof light_tables, 256);
+                std::memcpy(uniforms.mapped + tables_offset, light_tables.data(), sizeof light_tables);
+                tables_sent = p.tables_version;
+                tables_serial = submitted;
+            }
+            if (submitted == serial) break;
+        }
 
         if (!rendering) {
             VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -1112,8 +1153,10 @@ struct VulkanRenderer::Impl {
         VkDescriptorBufferInfo state_info{uniforms.buffer, uoff, sizeof st};
         VkDescriptorImageInfo images[3];
         for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
-        VkWriteDescriptorSet writes[2]{};
-        writes[0].sType = writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
+        VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
+        VkWriteDescriptorSet writes[4]{};
+        for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[0].dstBinding = 0;
         writes[0].descriptorCount = 1;
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
@@ -1122,7 +1165,15 @@ struct VulkanRenderer::Impl {
         writes[1].descriptorCount = 3;
         writes[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         writes[1].pImageInfo = images;
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 2, writes);
+        writes[2].dstBinding = 2;
+        writes[2].descriptorCount = 1;
+        writes[2].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        writes[2].pBufferInfo = &light_info;
+        writes[3].dstBinding = 3;
+        writes[3].descriptorCount = 1;
+        writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[3].pBufferInfo = &tables_info;
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.triangles += triangles.size() / 3;
