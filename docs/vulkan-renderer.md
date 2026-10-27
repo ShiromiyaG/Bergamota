@@ -98,7 +98,27 @@ draws right from the intro to the field, lit; the player runs it at about
    battle's frames are within a mean of 0.4-4.8 of Zakuro's.
 5. **Performance and scale.** Surfaces at a resolution scale, the swapchain
    presenting surfaces directly, the pipeline cache on disk, the CPU's reads
-   of surfaces through the guards.
+   of surfaces through the guards. Done:
+   - *Pipeline cache*: a `VkPipelineCache` from a file (the player's
+     `pipelines.bin` beside `config.toml`, `RUNTIME_PIPELINE_CACHE` for
+     `boot`), saved on the way out and every few new pipelines. The
+     ubershader keeps them few (8 in a room, 22 in a battle); creating them
+     went from 5-8 ms to 1 ms on the second run.
+   - *Direct presentation*: the player's window is the renderer's own
+     swapchain; `present.vert/.frag` draw each screen from its surface,
+     turned upright, smooth or sharp, letterboxed, and Dear ImGui's Vulkan
+     backend draws the overlay in the same pass. No read-back and no frame
+     of delay; `RUNTIME_NO_PRESENT`, or a window that cannot be shown in,
+     goes back to reading the screens and the SDL renderer.
+   - *Resolution scale* (`video.scale` 1-4, `RUNTIME_SCALE`): one scale for
+     every surface; images, render area, viewport, scissor and display
+     transfers at it, memory at the buffers' own size (uploads enlarged,
+     write-backs and `picture()` from the middle of each block, the middle
+     four averaged at an even scale). At 1× the frames are the same byte for
+     byte; at 2×-4× scaled down they are as near Zakuro's as 1×, but for
+     the phase of textures not drawn 1:1 and edges the scaling down smooths.
+   - *Guards*: the CPU's reads of a surface the GPU drew write it back
+     first, as they did already.
 
 Zakuro's renderer (`zakuro-dev/crates/zakuro-gpu`) is the reference for the
 hardware's behaviour; the code here is written anew.

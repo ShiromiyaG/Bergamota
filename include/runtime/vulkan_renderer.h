@@ -49,8 +49,11 @@ class VulkanRenderer : public pica::Backend {
 public:
     // pipeline_cache: a file the compiled pipelines are kept in between runs
     // (none: they are compiled anew each run); target: a window to show the
-    // screens in (none: they are only read back, picture())
-    explicit VulkanRenderer(Memory &memory, std::string pipeline_cache = {}, const PresentTarget *target = nullptr);
+    // screens in (none: they are only read back, picture()); scale: the
+    // game's buffers drawn at that many times their size (1-4), memory
+    // getting them at their own
+    explicit VulkanRenderer(Memory &memory, std::string pipeline_cache = {}, const PresentTarget *target = nullptr,
+                            uint32_t scale = 1);
     ~VulkanRenderer() override;
     // false when there is no Vulkan 1.3 device; error says why
     bool ready() const;

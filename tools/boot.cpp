@@ -170,8 +170,10 @@ int main(int argc, char **argv) {
         }
 #ifdef RUNTIME_VULKAN
         if (renderer == "native") {
-            // RUNTIME_PIPELINE_CACHE=file: the compiled pipelines kept between runs
-            vulkan = std::make_unique<VulkanRenderer>(system.memory, env("RUNTIME_PIPELINE_CACHE") ? env("RUNTIME_PIPELINE_CACHE") : "");
+            // RUNTIME_PIPELINE_CACHE=file: the compiled pipelines kept between runs;
+            // RUNTIME_SCALE=n: the buffers drawn at n times their size (the shots stay 1x)
+            vulkan = std::make_unique<VulkanRenderer>(system.memory, env("RUNTIME_PIPELINE_CACHE") ? env("RUNTIME_PIPELINE_CACHE") : "",
+                                                      nullptr, env("RUNTIME_SCALE") ? uint32_t(std::atoi(env("RUNTIME_SCALE"))) : 1);
             if (vulkan->ready()) pica_gpu->backend = vulkan.get();
             else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
         }
