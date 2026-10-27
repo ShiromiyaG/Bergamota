@@ -1,8 +1,9 @@
 #version 450
 // The PICA's fragment stage as one shader: it reads the registers as the
 // game wrote them and works the combiners (TEV) out from them, so no state
-// needs a shader of its own. After Zakuro's tev.rs (Rust, MIT, Copyright
-// (c) 2026 fearkov; see LICENSE-zakuro).
+// needs a shader of its own; the fragment lighting from a block the CPU
+// decoded (pica_lighting.h) and its tables. After Zakuro's tev.rs and
+// lighting.rs (Rust, MIT, Copyright (c) 2026 fearkov; see LICENSE-zakuro).
 
 layout(location = 0) in vec4 v_color;
 layout(location = 1) in vec2 v_uv0;
@@ -20,6 +21,153 @@ layout(std140, set = 0, binding = 0) uniform State {
     vec4 depth;
 } s;
 layout(set = 0, binding = 1) uniform sampler2D textures[3];
+
+// the lighting, as LightingBlock in pica_lighting.h lays it out
+struct Light {
+    vec4 specular0, specular1, diffuse, ambient, position, direction, spot, distance;
+    uvec4 flags; // directional, two-sided, geometric 0/1, distance, spotlight, shadowed; its number
+};
+layout(std140, set = 0, binding = 2) uniform Lighting {
+    uvec4 head;     // configuration, lights on, bump, shadow
+    uvec4 switches; // fresnel primary, fresnel secondary, clamp highlights, needs half (1) / view (2)
+    uvec4 lookups[7]; // on, input, absolute, scale bits: D0, D1, fresnel, red, green, blue, spotlight
+    vec4 global_ambient;
+    Light lights[8];
+} l;
+// the 24 tables, each entry a value and the step to the next
+layout(std430, set = 0, binding = 3) readonly buffer Tables { vec2 entries[]; } t;
+const int D0 = 0, D1 = 1, FRESNEL = 3, REFLECT_BLUE = 4, REFLECT_GREEN = 5, REFLECT_RED = 6, SPOTLIGHT = 8, DISTANCE = 16;
+const int LOOKUP_D0 = 0, LOOKUP_D1 = 1, LOOKUP_FRESNEL = 2, LOOKUP_RED = 3, LOOKUP_GREEN = 4, LOOKUP_BLUE = 5, LOOKUP_SPOT = 6;
+
+float table(int which, uint entry, float delta) {
+    vec2 e = t.entries[which * 256 + int(entry)];
+    return e.x + e.y * delta;
+}
+
+// v turned by the unit quaternion q
+vec3 rotate(vec4 q, vec3 v) {
+    vec3 inner = cross(q.xyz, v);
+    return v + 2.0 * cross(q.xyz, inner + v * q.w);
+}
+
+// a table read: the dot product its input names, as an index, absolute or
+// signed (wrapping into the upper half), scaled
+float lookup(int slot, int which, float result, bool two_sided) {
+    uvec4 k = l.lookups[slot];
+    uint entry;
+    float delta;
+    if (k.z != 0u) {
+        result = two_sided ? abs(result) : max(result, 0.0);
+        float e = clamp(floor(result * 256.0), 0.0, 255.0);
+        entry = uint(e);
+        delta = result * 256.0 - e;
+    } else {
+        float e = clamp(floor(result * 128.0), -128.0, 127.0);
+        entry = uint(int(e)) & 0xFFu;
+        delta = result * 128.0 - e;
+    }
+    return uintBitsToFloat(k.w) * table(which, entry, delta);
+}
+
+vec4 quantize(vec4 c) { return floor(clamp(c, 0.0, 1.0) * 255.0) / 255.0; }
+
+// the primary (diffuse) and secondary (specular) fragment colors
+void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
+    uint config = l.head.x, count = l.head.y, bump = l.head.z, shadow_cfg = l.head.w;
+    bool needs_half = (l.switches.w & 1u) != 0u, needs_view = (l.switches.w & 2u) != 0u;
+    float length2 = dot(v_quaternion, v_quaternion);
+    vec4 q = length2 > 0.0 ? v_quaternion * inversesqrt(length2) : vec4(0.0, 0.0, 0.0, 1.0);
+
+    bool shadowing = (shadow_cfg & 1u) != 0u;
+    vec4 shadow = vec4(1.0);
+    if (shadowing) {
+        shadow = tex[(shadow_cfg >> 4) & 3u];
+        if ((shadow_cfg & 0x100u) != 0u) shadow = 1.0 - shadow;
+    }
+    vec3 surface_normal = vec3(0.0, 0.0, 1.0), surface_tangent = vec3(1.0, 0.0, 0.0);
+    uint bump_unit = (bump >> 4) & 3u;
+    if ((bump & 3u) == 1u) {
+        surface_normal = tex[bump_unit].rgb * 2.0 - 1.0;
+        if ((bump & 0x100u) != 0u) surface_normal.z = sqrt(max(1.0 - dot(surface_normal.xy, surface_normal.xy), 0.0));
+    } else if ((bump & 3u) == 2u) {
+        surface_tangent = tex[bump_unit].rgb * 2.0 - 1.0;
+    }
+    vec3 normal = rotate(q, surface_normal);
+    // only the last configuration has a table that reads the tangent
+    vec3 tangent = config == 8u ? rotate(q, surface_tangent) : surface_tangent;
+    vec3 norm_view = needs_view ? normalize(v_view) : vec3(0.0);
+
+    vec4 diffuse_sum = vec4(0.0, 0.0, 0.0, 1.0), specular_sum = vec4(0.0, 0.0, 0.0, 1.0);
+    for (uint i = 0u; i < count; i++) {
+        Light li = l.lights[i];
+        uint flags = li.flags.x, number = li.flags.y;
+        bool two_sided = (flags & 2u) != 0u;
+        vec3 light_vector = (flags & 1u) != 0u ? li.direction.xyz : normalize(li.position.xyz + v_view);
+        vec3 half_v = needs_half ? norm_view + light_vector : vec3(0.0);
+        vec3 half_unit = needs_half ? normalize(half_v) : vec3(0.0);
+
+        float distance = 1.0;
+        if ((flags & 16u) != 0u) {
+            vec3 offset = -v_view - li.position.xyz;
+            float place = clamp(li.distance.y * length(offset) + li.distance.x, 0.0, 1.0);
+            float e = clamp(floor(place * 256.0), 0.0, 255.0);
+            distance = table(DISTANCE + int(number), uint(e), place * 256.0 - e);
+        }
+
+        // the dot products the tables can take
+        float inputs[6];
+        inputs[0] = dot(normal, half_unit);
+        inputs[1] = dot(norm_view, half_unit);
+        inputs[2] = dot(normal, norm_view);
+        inputs[3] = dot(light_vector, normal);
+        inputs[4] = dot(light_vector, li.spot.xyz);
+        inputs[5] = config == 8u ? dot(half_unit - normal * dot(normal, half_unit), tangent) : 0.0;
+        #define VALUE(slot, which) lookup(slot, which, l.lookups[slot].y < 6u ? inputs[l.lookups[slot].y] : 0.0, two_sided)
+
+        float spot = (flags & 32u) != 0u ? VALUE(LOOKUP_SPOT, SPOTLIGHT + int(number)) : 1.0;
+        float d0 = l.lookups[LOOKUP_D0].x != 0u ? VALUE(LOOKUP_D0, D0) : 1.0;
+        float red = l.lookups[LOOKUP_RED].x != 0u ? VALUE(LOOKUP_RED, REFLECT_RED) : 1.0;
+        vec3 reflect_rgb = vec3(red, l.lookups[LOOKUP_GREEN].x != 0u ? VALUE(LOOKUP_GREEN, REFLECT_GREEN) : red,
+                                l.lookups[LOOKUP_BLUE].x != 0u ? VALUE(LOOKUP_BLUE, REFLECT_BLUE) : red);
+        float d1 = l.lookups[LOOKUP_D1].x != 0u ? VALUE(LOOKUP_D1, D1) : 1.0;
+        vec3 specular0 = li.specular0.rgb * d0;
+        vec3 specular1 = d1 * reflect_rgb * li.specular1.rgb;
+
+        // only the last light applies fresnel
+        if (i == count - 1u && l.lookups[LOOKUP_FRESNEL].x != 0u) {
+            float fresnel = VALUE(LOOKUP_FRESNEL, FRESNEL);
+            if (l.switches.x != 0u) diffuse_sum.a = fresnel;
+            if (l.switches.y != 0u) specular_sum.a = fresnel;
+        }
+        #undef VALUE
+
+        float facing = dot(light_vector, normal);
+        facing = two_sided ? abs(facing) : max(facing, 0.0);
+        float highlights = l.switches.z != 0u && facing == 0.0 ? 0.0 : 1.0;
+        if ((flags & 12u) != 0u) {
+            float len = dot(half_v, half_v);
+            float factor = len == 0.0 ? 0.0 : min(facing / len, 1.0);
+            if ((flags & 4u) != 0u) specular0 *= factor;
+            if ((flags & 8u) != 0u) specular1 *= factor;
+        }
+
+        bool shadowed = (flags & 64u) != 0u;
+        vec3 shadow_primary = shadowing && (shadow_cfg & 0x200u) != 0u && shadowed ? shadow.rgb : vec3(1.0);
+        vec3 shadow_secondary = shadowing && (shadow_cfg & 0x400u) != 0u && shadowed ? shadow.rgb : vec3(1.0);
+        vec3 diffuse = (li.diffuse.rgb * facing + li.ambient.rgb) * distance * spot;
+        vec3 specular = (specular0 + specular1) * highlights * distance * spot;
+        diffuse_sum.rgb += diffuse * shadow_primary;
+        specular_sum.rgb += specular * shadow_secondary;
+    }
+    if (shadowing && (shadow_cfg & 0x800u) != 0u) {
+        if (l.switches.x != 0u) diffuse_sum.a *= shadow.a;
+        if (l.switches.y != 0u) specular_sum.a *= shadow.a;
+    }
+    diffuse_sum.rgb += l.global_ambient.rgb;
+    // the unit hands the combiners 8-bit colors
+    primary = quantize(diffuse_sum);
+    secondary = quantize(specular_sum);
+}
 
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
@@ -118,6 +266,10 @@ void main() {
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
     tex[3] = vec4(0.0); // procedural textures: not yet
     vec4 primary = v_color;
+    // without lighting the primary fragment color is the vertex's, and
+    // there is no specular term
+    vec4 frag_primary = primary, frag_secondary = vec4(0.0, 0.0, 0.0, 1.0);
+    if (l.head.y != 0u) light(tex, frag_primary, frag_secondary);
 
     vec4 previous = primary;
     // the buffer lags a stage: the first reads zero, the second the
@@ -135,8 +287,8 @@ void main() {
             vec4 v;
             switch (which) {
             case 0u: v = primary; break;
-            case 1u: v = primary; break;               // fragment lighting: not yet
-            case 2u: v = vec4(0.0, 0.0, 0.0, 1.0); break;
+            case 1u: v = frag_primary; break;
+            case 2u: v = frag_secondary; break;
             case 3u: v = tex[0]; break;
             case 4u: v = tex[1]; break;
             case 5u: v = tex[2]; break;
