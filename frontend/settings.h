@@ -24,9 +24,10 @@ constexpr Button BUTTONS[] = {
 };
 
 struct Settings {
-    // the game: what the recompiled port needs, and where saves go
+    // the game: what the recompiled port needs, and where saves go; decomp,
+    // a folder with the decomp's decomp.bin and decomp.txt, or none
     struct {
-        std::string exheader, code, library, game, update, user;
+        std::string exheader, code, library, game, update, user, decomp;
     } game;
     struct {
         std::string renderer = "native"; // the runtime's own ("native") or Zakuro's ("zakuro"); a restart

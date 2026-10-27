@@ -102,6 +102,16 @@ void Services::unimplemented(CommandBuffer &buffer, const std::string &service) 
     if (unimplemented_[{service, command}]++ == 0) {
         std::fprintf(stderr, "runtime: unimplemented %s command 0x%04X\n", service.c_str(), command);
     }
+    // err:f Throw: what the game says went wrong, as Zakuro's err.rs reads it
+    if (service == "err:f" && command == 0x0001) {
+        uint32_t kind = buffer.get(1) & 0xFF;
+        std::fprintf(stderr, "runtime: the game reported a fatal error: type %u, result 0x%08X, pc 0x%08X\n", kind,
+                     buffer.get(2), buffer.get(3));
+        if (kind == 3) { // a CPU exception, with the registers
+            std::fprintf(stderr, "  exception %u, fault 0x%08X\n", buffer.get(5) & 0xFF, buffer.get(6));
+            for (uint32_t i = 0; i < 8; i++) std::fprintf(stderr, "  r%u = 0x%08X\n", i, buffer.get(7 + i));
+        }
+    }
     // success, and zeros where the title reads its outputs
     buffer.reply(command);
     for (uint32_t i = 2; i < 8; i++) buffer.set(i, 0);

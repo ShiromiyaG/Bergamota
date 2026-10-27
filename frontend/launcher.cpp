@@ -104,6 +104,7 @@ bool launcher(SDL_Window *window, SDL_Renderer *renderer, Settings &s, const std
         path_row(window, "Code (code.bin)", s.game.code, false, &EXHEADER);
         path_row(window, "Recompiled library", s.game.library, false, &LIBRARY);
         path_row(window, "Saves folder", s.game.user, true);
+        path_row(window, "Decomp folder (optional)", s.game.decomp, true);
 
         ImGui::SeparatorText("Video");
         int which = s.video.renderer == "zakuro" ? 1 : 0;

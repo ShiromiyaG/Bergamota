@@ -18,6 +18,7 @@ add_library(recomp_runtime STATIC
     src/memory.cpp
     src/system.cpp
     src/loader.cpp
+    src/decomp.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -94,6 +95,9 @@ add_test(NAME system COMMAND system_test)
 add_executable(lighting_test tests/lighting_test.cpp)
 target_link_libraries(lighting_test PRIVATE recomp_runtime)
 add_test(NAME lighting COMMAND lighting_test)
+add_executable(decomp_test tests/decomp_test.cpp)
+target_link_libraries(decomp_test PRIVATE recomp_runtime)
+add_test(NAME decomp COMMAND decomp_test)
 
 # boots a game on the runtime and reports how far it gets
 add_executable(boot tools/boot.cpp)
