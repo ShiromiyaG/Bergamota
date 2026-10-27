@@ -1,9 +1,12 @@
 // The launcher, before the game, and the overlay, over it (F1), both drawn
-// with Dear ImGui on the player's SDL renderer.
+// with Dear ImGui: on the player's SDL renderer, or the overlay on the
+// runtime's Vulkan renderer when that shows the screens itself.
 #ifndef FRONTEND_UI_H
 #define FRONTEND_UI_H
 
 #include "settings.h"
+
+#include "runtime/vulkan_renderer.h"
 
 #include <SDL3/SDL.h>
 
@@ -12,9 +15,17 @@
 
 namespace frontend {
 
-// Dear ImGui on the window, for both
+// Dear ImGui on the window, for both, drawn with the SDL renderer
 void ui_init(SDL_Window *window, SDL_Renderer *renderer);
 void ui_shutdown();
+// what it draws with from now on: the SDL renderer, or Vulkan (false when
+// its backend could not start); the context and its settings stay
+void ui_on_renderer(SDL_Window *window, SDL_Renderer *renderer);
+bool ui_on_vulkan(SDL_Window *window, const runtime::VulkanHandles &vk);
+void ui_drop_backend();
+// a frame of it begins, on whichever; and drawn into Vulkan's commands
+void ui_new_frame();
+void ui_draw_vulkan(VkCommandBuffer cmd);
 
 // asks for the game's files and what needs a restart; true to start the
 // game, false when the window closed

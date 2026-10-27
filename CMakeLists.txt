@@ -40,12 +40,15 @@ option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${V
 if(RUNTIME_VULKAN)
     set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${SHADER_OUT})
-    foreach(stage vert frag)
-        add_custom_command(
-            OUTPUT ${SHADER_OUT}/pica.${stage}.inc
-            COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/pica.${stage}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica.${stage}
-            DEPENDS src/vk/pica.${stage}
-            VERBATIM)
+    # the PICA's draws, and the screens shown in the window
+    foreach(shader pica present)
+        foreach(stage vert frag)
+            add_custom_command(
+                OUTPUT ${SHADER_OUT}/${shader}.${stage}.inc
+                COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/${shader}.${stage}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/${shader}.${stage}
+                DEPENDS src/vk/${shader}.${stage}
+                VERBATIM)
+        endforeach()
     endforeach()
     add_custom_command(
         OUTPUT ${SHADER_OUT}/depth.comp.inc
@@ -53,7 +56,8 @@ if(RUNTIME_VULKAN)
         DEPENDS src/vk/depth.comp
         VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/pica/texture.cpp
-        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc
+        ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
     target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)
@@ -124,9 +128,10 @@ if(RUNTIME_PLAYER AND RUNTIME_ZAKURO_GPU)
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_SOURCE_DIR}/imgui_widgets.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp) # the overlay over screens Vulkan shows
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-    target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3-static Vulkan::Vulkan)
     add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp)
     target_link_libraries(player PRIVATE recomp_runtime SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
 endif()

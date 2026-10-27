@@ -3,10 +3,15 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <imgui_impl_vulkan.h>
 
 #include <mutex>
 
 namespace frontend {
+
+namespace {
+enum class Backend { None, SdlRenderer, Vulkan } backend = Backend::None;
+} // namespace
 
 void ui_init(SDL_Window *window, SDL_Renderer *renderer) {
     IMGUI_CHECKVERSION();
@@ -20,13 +25,58 @@ void ui_init(SDL_Window *window, SDL_Renderer *renderer) {
         ImGui::GetStyle().ScaleAllSizes(scale);
         io.FontGlobalScale = scale;
     }
+    ui_on_renderer(window, renderer);
+}
+
+void ui_on_renderer(SDL_Window *window, SDL_Renderer *renderer) {
+    ui_drop_backend();
     ImGui_ImplSDL3_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer3_Init(renderer);
+    backend = Backend::SdlRenderer;
+}
+
+bool ui_on_vulkan(SDL_Window *window, const runtime::VulkanHandles &vk) {
+    ui_drop_backend();
+    ImGui_ImplSDL3_InitForVulkan(window);
+    ImGui_ImplVulkan_InitInfo info{};
+    info.ApiVersion = VK_API_VERSION_1_3;
+    info.Instance = vk.instance;
+    info.PhysicalDevice = vk.physical;
+    info.Device = vk.device;
+    info.QueueFamily = vk.family;
+    info.Queue = vk.queue;
+    info.DescriptorPoolSize = 16; // a pool of its own
+    info.MinImageCount = 2;
+    info.ImageCount = vk.images < 2 ? 2 : vk.images;
+    info.UseDynamicRendering = true;
+    info.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &vk.format;
+    if (!ImGui_ImplVulkan_Init(&info)) {
+        ImGui_ImplSDL3_Shutdown();
+        return false;
+    }
+    backend = Backend::Vulkan;
+    return true;
+}
+
+void ui_new_frame() {
+    if (backend == Backend::Vulkan) ImGui_ImplVulkan_NewFrame();
+    else ImGui_ImplSDLRenderer3_NewFrame();
+    ImGui_ImplSDL3_NewFrame();
+}
+
+void ui_draw_vulkan(VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); }
+
+void ui_drop_backend() {
+    if (backend == Backend::SdlRenderer) ImGui_ImplSDLRenderer3_Shutdown();
+    if (backend == Backend::Vulkan) ImGui_ImplVulkan_Shutdown();
+    if (backend != Backend::None) ImGui_ImplSDL3_Shutdown();
+    backend = Backend::None;
 }
 
 void ui_shutdown() {
-    ImGui_ImplSDLRenderer3_Shutdown();
-    ImGui_ImplSDL3_Shutdown();
+    ui_drop_backend();
     ImGui::DestroyContext();
 }
 

@@ -49,6 +49,12 @@ const uint32_t FRAG_SPV[] = {
 const uint32_t DEPTH_SPV[] = {
 #include "depth.comp.inc"
 };
+const uint32_t PRESENT_VERT_SPV[] = {
+#include "present.vert.inc"
+};
+const uint32_t PRESENT_FRAG_SPV[] = {
+#include "present.frag.inc"
+};
 
 constexpr VkDeviceSize VERTEX_RING = 64u << 20, UNIFORM_RING = 8u << 20;
 
@@ -199,7 +205,26 @@ struct VulkanRenderer::Impl {
     pica::ShaderTables shader_tables{}; // lighting's, fog's
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
-    Impl(VulkanRenderer &s, Memory &m, std::string cache) : self(s), memory(m), cache_path(std::move(cache)) {}
+    Impl(VulkanRenderer &s, Memory &m, std::string cache, const PresentTarget *t)
+        : self(s), memory(m), target(t), cache_path(std::move(cache)) {}
+
+    // the window the screens are shown in, when there is one: its surface,
+    // the swapchain, and the pass that draws the screens into it
+    const PresentTarget *target;
+    VkSurfaceKHR window_surface = VK_NULL_HANDLE;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkFormat swap_format = VK_FORMAT_UNDEFINED;
+    VkExtent2D swap_extent{};
+    std::vector<VkImage> swap_images;
+    std::vector<VkImageView> swap_views;
+    std::vector<VkSemaphore> swap_rendered; // one an image: its drawing done, to show it
+    VkSemaphore swap_acquired[2]{};         // one a slot: the image to draw into is free
+    bool swap_vsync = true, swap_stale = false;
+    VkDescriptorSetLayout present_set = VK_NULL_HANDLE;
+    VkPipelineLayout present_layout = VK_NULL_HANDLE;
+    VkPipeline present_pipeline = VK_NULL_HANDLE;
+    VkShaderModule present_vert = VK_NULL_HANDLE, present_frag = VK_NULL_HANDLE;
+    Image from_memory[2]; // a screen read from memory, where no surface has it
 
     // the pipelines compiled in earlier runs, from cache_path; the driver
     // takes what it can use (its own, for this device and version) and
@@ -269,7 +294,14 @@ struct VulkanRenderer::Impl {
         ici.pApplicationInfo = &app;
         const char *validation = "VK_LAYER_KHRONOS_validation";
         if (std::getenv("RUNTIME_VK_VALIDATION")) ici.enabledLayerCount = 1, ici.ppEnabledLayerNames = &validation;
+        // what the window needs, when there is one to show the screens in
+        if (target) {
+            ici.enabledExtensionCount = uint32_t(target->instance_extensions.size());
+            ici.ppEnabledExtensionNames = target->instance_extensions.data();
+        }
         if (VkResult r = vkCreateInstance(&ici, nullptr, &instance)) return fail("vkCreateInstance", r);
+        if (target && target->make_surface) window_surface = target->make_surface(instance);
+        if (target && !window_surface) std::fprintf(stderr, "vulkan: no surface for the window, the screens read back instead\n");
 
         uint32_t count = 0;
         vkEnumeratePhysicalDevices(instance, &count, nullptr);
@@ -295,9 +327,22 @@ struct VulkanRenderer::Impl {
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
         std::vector<VkQueueFamilyProperties> fams(families);
         vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, fams.data());
-        for (uint32_t i = 0; i < families; i++) {
-            if (fams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        // one queue for everything: graphics, and showing in the window when
+        // there is one (a family that cannot leaves the window out)
+        bool found = false;
+        for (int pass = 0; pass < 2 && !found; pass++) {
+            for (uint32_t i = 0; i < families; i++) {
+                if (!(fams[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)) continue;
+                VkBool32 shows = VK_FALSE;
+                if (window_surface) vkGetPhysicalDeviceSurfaceSupportKHR(physical, i, window_surface, &shows);
+                if (pass == 0 && window_surface && !shows) continue;
                 family = i;
+                found = true;
+                if (!shows && window_surface) {
+                    std::fprintf(stderr, "vulkan: no queue shows in the window, the screens read back instead\n");
+                    vkDestroySurfaceKHR(instance, window_surface, nullptr);
+                    window_surface = VK_NULL_HANDLE;
+                }
                 break;
             }
         }
@@ -317,7 +362,8 @@ struct VulkanRenderer::Impl {
         VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
         eds.extendedDynamicState = VK_TRUE;
         v13.pNext = &eds;
-        const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
+        const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+                                    VK_KHR_SWAPCHAIN_EXTENSION_NAME};
         // logic ops where the device has them, the output merger's other mode
         VkPhysicalDeviceFeatures has{}, wanted{};
         vkGetPhysicalDeviceFeatures(physical, &has);
@@ -329,7 +375,7 @@ struct VulkanRenderer::Impl {
         dci.pEnabledFeatures = &wanted;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qci;
-        dci.enabledExtensionCount = 2;
+        dci.enabledExtensionCount = window_surface ? 3 : 2; // the swapchain's with a window
         dci.ppEnabledExtensionNames = extensions;
         if (VkResult r = vkCreateDevice(physical, &dci, nullptr, &device)) return fail("vkCreateDevice", r);
         vkGetDeviceQueue(device, family, 0, &queue);
@@ -415,6 +461,324 @@ struct VulkanRenderer::Impl {
         blank = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false);
         uint8_t zero[4] = {};
         upload_color(blank, zero, 4);
+        if (window_surface && !make_present()) {
+            std::fprintf(stderr, "vulkan: the window could not be shown in, the screens read back instead\n");
+            drop_present();
+        }
+        return true;
+    }
+
+    // -- showing the screens in the window ------------------------------------
+
+    // the pass that draws a screen into the window, and the swapchain
+    bool make_present() {
+        VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        sli.bindingCount = 1;
+        sli.pBindings = &binding;
+        vkCreateDescriptorSetLayout(device, &sli, nullptr, &present_set);
+        VkPushConstantRange range{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20};
+        VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+        pli.setLayoutCount = 1;
+        pli.pSetLayouts = &present_set;
+        pli.pushConstantRangeCount = 1;
+        pli.pPushConstantRanges = &range;
+        vkCreatePipelineLayout(device, &pli, nullptr, &present_layout);
+        VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        smi.codeSize = sizeof PRESENT_VERT_SPV;
+        smi.pCode = PRESENT_VERT_SPV;
+        vkCreateShaderModule(device, &smi, nullptr, &present_vert);
+        smi.codeSize = sizeof PRESENT_FRAG_SPV;
+        smi.pCode = PRESENT_FRAG_SPV;
+        vkCreateShaderModule(device, &smi, nullptr, &present_frag);
+        VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        for (VkSemaphore &s : swap_acquired) vkCreateSemaphore(device, &sci, nullptr, &s);
+        // the format first, which the pipeline is made for
+        if (!make_swapchain(true)) return false;
+        VkPipelineShaderStageCreateInfo stages[2] = {{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
+                                                     {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
+        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT, stages[0].module = present_vert, stages[0].pName = "main";
+        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT, stages[1].module = present_frag, stages[1].pName = "main";
+        VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+        VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        vp.viewportCount = vp.scissorCount = 1;
+        VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.lineWidth = 1;
+        VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        VkPipelineColorBlendAttachmentState blend{};
+        blend.colorWriteMask = 0xF;
+        VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        cb.attachmentCount = 1;
+        cb.pAttachments = &blend;
+        VkDynamicState dynamic[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+        dyn.dynamicStateCount = 2;
+        dyn.pDynamicStates = dynamic;
+        VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachmentFormats = &swap_format;
+        VkGraphicsPipelineCreateInfo gi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        gi.pNext = &ri;
+        gi.stageCount = 2;
+        gi.pStages = stages;
+        gi.pVertexInputState = &vi;
+        gi.pInputAssemblyState = &ia;
+        gi.pViewportState = &vp;
+        gi.pRasterizationState = &rs;
+        gi.pMultisampleState = &ms;
+        gi.pColorBlendState = &cb;
+        gi.pDynamicState = &dyn;
+        gi.layout = present_layout;
+        return vkCreateGraphicsPipelines(device, cache, 1, &gi, nullptr, &present_pipeline) == VK_SUCCESS;
+    }
+
+    // the swapchain at the window's size now: waiting for the display with
+    // vsync (FIFO), else the latest picture (MAILBOX, else IMMEDIATE); false
+    // when the window has no size (minimised)
+    bool make_swapchain(bool vsync) {
+        VkSurfaceCapabilitiesKHR caps;
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physical, window_surface, &caps) != VK_SUCCESS) return false;
+        if (caps.currentExtent.width == 0 || caps.currentExtent.height == 0) return false;
+        if (swap_format == VK_FORMAT_UNDEFINED) {
+            uint32_t n = 0;
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physical, window_surface, &n, nullptr);
+            std::vector<VkSurfaceFormatKHR> formats(n);
+            vkGetPhysicalDeviceSurfaceFormatsKHR(physical, window_surface, &n, formats.data());
+            // plain 8-bit channels, as the screens are, not sRGB
+            for (VkFormat want : {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM}) {
+                for (auto &f : formats) {
+                    if (f.format == want && swap_format == VK_FORMAT_UNDEFINED) swap_format = want;
+                }
+            }
+            if (swap_format == VK_FORMAT_UNDEFINED && n) swap_format = formats[0].format;
+        }
+        uint32_t n = 0;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physical, window_surface, &n, nullptr);
+        std::vector<VkPresentModeKHR> modes(n);
+        vkGetPhysicalDeviceSurfacePresentModesKHR(physical, window_surface, &n, modes.data());
+        VkPresentModeKHR mode = VK_PRESENT_MODE_FIFO_KHR;
+        if (!vsync) {
+            for (VkPresentModeKHR want : {VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR}) {
+                if (mode == VK_PRESENT_MODE_FIFO_KHR && std::find(modes.begin(), modes.end(), want) != modes.end()) mode = want;
+            }
+        }
+        VkSwapchainCreateInfoKHR ci{VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR};
+        ci.surface = window_surface;
+        ci.minImageCount = std::max(caps.minImageCount, 2u) + 1;
+        if (caps.maxImageCount) ci.minImageCount = std::min(ci.minImageCount, caps.maxImageCount);
+        ci.imageFormat = swap_format;
+        ci.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+        ci.imageExtent = caps.currentExtent;
+        ci.imageArrayLayers = 1;
+        ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        ci.preTransform = caps.currentTransform;
+        ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        ci.presentMode = mode;
+        ci.clipped = VK_TRUE;
+        ci.oldSwapchain = swapchain;
+        VkSwapchainKHR made = VK_NULL_HANDLE;
+        if (vkCreateSwapchainKHR(device, &ci, nullptr, &made) != VK_SUCCESS) return false;
+        drop_swapchain();
+        swapchain = made;
+        swap_extent = caps.currentExtent;
+        swap_vsync = vsync;
+        swap_stale = false;
+        vkGetSwapchainImagesKHR(device, swapchain, &n, nullptr);
+        swap_images.resize(n);
+        vkGetSwapchainImagesKHR(device, swapchain, &n, swap_images.data());
+        VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        for (VkImage img : swap_images) {
+            VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            vci.image = img;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = swap_format;
+            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageView view;
+            vkCreateImageView(device, &vci, nullptr, &view);
+            swap_views.push_back(view);
+            VkSemaphore s;
+            vkCreateSemaphore(device, &sci, nullptr, &s);
+            swap_rendered.push_back(s);
+        }
+        return true;
+    }
+
+    // the swapchain's images let go (the swapchain itself only when no newer
+    // one replaced it: drop_present)
+    void drop_swapchain() {
+        if (!swapchain) return;
+        vkDeviceWaitIdle(device);
+        for (VkImageView v : swap_views) vkDestroyImageView(device, v, nullptr);
+        for (VkSemaphore s : swap_rendered) vkDestroySemaphore(device, s, nullptr);
+        swap_views.clear();
+        swap_rendered.clear();
+        swap_images.clear();
+        vkDestroySwapchainKHR(device, swapchain, nullptr);
+        swapchain = VK_NULL_HANDLE;
+    }
+
+    void drop_present() {
+        if (device) vkDeviceWaitIdle(device);
+        drop_swapchain();
+        if (present_pipeline) vkDestroyPipeline(device, present_pipeline, nullptr);
+        if (present_layout) vkDestroyPipelineLayout(device, present_layout, nullptr);
+        if (present_set) vkDestroyDescriptorSetLayout(device, present_set, nullptr);
+        if (present_vert) vkDestroyShaderModule(device, present_vert, nullptr);
+        if (present_frag) vkDestroyShaderModule(device, present_frag, nullptr);
+        for (VkSemaphore &s : swap_acquired) {
+            if (s) vkDestroySemaphore(device, s, nullptr);
+            s = VK_NULL_HANDLE;
+        }
+        for (Image &i : from_memory) destroy(i);
+        present_pipeline = VK_NULL_HANDLE;
+        present_layout = VK_NULL_HANDLE;
+        present_set = VK_NULL_HANDLE;
+        present_vert = present_frag = VK_NULL_HANDLE;
+        if (window_surface) vkDestroySurfaceKHR(instance, window_surface, nullptr);
+        window_surface = VK_NULL_HANDLE;
+    }
+
+    bool presents() const { return present_pipeline != VK_NULL_HANDLE; }
+
+    // the surface a screen is in, as picture() looks for it: rows in order
+    // (a display transfer's), up to date, of the LCD's stride
+    Surface *screen_surface(uint32_t address, uint32_t stride) {
+        Surface *fb = nullptr;
+        for (auto &s : surfaces) {
+            if (s->linear && !s->stale && !s->depth && s->address == address && s->width * bytes_per_pixel(s->format) == stride)
+                fb = s.get();
+        }
+        return fb && fb->width <= 240 && fb->height <= 400 ? fb : nullptr;
+    }
+
+    bool present(const ScreenView *screens, int count, bool smooth, bool vsync,
+                 const std::function<void(VkCommandBuffer)> &overlay) {
+        if (!presents()) return false;
+        if (!swapchain || swap_stale || vsync != swap_vsync) {
+            if (!make_swapchain(vsync)) {
+                submit(false); // minimised: the frame still goes
+                return false;
+            }
+        }
+        begin();
+        end_rendering();
+        // what each screen is drawn from: its surface, else memory's picture
+        VkImageView views[2]{};
+        uint32_t rotate[2]{};
+        for (int s = 0; s < count && s < 2; s++) {
+            // a stride of none is a row of the screen's width (Pica::screen)
+            uint32_t stride = screens[s].stride ? screens[s].stride : 240 * bytes_per_pixel(screens[s].format);
+            if (Surface *fb = screen_surface(screens[s].address, stride)) {
+                views[s] = fb->image.view;
+                rotate[s] = 1;
+                continue;
+            }
+            // what the GPU drew there brought down first, as Pica::screen does
+            sync(screens[s].address, stride * (s ? 320 : 400), false);
+            begin();
+            end_rendering();
+            Picture p = read_screen(memory, uint32_t(s), screens[s].address, screens[s].stride, screens[s].format);
+            if (p.rgba.empty()) {
+                views[s] = blank.view;
+                continue;
+            }
+            Image &img = from_memory[s];
+            if (img.width != p.width || img.height != p.height) {
+                if (img.image) dead.push_back(img);
+                img = image(p.width, p.height, VK_FORMAT_R8G8B8A8_UNORM, false);
+            }
+            upload_color(img, p.rgba.data(), p.rgba.size());
+            views[s] = img.view;
+        }
+        barrier(); // what the game drew, done before it is read
+
+        Slot &slot = slots[current];
+        VkSemaphore acquired = swap_acquired[current];
+        uint32_t index = 0;
+        VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired, VK_NULL_HANDLE, &index);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR) {
+            swap_stale = true;
+            submit(false);
+            return false;
+        }
+        (void)slot;
+        VkImageMemoryBarrier2 to_draw{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+        to_draw.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        to_draw.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        to_draw.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        to_draw.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        to_draw.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        to_draw.image = swap_images[index];
+        to_draw.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        di.imageMemoryBarrierCount = 1;
+        di.pImageMemoryBarriers = &to_draw;
+        vkCmdPipelineBarrier2(cmd, &di);
+
+        VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+        ca.imageView = swap_views[index];
+        ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        ca.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        ca.clearValue.color = {{0, 0, 0, 1}};
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, swap_extent};
+        ri.layerCount = 1;
+        ri.colorAttachmentCount = 1;
+        ri.pColorAttachments = &ca;
+        vkCmdBeginRendering(cmd, &ri);
+        VkViewport viewport{0, 0, float(swap_extent.width), float(swap_extent.height), 0, 1};
+        VkRect2D scissor{{0, 0}, swap_extent};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present_pipeline);
+        // smooth: linear filtering, clamped (bits 1-2 of a unit's parameters)
+        VkSampler filter = sampler(smooth ? 6 : 0);
+        for (int s = 0; s < count && s < 2; s++) {
+            if (!views[s]) continue;
+            VkDescriptorImageInfo info{filter, views[s], VK_IMAGE_LAYOUT_GENERAL};
+            VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            w.dstBinding = 0;
+            w.descriptorCount = 1;
+            w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            w.pImageInfo = &info;
+            push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, present_layout, 0, 1, &w);
+            const ScreenView &v = screens[s];
+            float W = float(swap_extent.width), H = float(swap_extent.height);
+            struct {
+                float rect[4];
+                uint32_t rotate;
+            } push{{v.x / W * 2 - 1, v.y / H * 2 - 1, (v.x + v.width) / W * 2 - 1, (v.y + v.height) / H * 2 - 1}, rotate[s]};
+            vkCmdPushConstants(cmd, present_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, 20, &push);
+            vkCmdDraw(cmd, 4, 1, 0, 0);
+        }
+        if (overlay) overlay(cmd);
+        vkCmdEndRendering(cmd);
+
+        VkImageMemoryBarrier2 to_show = to_draw;
+        to_show.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        to_show.dstStageMask = VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT;
+        to_show.dstAccessMask = 0;
+        to_show.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        to_show.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        di.pImageMemoryBarriers = &to_show;
+        vkCmdPipelineBarrier2(cmd, &di);
+
+        VkSemaphore rendered = swap_rendered[index];
+        submit(false, acquired, rendered);
+        VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
+        pi.waitSemaphoreCount = 1;
+        pi.pWaitSemaphores = &rendered;
+        pi.swapchainCount = 1;
+        pi.pSwapchains = &swapchain;
+        pi.pImageIndices = &index;
+        r = vkQueuePresentKHR(queue, &pi);
+        if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) swap_stale = true;
         return true;
     }
 
@@ -553,7 +917,9 @@ struct VulkanRenderer::Impl {
 
     // sends what is recorded to the GPU; wait, to have it done (a CPU reads
     // its results), else on to the other slot while it runs
-    void submit(bool wait = true) {
+    // (a frame shown in the window waits for its image, acquired, and says
+    // when it is drawn, rendered)
+    void submit(bool wait = true, VkSemaphore acquired = VK_NULL_HANDLE, VkSemaphore rendered = VK_NULL_HANDLE) {
         begin();
         end_rendering();
         vkEndCommandBuffer(cmd);
@@ -561,6 +927,9 @@ struct VulkanRenderer::Impl {
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
+        VkPipelineStageFlags stage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        if (acquired) si.waitSemaphoreCount = 1, si.pWaitSemaphores = &acquired, si.pWaitDstStageMask = &stage;
+        if (rendered) si.signalSemaphoreCount = 1, si.pSignalSemaphores = &rendered;
         vkQueueSubmit(queue, 1, &si, s.fence);
         s.pending = true;
         s.serial = ++submitted;
@@ -1287,6 +1656,7 @@ struct VulkanRenderer::Impl {
         if (!device) return;
         if (std::getenv("RUNTIME_VK_DEBUG")) std::fprintf(stderr, "render parts: textures %.1f s, surfaces %.1f s\n", part[0], part[1]);
         vkDeviceWaitIdle(device);
+        drop_present();
         for (auto &s : surfaces) destroy(s->image), destroy(s->as_color);
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
@@ -1324,8 +1694,8 @@ struct VulkanRenderer::Impl {
     }
 };
 
-VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache)
-    : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache))) {
+VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache, const PresentTarget *target)
+    : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache), target)) {
     if (!impl_->init()) return;
     // the CPU's accesses to what was drawn bring it down first (memory's guards)
     memory.gpu_sync = [this, &memory](uint32_t vaddr, uint32_t size, bool write) {
@@ -1343,6 +1713,18 @@ VulkanRenderer::~VulkanRenderer() {
 }
 
 bool VulkanRenderer::ready() const { return impl_->device != VK_NULL_HANDLE; }
+
+bool VulkanRenderer::presents() const { return ready() && impl_->presents(); }
+
+VulkanHandles VulkanRenderer::handles() const {
+    return {impl_->instance, impl_->physical, impl_->device, impl_->family, impl_->queue, impl_->swap_format,
+            uint32_t(impl_->swap_images.size())};
+}
+
+bool VulkanRenderer::present(const ScreenView *screens, int count, bool smooth, bool vsync,
+                             const std::function<void(VkCommandBuffer)> &overlay) {
+    return ready() && impl_->present(screens, count, smooth, vsync, overlay);
+}
 
 namespace {
 using clock = std::chrono::steady_clock;
