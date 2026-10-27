@@ -254,6 +254,12 @@ int main(int argc, char **argv) {
                     (unsigned long long)f[pica::Pica::USES_FOG], (unsigned long long)f[pica::Pica::USES_GAS],
                     (unsigned long long)f[pica::Pica::USES_SHADOW], (unsigned long long)f[pica::Pica::USES_PROCTEX],
                     (unsigned long long)f[pica::Pica::USES_LOGIC_OP], (unsigned long long)pica_gpu->draws);
+        std::printf("draws using a geometry shader %llu, mipmaps %llu, a cube map %llu, a shadow texture %llu, a projected "
+                    "texture %llu, the scissor cutting (inside) %llu, (outside) %llu\n",
+                    (unsigned long long)f[pica::Pica::USES_GEOMETRY], (unsigned long long)f[pica::Pica::USES_MIPMAP],
+                    (unsigned long long)f[pica::Pica::USES_CUBE], (unsigned long long)f[pica::Pica::USES_SHADOW_TEXTURE],
+                    (unsigned long long)f[pica::Pica::USES_PROJECTION], (unsigned long long)f[pica::Pica::USES_SCISSOR],
+                    (unsigned long long)f[pica::Pica::USES_SCISSOR_OUTSIDE]);
     }
     {
         int peak = 0;
@@ -274,6 +280,7 @@ int main(int argc, char **argv) {
         std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
                     (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
                     (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
+        std::printf("vulkan: %llu draws refused (a geometry shader)\n", (unsigned long long)vulkan->refused);
         std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s\n", vulkan->time_vertices, vulkan->time_render, vulkan->time_sync);
         std::printf("vulkan pipelines: %llu made in %.3f s\n", (unsigned long long)vulkan->pipelines, vulkan->time_pipelines);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],

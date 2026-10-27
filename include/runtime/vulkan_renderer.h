@@ -81,6 +81,8 @@ public:
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
+    // draws the vertex stage cannot do yet (a geometry shader), not drawn
+    uint64_t refused = 0;
     // pipelines made this run, and the seconds the driver took making them
     uint64_t pipelines = 0;
     double time_pipelines = 0;
