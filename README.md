@@ -21,6 +21,7 @@ renderer, at full speed on a desktop GPU.
 | Memory: FCRAM regions, VRAM, page tables, the memory syscalls, guards over what the GPU drew | `memory.h`, `src/memory.cpp` | done |
 | The run loop: cooperative threads on one host thread, a virtual clock for reproducible runs | `system.h`, `src/system.cpp` | done |
 | ARM/Thumb/VFPv2 interpreter, for code the C does not have | `interpreter.h` | done |
+| The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`) | `decomp.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
 | Services: srv, APT, cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h` | what USUM uses |
 | Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer | `audio.h`, `src/audio.cpp` | done; AAC (X/Y's music) not yet |
 | Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | first pixels to the field; lighting next ([plan](docs/vulkan-renderer.md)) |
@@ -57,7 +58,9 @@ build/player <exheader.bin> <code.bin> <recompiled library> <game .3ds> <update 
 
 Settings live in `%APPDATA%\runtime\config.toml` (or the platform's own
 place); F1 opens the overlay, F11 switches fullscreen. `RUNTIME_STATS=1`
-prints where each second went.
+prints where each second went. `decomp` in `[game]` (the launcher's
+"Decomp folder") runs the decomp's C in place of the functions it
+replaces, with a library recompiled with it (`docs/tools.md`, "The decomp").
 
 `build/boot` runs a game without a window, for measuring and checking:
 `docs/tools.md` lists what it takes, and `tools/compare.py`, which runs a

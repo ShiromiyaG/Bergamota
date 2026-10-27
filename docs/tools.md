@@ -24,8 +24,35 @@ gives the same run, and it never sleeps, so it runs as fast as the host can.
 | `RUNTIME_SHOT_EVERY=n` | every n frames (100) |
 | `RUNTIME_USAGE=file` | the service commands asked for, as Zakuro's `ZAKURO_USAGE` writes them |
 | `RUNTIME_RENDERER=native` | the runtime's Vulkan renderer; `sketch` draws wireframes of the vertex stage on the CPU instead; unset, Zakuro's |
+| `RUNTIME_DECOMP=folder` | the decomp (`decomp.bin`, `decomp.txt`, from decomp-tools' `build.py`) in place of the functions it replaces; the library has to be built with it, see below |
 
 Always point it at a copy of the saves: the game writes to them.
+
+## The decomp
+
+The decomp's C runs in place of the game's functions it replaces, and
+3dsrecomp's C does the rest. Both come from the same two files:
+
+```sh
+python -I decomp-tools/decomp/build.py              # -> <project>/build/decomp
+3dsrecomp build <game .3ds> <dir> --mods <update unpacked> --decomp <project>/build/decomp
+RUNTIME_DECOMP=<project>/build/decomp build/boot <exheader.bin> <code.bin> <dir>/<program id>.dll ...
+```
+
+`3dsrecomp --decomp` writes a jump over each replaced function of the
+executable before recompiling it, and recompiles the decomp as a module of
+its own, `decomp`. The runtime writes the same jumps when it loads the code
+and maps the decomp at its base. A module's functions are hooked as the
+module loads: the decomp's addresses in it are written to their slots, the
+jumps over the functions it replaces, and then the module's code is checked
+against what was recompiled (`recomp_origins`). The hooked functions no
+longer match, so the code skips them, the interpreter runs the jump, and
+the decomp's recompiled code takes over. The player reads the folder from
+`decomp` in `[game]`.
+
+The same check finds anything else that changed since the library was made
+(a mod, another update): what changed runs in the interpreter, and `boot`
+says how many functions did.
 
 ## `tools/compare.py`
 
