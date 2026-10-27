@@ -23,6 +23,7 @@
 #include "runtime/system.h"
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_vulkan.h>
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
@@ -67,6 +68,12 @@ struct Bindings {
             pad[i] = p == s.pad.end() ? SDL_GAMEPAD_BUTTON_INVALID : SDL_GetGamepadButtonFromString(p->second.c_str());
         }
     }
+};
+
+// where the screens go in the window: the top left of their 400 by 480 (or
+// 240, the top one alone) and the scale, in the window's pixels
+struct Letterbox {
+    float x, y, scale;
 };
 
 int fail(const std::string &message) {
@@ -136,10 +143,35 @@ int main(int argc, char **argv) {
     std::unique_ptr<pica::Pica> pica_gpu;
     std::unique_ptr<VulkanRenderer> vulkan;
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
+    // the runtime's renderer shows the screens in the window itself, with
+    // the overlay over them; otherwise (Zakuro's, or no window for Vulkan)
+    // they go through the SDL renderer as pictures
+    bool direct = false;
     if (settings.video.renderer != "zakuro") {
+        // a window made for Vulkan in place of the launcher's, whose SDL
+        // renderer goes
+        frontend::ui_drop_backend();
+        SDL_DestroyRenderer(renderer);
+        renderer = nullptr;
+        int ww = 400 * SCALE, wh = 480 * SCALE;
+        SDL_GetWindowSize(window, &ww, &wh);
+        SDL_DestroyWindow(window);
+        window = SDL_CreateWindow("runtime", ww, wh, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        if (!window) return fail(std::string("SDL: ") + SDL_GetError());
+        PresentTarget target;
+        Uint32 count = 0;
+        if (const char *const *names = SDL_Vulkan_GetInstanceExtensions(&count)) target.instance_extensions.assign(names, names + count);
+        target.make_surface = [&](VkInstance instance) {
+            VkSurfaceKHR surface = VK_NULL_HANDLE;
+            if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface)) std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
+            return surface;
+        };
         pica_gpu = std::make_unique<pica::Pica>(system.memory);
         // the compiled pipelines kept beside the settings, between runs
-        vulkan = std::make_unique<VulkanRenderer>(system.memory, frontend::utf8(config_file.parent_path() / "pipelines.bin"));
+        // RUNTIME_NO_PRESENT: the screens read back and shown by the SDL renderer, as before
+        const PresentTarget *shown_in = SDL_getenv("RUNTIME_NO_PRESENT") ? nullptr : &target;
+        vulkan = std::make_unique<VulkanRenderer>(system.memory, frontend::utf8(config_file.parent_path() / "pipelines.bin"), shown_in);
+        direct = vulkan->presents() && frontend::ui_on_vulkan(window, vulkan->handles());
         if (vulkan->ready()) {
             pica_gpu->backend = vulkan.get();
             handlers.gpu = pica_gpu.get();
@@ -157,10 +189,18 @@ int main(int argc, char **argv) {
         gpu = {[&](uint32_t s) { return zakuro_gpu->screen(s); }, [&] { return zakuro_gpu->busy; }};
         std::printf("drawing with Zakuro's renderer\n");
     }
+    if (direct) {
+        std::printf("showing the screens straight from the GPU\n");
+    } else if (!renderer) {
+        // the pictures through the SDL renderer, on the window made for Vulkan
+        renderer = SDL_CreateRenderer(window, nullptr);
+        if (!renderer) return fail(std::string("SDL: ") + SDL_GetError());
+        frontend::ui_on_renderer(window, renderer);
+    }
 
     SDL_Texture *screens[2] = {
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240),
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240),
+        renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240) : nullptr,
+        renderer ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240) : nullptr,
     };
     SDL_Gamepad *gamepad = nullptr;
     // the DSP's frames as they come, at its own rate; SDL resamples
@@ -174,16 +214,25 @@ int main(int argc, char **argv) {
     auto apply = [&] {
         bindings.resolve(settings);
         SDL_SetWindowFullscreen(window, settings.video.fullscreen);
-        SDL_SetRenderVSync(renderer, settings.video.vsync ? 1 : 0);
-        for (SDL_Texture *t : screens) {
-            SDL_SetTextureScaleMode(t, settings.video.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-        }
         both = settings.video.layout != "top";
-        SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        // shown directly, vsync and the filter go with each frame (present)
+        if (renderer) {
+            SDL_SetRenderVSync(renderer, settings.video.vsync ? 1 : 0);
+            for (SDL_Texture *t : screens) {
+                SDL_SetTextureScaleMode(t, settings.video.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
+            }
+            SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
+        }
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
     };
     apply();
     frontend::Overlay overlay;
+    auto letterbox = [&] {
+        int w = 0, h = 0;
+        SDL_GetWindowSizeInPixels(window, &w, &h);
+        float high = both ? 480.0f : 240.0f, scale = std::min(w / 400.0f, h / high);
+        return Letterbox{(w - 400 * scale) / 2, (h - high * scale) / 2, scale};
+    };
 
     bool quit = false;
     const bool print_stats = SDL_getenv("RUNTIME_STATS") != nullptr;
@@ -240,9 +289,17 @@ int main(int argc, char **argv) {
                 if (std::abs(gx) > std::abs(cx)) cx = gx;
                 if (std::abs(gy) > std::abs(cy)) cy = gy;
             }
-            // the mouse on the bottom screen is the stylus
+            // the mouse on the bottom screen is the stylus, in the screens'
+            // own pixels (400 across, 480 down for both)
             SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
-            SDL_RenderCoordinatesFromWindow(renderer, mx, my, &mx, &my);
+            if (renderer) {
+                SDL_RenderCoordinatesFromWindow(renderer, mx, my, &mx, &my);
+            } else {
+                Letterbox box = letterbox();
+                float density = SDL_GetWindowPixelDensity(window);
+                mx = (mx * density - box.x) / box.scale;
+                my = (my * density - box.y) / box.scale;
+            }
             touching = both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 40 && mx < 360;
         }
         handlers.input.buttons = buttons;
@@ -251,6 +308,27 @@ int main(int argc, char **argv) {
         handlers.input.touch.reset();
         if (touching) handlers.input.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
 
+        // shown straight from the GPU: the screens where the letterbox puts
+        // them, the overlay over them, at the window's own size
+        if (direct) {
+            auto drawing = std::chrono::steady_clock::now();
+            Letterbox box = letterbox();
+            ScreenView views[2];
+            for (uint32_t s = 0; s < 2; s++) {
+                const auto &lcd = pica_gpu->screens[s];
+                views[s] = {lcd.address, lcd.stride, lcd.format, box.x + (s ? 40 : 0) * box.scale, box.y + (s ? 240 : 0) * box.scale,
+                            (s ? 320 : 400) * box.scale, 240 * box.scale};
+            }
+            frontend::ui_new_frame();
+            ImGui::NewFrame();
+            bool changed = false;
+            overlay.draw(settings, stats, config_file, changed);
+            ImGui::Render();
+            vulkan->present(views, both ? 2 : 1, settings.video.smooth, settings.video.vsync,
+                            [](VkCommandBuffer cmd) { frontend::ui_draw_vulkan(cmd); });
+            screens_ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawing).count();
+            if (changed) apply();
+        } else {
         // the screens
         auto drawing = std::chrono::steady_clock::now();
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -267,8 +345,7 @@ int main(int argc, char **argv) {
         screens_ms += std::chrono::duration<double, std::milli>(taken - drawing).count();
         send_ms += std::chrono::duration<double, std::milli>(sent - taken).count();
         // the overlay over them, at the window's own size
-        ImGui_ImplSDLRenderer3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
+        frontend::ui_new_frame();
         ImGui::NewFrame();
         bool changed = false;
         overlay.draw(settings, stats, config_file, changed);
@@ -278,6 +355,7 @@ int main(int argc, char **argv) {
         SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
         SDL_RenderPresent(renderer);
         if (changed) apply();
+        }
 
         // how the second went
         auto done = std::chrono::steady_clock::now();
@@ -303,7 +381,12 @@ int main(int argc, char **argv) {
     });
     if (!system.error().empty()) std::fprintf(stderr, "stopped: %s\n", system.error().c_str());
     frontend::save(config_file, settings, error);
+    // the overlay's Vulkan objects go once the GPU is done with them, the
+    // renderer (and the window's surface) before the window
+    if (vulkan) vkDeviceWaitIdle(vulkan->handles().device);
     frontend::ui_shutdown();
+    if (pica_gpu) pica_gpu->backend = nullptr;
+    vulkan.reset();
     SDL_Quit();
     return 0;
 }
