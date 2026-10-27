@@ -36,8 +36,11 @@ layout(std140, set = 0, binding = 2) uniform Lighting {
 } l;
 // the 24 tables, each entry a value and the step to the next
 layout(std430, set = 0, binding = 3) readonly buffer Tables { vec2 entries[]; } t;
-// where the fog's table starts in it, after the 24 lighting tables
-const int FOG_TABLE = 24 * 256;
+// where the fog's table starts in it, after the 24 lighting tables; then
+// the procedural texture's: three maps of 128, the colors and their steps
+// (256 each, two entries a color)
+const int FOG_TABLE = 24 * 256, PROCTEX_MAPS = FOG_TABLE + 128, PROCTEX_COLORS = PROCTEX_MAPS + 3 * 128,
+          PROCTEX_STEPS = PROCTEX_COLORS + 2 * 256;
 const int D0 = 0, D1 = 1, FRESNEL = 3, REFLECT_BLUE = 4, REFLECT_GREEN = 5, REFLECT_RED = 6, SPOTLIGHT = 8, DISTANCE = 16;
 const int LOOKUP_D0 = 0, LOOKUP_D1 = 1, LOOKUP_FRESNEL = 2, LOOKUP_RED = 3, LOOKUP_GREEN = 4, LOOKUP_BLUE = 5, LOOKUP_SPOT = 6;
 
@@ -174,7 +177,7 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, SCISSOR = 41;
+          FOG_COLOR = 40, SCISSOR = 41, PROCTEX = 44;
 // TEV_UPDATE (0x0E0) also holds the fog's mode, bits 0-2, 5 for fog, and its
 // depth taken from the far end, bit 16
 
@@ -193,6 +196,122 @@ vec4 texel(int unit, vec2 uv) {
         return unpack(reg(TEX_BORDER + unit));
     }
     return sampled;
+}
+
+// The procedural texture, texture 3: made up per fragment from its
+// coordinates, a noise and the tables. The twin of tables.cpp's
+// proctex_sample, after Zakuro's proctex.rs (Rust, MIT, Copyright (c) 2026
+// fearkov; see LICENSE-zakuro).
+float proctex_lookup(int map, float coordinate) {
+    float at = coordinate * 128.0;
+    int entry = min(int(max(at, 0.0)), 127);
+    vec2 e = t.entries[PROCTEX_MAPS + map * 128 + entry];
+    return e.x + (at - float(entry)) * e.y;
+}
+
+float proctex_random(uint x, uint y) {
+    const uint ROWS[16] = uint[16](0u, 4u, 10u, 8u, 4u, 9u, 7u, 12u, 5u, 15u, 13u, 14u, 11u, 15u, 2u, 11u);
+    const uint MIX[16] = uint[16](10u, 2u, 15u, 8u, 0u, 7u, 4u, 5u, 5u, 13u, 2u, 6u, 13u, 9u, 3u, 14u);
+    uint u = (((x % 9u + 2u) * 3u) & 0xFu) ^ ROWS[(x / 9u) & 0xFu];
+    uint v = (((y % 9u + 2u) * 3u) & 0xFu) ^ ROWS[(y / 9u) & 0xFu];
+    if ((u & 3u) == 1u) v += 4u;
+    v ^= (u & 1u) * 6u;
+    v += 10u + u;
+    v &= 0xFu;
+    v ^= MIX[u];
+    return -1.0 + float(v) * 2.0 / 15.0;
+}
+
+float proctex_shift(float other, uint mode, uint wrap) {
+    float amount = wrap == 3u ? 1.0 : 0.5;
+    int o = int(other);
+    if (mode == 1u) return amount * float((o / 2) % 2);
+    if (mode == 2u) return amount * float(((o + 1) / 2) % 2);
+    return 0.0;
+}
+
+float proctex_wrap(float c, uint mode) {
+    switch (mode) {
+    case 0u: return c > 1.0 ? 0.0 : c;
+    case 1u: return min(c, 1.0);
+    case 2u: return c - floor(c);
+    case 3u: {
+        int whole = int(c);
+        float part = c - float(whole);
+        return whole % 2 == 0 ? part : 1.0 - part;
+    }
+    case 4u: return c <= 0.5 ? 0.0 : 1.0;
+    default: return clamp(c, 0.0, 1.0);
+    }
+}
+
+float proctex_combine(float u, float v, uint function) {
+    float length = sqrt(u * u + v * v);
+    switch (function) {
+    case 0u: return u;
+    case 1u: return u * u;
+    case 2u: return v;
+    case 3u: return v * v;
+    case 4u: return (u + v) * 0.5;
+    case 5u: return (u * u + v * v) * 0.5;
+    case 6u: return min(length, 1.0);
+    case 7u: return min(u, v);
+    case 8u: return max(u, v);
+    case 9u: return min(((u + v) * 0.5 + length) * 0.5, 1.0);
+    default: return 0.0;
+    }
+}
+
+// a 16-bit float as Zakuro reads it (an exponent of 31 a number too)
+float proctex_half(uint h) {
+    float sign = (h & 0x8000u) != 0u ? -1.0 : 1.0;
+    int exponent = int((h >> 10) & 0x1Fu);
+    float mantissa = float(h & 0x3FFu) / 1024.0;
+    return exponent != 0 ? sign * (1.0 + mantissa) * exp2(float(exponent - 15)) : sign * mantissa * exp2(-14.0);
+}
+
+vec4 proctex(vec2 uv) {
+    uint config = reg(PROCTEX), noise_u = reg(PROCTEX + 1), noise_v = reg(PROCTEX + 2);
+    uint frequency = reg(PROCTEX + 3), lut = reg(PROCTEX + 4), offset = reg(PROCTEX + 5);
+    uint wrap_u = config & 7u, wrap_v = (config >> 3) & 7u;
+    float u = abs(uv.x), v = abs(uv.y);
+    // the shifts come from the coordinates before the noise moves them
+    float shift_u = proctex_shift(v, (config >> 16) & 3u, wrap_u), shift_v = proctex_shift(u, (config >> 18) & 3u, wrap_v);
+    if ((config & (1u << 15)) != 0u) {
+        float x = 9.0 * proctex_half(frequency & 0xFFFFu) * abs(u + float(noise_u >> 16) / 4096.0);
+        float y = 9.0 * proctex_half(frequency >> 16) * abs(v + float(noise_v >> 16) / 4096.0);
+        uint xi = uint(max(x, 0.0)), yi = uint(max(y, 0.0));
+        float xf = x - float(xi), yf = y - float(yi);
+        float g0 = proctex_random(xi, yi) * (xf + yf), g1 = proctex_random(xi + 1u, yi) * (xf + yf - 1.0);
+        float g2 = proctex_random(xi, yi + 1u) * (xf + yf - 1.0), g3 = proctex_random(xi + 1u, yi + 1u) * (xf + yf - 2.0);
+        float sx = proctex_lookup(0, xf), sy = proctex_lookup(0, yf); // not s, the state's name
+        float bottom = g0 * (1.0 - sx) + g1 * sx, top = g2 * (1.0 - sx) + g3 * sx;
+        float noise = bottom * (1.0 - sy) + top * sy;
+        // the amplitudes signed 16 bits
+        u = abs(u + noise * float(int(noise_u << 16) >> 16) / 4095.0);
+        v = abs(v + noise * float(int(noise_v << 16) >> 16) / 4095.0);
+    }
+    u = proctex_wrap(u + shift_u, wrap_u);
+    v = proctex_wrap(v + shift_v, wrap_v);
+
+    float coordinate = proctex_lookup(1, proctex_combine(u, v, (config >> 6) & 0xFu));
+    float width = float((lut >> 11) & 0xFFu);
+    float at = float(offset & 0xFFu) + coordinate * max(width - 1.0, 0.0);
+    vec4 color;
+    uint between = lut & 7u; // not filter, a word GLSL keeps
+    if (between == 1u || between == 3u || between == 5u) { // linear, and linear with either kind of mipmap
+        int entry = min(int(max(at, 0.0)), 255);
+        vec4 c = vec4(t.entries[PROCTEX_COLORS + 2 * entry], t.entries[PROCTEX_COLORS + 2 * entry + 1]);
+        vec4 d = vec4(t.entries[PROCTEX_STEPS + 2 * entry], t.entries[PROCTEX_STEPS + 2 * entry + 1]);
+        color = c + (at - float(entry)) * d;
+    } else { // rounded half away from zero, as Rust's; at is held at zero and up first
+        int entry = min(int(max(floor(at + 0.5), 0.0)), 255);
+        color = vec4(t.entries[PROCTEX_COLORS + 2 * entry], t.entries[PROCTEX_COLORS + 2 * entry + 1]);
+    }
+    color = clamp(color / 255.0, 0.0, 1.0);
+    // alpha of its own skips the color table, the map gives it
+    if ((config & (1u << 14)) != 0u) color.a = clamp(proctex_lookup(2, proctex_combine(u, v, (config >> 10) & 0xFu)), 0.0, 1.0);
+    return color;
 }
 
 vec3 color_operand(vec4 v, uint op) {
@@ -279,7 +398,9 @@ void main() {
     tex[0] = texel(0, v_uv0);
     tex[1] = texel(1, v_uv1);
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
-    tex[3] = vec4(0.0); // procedural textures: not yet
+    // texture 3 on (bit 10), its coordinates by bits 8-9
+    uint units = reg(TEX_CONFIG), coordinates = min((units >> 8) & 3u, 2u);
+    tex[3] = (units & (1u << 10)) != 0u ? proctex(coordinates == 0u ? v_uv0 : coordinates == 1u ? v_uv1 : v_uv2) : vec4(0.0);
     vec4 primary = v_color;
     // without lighting the primary fragment color is the vertex's, and
     // there is no specular term

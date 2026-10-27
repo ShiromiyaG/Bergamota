@@ -145,11 +145,21 @@ software rasterizer, 1.6% of pixels off by more than 16.
      viewport's and at the scale (pica_scissor); USUM's frames stay the
      same;
    - cube maps, shadow textures, projected textures, the scissor keeping the
-     outside, procedural textures, the shadow mode and gas: none.
+     outside, procedural textures, the shadow mode and gas: none (the
+     procedural texture counted by its own bit, 10 of the texture
+     configuration, from part E on: still none).
 
-   Next, in that order: the geometry shader, mipmaps, the scissor, then
-   what no USUM draw uses (unit 0's types, procedural textures, the shadow
-   mode, gas), for the other ports.
+   What no USUM draw uses is checked by `render_test`: a quad drawn by the
+   renderer into a buffer, read back, each pixel against the CPU's own
+   reading of the same registers.
+
+   - the procedural texture: done, `proctex()` in pica.frag, its tables
+     in the shader's buffer after the fog's. Its twin on the CPU,
+     `proctex_sample` (tables.cpp), is Zakuro's proctex.rs translated, and
+     gave the same values as Zakuro's to a millionth over four set-ups; the
+     GPU's frames match it to the pixel (4 of them, 47-1,467 colors each).
+
+   Next: unit 0's types, the shadow mode, gas, for the other ports.
 
 Zakuro's renderer (`zakuro-dev/crates/zakuro-gpu`) is the reference for the
 hardware's behaviour; the code here is written anew.
