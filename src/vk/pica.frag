@@ -25,6 +25,9 @@ layout(set = 0, binding = 1) uniform sampler2D textures[3];
 // layers, for the shadow cube's fetches
 layout(set = 0, binding = 4) uniform samplerCube cube;
 layout(set = 0, binding = 5) uniform sampler2DArray faces;
+// the shadow mode's buffer: the color buffer's texels as words (red in the
+// low byte, alpha in the high)
+layout(set = 0, binding = 6, r32ui) uniform coherent uimage2D shadow_buffer;
 
 // the lighting, as LightingBlock in pica_lighting.h lays it out
 struct Light {
@@ -181,7 +184,7 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, SCISSOR = 41, PROCTEX = 44, SHADOW = 50;
+          FOG_COLOR = 40, SCISSOR = 41, PROCTEX = 44, SHADOW = 50, PENUMBRA = 51, SHADOW_MODE = 52;
 // TEV_UPDATE (0x0E0) also holds the fog's mode, bits 0-2, 5 for fog, and its
 // depth taken from the far end, bit 16
 
@@ -462,6 +465,41 @@ bool compare(uint func, float a, float b) {
     }
 }
 
+// The shadow mode, as Citra worked it out (written anew): each pixel of
+// the color buffer a depth (red, green, blue: 24 bits) and a penumbra
+// (alpha). A fragment nearer than what is there with no penumbra of its own
+// (its green) puts its depth; with one, that penumbra scaled by the bias
+// (0x130) as the penumbra, when it is less. Atomically, as fragments of one
+// draw meet at a pixel.
+uint shadow_word(uint depth, uint penumbra) {
+    return (depth >> 16 & 0xFFu) | (depth >> 8 & 0xFFu) << 8 | (depth & 0xFFu) << 16 | penumbra << 24;
+}
+
+uint shadow_update(uint word, uint d, uint s) {
+    uint depth = (word & 0xFFu) << 16 | (word >> 8 & 0xFFu) << 8 | (word >> 16 & 0xFFu), penumbra = word >> 24;
+    if (d < depth) {
+        if (s == 0u) {
+            depth = d;
+        } else {
+            uint bias = reg(PENUMBRA);
+            float scaled = float(s) / (proctex_half(bias & 0xFFFFu) + proctex_half(bias >> 16) * float(d) / float(depth));
+            penumbra = min(uint(clamp(scaled, 0.0, 255.0)), penumbra);
+        }
+    }
+    return shadow_word(depth, penumbra);
+}
+
+void shadow_write(vec4 color) {
+    float depth = s.depth.z != 0.0 ? clamp(v_depth / gl_FragCoord.w, 0.0, 1.0) : gl_FragCoord.z;
+    uint d = uint(clamp(depth, 0.0, 1.0) * float(0xFFFFFF)), st = uint(color.g * 255.0);
+    ivec2 at = ivec2(gl_FragCoord.xy);
+    uint word = imageLoad(shadow_buffer, at).x, seen;
+    do {
+        seen = word;
+        word = imageAtomicCompSwap(shadow_buffer, at, seen, shadow_update(seen, d, st));
+    } while (word != seen);
+}
+
 void main() {
     // the scissor keeping the outside of its rectangle (the inside is the
     // pipeline's scissor)
@@ -539,6 +577,11 @@ void main() {
         vec2 entry = t.entries[FOG_TABLE + int(e)];
         float factor = clamp(entry.x + entry.y * (index - e), 0.0, 1.0);
         previous.rgb = factor * previous.rgb + (1.0 - factor) * unpack(reg(FOG_COLOR)).rgb;
+    }
+    if (reg(SHADOW_MODE) != 0u) {
+        shadow_write(previous);
+        out_color = vec4(0.0); // no attachment takes it
+        return;
     }
     out_color = previous;
 }

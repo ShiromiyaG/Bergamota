@@ -53,6 +53,8 @@ struct Rig {
     VulkanRenderer vk{memory};
     // texture 0's w at the left and the right
     float w_left = 1, w_right = 1;
+    // the position's z at the left and the right
+    float z_left = -0.5f, z_right = -0.5f;
 
     Rig() {
         uint32_t vs[] = {mov(0, 0), mov(1, 1), mov(2, 2), END};
@@ -85,7 +87,7 @@ struct Rig {
     std::vector<std::array<uint8_t, 4>> draw(float u0, float v0, float u1, float v1) {
         auto corner = [&](float x, float y) {
             std::array<Vec4, 16> a{};
-            a[0] = {x, y, -0.5f, 1};
+            a[0] = {x, y, z_left + (z_right - z_left) * (x + 1) / 2, 1};
             float u = u0 + (u1 - u0) * (x + 1) / 2, v = v0 + (v1 - v0) * (y + 1) / 2;
             a[1] = {u, v, u, v};
             a[2] = {w_left + (w_right - w_left) * (x + 1) / 2, 0, 0, 0};
@@ -419,6 +421,114 @@ void unit0_types(Rig &rig) {
     r[TEXTURE_CONFIG] = 0;
 }
 
+// a 16-bit float (1.5.10)
+float half(uint32_t h) {
+    float sign = h & 0x8000 ? -1.0f : 1.0f, mantissa = float(h & 0x3FF) / 1024.0f;
+    int32_t exponent = int32_t((h >> 10) & 0x1F);
+    return exponent ? sign * (1 + mantissa) * std::ldexp(1.0f, exponent - 15) : sign * mantissa * std::ldexp(1.0f, -14);
+}
+
+// the shadow mode, as Citra worked it out: a pixel's word in memory is its
+// depth (24 bits) above its penumbra (8); a fragment nearer than the depth
+// with no penumbra of its own puts its depth, with one puts that penumbra
+// scaled by the bias, when less
+uint32_t shadow_update(uint32_t word, uint32_t d, uint32_t s, uint32_t bias) {
+    uint32_t depth = word >> 8, penumbra = word & 0xFF;
+    if (d < depth) {
+        if (!s) depth = d;
+        else {
+            float scaled = float(s) / (half(bias & 0xFFFF) + half(bias >> 16) * float(d) / float(depth));
+            penumbra = std::min(uint32_t(std::clamp(scaled, 0.0f, 255.0f)), penumbra);
+        }
+    }
+    return depth << 8 | penumbra;
+}
+
+// a buffer of known words, then a quad over it nearer at its left twice:
+// with no penumbra (a constant color), then texture 0's green as one
+void shadow_mode(Rig &rig) {
+    Pica &p = rig.p;
+    auto &r = p.regs;
+    constexpr uint32_t W = Rig::W, H = Rig::H;
+    uint8_t *fb = rig.memory.host(Rig::AT, W * H * 4);
+    std::vector<uint32_t> want(W * H);
+    uint32_t seed = 7;
+    for (uint32_t y = 0; y < H; y++) {
+        for (uint32_t x = 0; x < W; x++) {
+            seed ^= seed << 13, seed ^= seed >> 17, seed ^= seed << 5;
+            uint32_t word = seed, at = tiled_offset(x, y, W, 4);
+            for (int b = 0; b < 4; b++) fb[at + b] = uint8_t(word >> (b * 8));
+            want[y * W + x] = word;
+        }
+    }
+    rig.vk.sync(Rig::AT, W * H * 4, true); // memory the newer: loaded again
+    std::vector<uint32_t> first = want;
+    r[COLOR_OPERATION] = 3; // the shadow mode
+    r[0x130] = 0x3C00 | 0x3800u << 16; // the penumbra's bias: 1 + 0.5 d / depth
+    r[DEPTH_RANGE] = to_f24(-1.0f), r[DEPTH_NEAR] = 0;
+    r[DEPTHMAP_ENABLE] = 1; // the depth z / w, no w buffer
+    rig.w_left = rig.w_right = 1;
+    // the same texture as unit0_types' (the renderer looks at a texture's
+    // memory again a frame on, and these draws are all in one)
+    Faces faces = fill_faces(rig, 1);
+    r[TEXTURE_CONFIG] = 1;
+    r[0x083] = 0; // 2D, nearest
+    uint64_t refused = rig.vk.refused;
+    uint32_t unsure = 0;
+    std::vector<bool> skip(W * H);
+    for (int pass = 0; pass < 2; pass++) {
+        // the first stage: a constant color with no green, or texture 0, a
+        // little nearer than the first (over the depths it put)
+        r[TEV_STAGES[0]] = pass ? 0x30003 : 0xE000E;
+        rig.z_left = pass ? -0.05f : -0.1f, rig.z_right = pass ? -0.85f : -0.9f;
+        r[TEV_STAGES[0] + 3] = 0xFF0000FF;
+        auto got = rig.draw(0, 0, 1, 1);
+        for (uint32_t y = 0; y < H; y++) {
+            for (uint32_t x = 0; x < W; x++) {
+                float depth = -(rig.z_left + (rig.z_right - rig.z_left) * (x + 0.5f) / W);
+                uint32_t d = uint32_t(depth * float(0xFFFFFF)), &w = want[y * W + x];
+                // a depth all but the one there: either side
+                if (uint32_t(std::abs(int64_t(d) - int64_t(w >> 8))) < 256) skip[y * W + x] = true;
+                uint32_t s = 0;
+                if (pass) {
+                    auto texel = flat(faces, (x + 0.5f) / W, (H - 1 - y + 0.5f) / H);
+                    s = uint32_t(texel[1] * 255.0f);
+                }
+                w = shadow_update(w, d, s, r[0x130]);
+            }
+        }
+        (void)got;
+    }
+    // the words back, against the CPU's: depths within a few steps (the
+    // fragment's interpolated), penumbras within one
+    const uint8_t *bytes = rig.memory.host(Rig::AT, W * H * 4);
+    uint32_t off = 0, changed = 0;
+    for (uint32_t y = 0; y < H; y++) {
+        for (uint32_t x = 0; x < W; x++) {
+            if (skip[y * W + x]) {
+                unsure++;
+                continue;
+            }
+            uint32_t at = tiled_offset(x, y, W, 4), have = 0;
+            for (int b = 0; b < 4; b++) have |= uint32_t(bytes[at + b]) << (b * 8);
+            uint32_t w = want[y * W + x];
+            bool same = std::abs(int64_t(have >> 8) - int64_t(w >> 8)) <= 4 && std::abs(int(have & 0xFF) - int(w & 0xFF)) <= 1;
+            changed += have != first[y * W + x];
+            if (!same && off++ < 4)
+                std::printf("  shadow mode (%u, %u): got %06X/%02X, want %06X/%02X\n", x, y, have >> 8, have & 0xFF, w >> 8, w & 0xFF);
+        }
+    }
+    uint32_t total = W * H;
+    std::printf("shadow mode: %u of %u pixels off, %u left out; %u changed by the draws\n", off, total, unsure, changed);
+    CHECK(rig.vk.refused == refused);
+    CHECK(changed * 4 >= total);
+    CHECK(off * 100 <= total);
+    CHECK(unsure * 10 <= total);
+    r[COLOR_OPERATION] = 0;
+    r[TEXTURE_CONFIG] = 0;
+    rig.z_left = rig.z_right = -0.5f;
+}
+
 } // namespace
 
 int main() {
@@ -429,6 +539,7 @@ int main() {
     } else {
         procedural(*rig);
         unit0_types(*rig);
+        shadow_mode(*rig);
     }
     if (failures) {
         std::printf("%d failed\n", failures);

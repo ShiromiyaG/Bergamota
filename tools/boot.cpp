@@ -280,7 +280,7 @@ int main(int argc, char **argv) {
         std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
                     (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
                     (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
-        std::printf("vulkan: %llu draws refused (a geometry shader mode other than 0)\n", (unsigned long long)vulkan->refused);
+        std::printf("vulkan: %llu draws refused (a geometry shader mode other than 0, the shadow mode unable)\n", (unsigned long long)vulkan->refused);
         std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s\n", vulkan->time_vertices, vulkan->time_render, vulkan->time_sync);
         std::printf("vulkan pipelines: %llu made in %.3f s\n", (unsigned long long)vulkan->pipelines, vulkan->time_pipelines);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],

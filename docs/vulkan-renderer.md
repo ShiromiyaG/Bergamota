@@ -171,7 +171,18 @@ software rasterizer, 1.6% of pixels off by more than 16.
      shadow (orthographic, perspective) and shadow cube, all to the pixel
      but the few where a face or a texel's edge is all but tied.
 
-   Next: the shadow mode, gas, for the other ports.
+   - the shadow mode (the output merger's mode 3): done. The color buffer
+     holds a depth (24 bits) and a penumbra (8) a pixel; the fragment
+     shader writes it through a 32-bit view of the buffer's image, in a
+     compare-and-swap loop, in a pass with no color attachment (whose store
+     would undo it): nearer with no penumbra of its own puts its depth, with
+     one puts it scaled by the bias in 0x130 (two 16-bit floats) when less.
+     As Citra worked it out, written anew. A device without fragment
+     atomics refuses these draws (counted). render_test fills a buffer,
+     draws over it twice (no penumbra, then texture 0's green), and the
+     words back match the CPU's reading to the pixel.
+
+   Next: gas, for the other ports.
 
 Zakuro's renderer (`zakuro-dev/crates/zakuro-gpu`) is the reference for the
 hardware's behaviour; the code here is written anew.
