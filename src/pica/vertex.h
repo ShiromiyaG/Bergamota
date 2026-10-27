@@ -25,7 +25,8 @@ class VertexStage {
 public:
     VertexStage();
     // a draw's triangles, three vertices each, from the arrays (or the
-    // index buffer); false for a draw it cannot do (the geometry stage)
+    // index buffer); false for a draw it cannot do (a geometry shader mode
+    // other than 0)
     bool draw(Pica &pica, bool indexed, std::vector<Vertex> &triangles);
     bool draw_immediate(Pica &pica, const std::vector<std::array<Vec4, 16>> &attributes, std::vector<Vertex> &triangles);
 
@@ -36,9 +37,13 @@ private:
     void shade_all(Pica &pica);
     void assemble(Pica &pica, const std::vector<Vertex> &vertices, const std::vector<uint32_t> *order, size_t count,
                   std::vector<Vertex> &triangles);
+    // the vertices gathered through the vertex shader and then the geometry
+    // shader, which makes the triangles
+    bool geometry(Pica &pica, const std::vector<uint32_t> *order, size_t count, std::vector<Vertex> &triangles);
 
-    std::unique_ptr<Program> program_;
-    Runner runner_;
+    std::unique_ptr<Program> program_, geometry_program_;
+    Runner runner_, geometry_runner_;
+    std::vector<std::array<Vec4, 16>> outputs_, emitted_;
     std::unique_ptr<BatchRunner> batch_;
     std::vector<Vertex> shaded_;
     std::vector<std::array<Vec4, 16>> inputs_;

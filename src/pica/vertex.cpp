@@ -10,7 +10,8 @@
 
 namespace runtime::pica {
 
-VertexStage::VertexStage() : program_(std::make_unique<Program>()), batch_(std::make_unique<BatchRunner>()) {}
+VertexStage::VertexStage()
+    : program_(std::make_unique<Program>()), geometry_program_(std::make_unique<Program>()), batch_(std::make_unique<BatchRunner>()) {}
 
 namespace {
 
@@ -110,16 +111,21 @@ void fetch(Memory &m, uint32_t base, const Layout &l, uint32_t index, std::array
 
 } // namespace
 
-// one vertex through the shader, and its outputs to the rasterizer's
-// values: the enabled output registers in order, each component named by
-// the output map
-static void place(const Pica &p, const std::array<Vec4, 16> &output, Vertex &v) {
+// the output registers a unit's mask enables, in order
+static std::array<Vec4, 16> pack(uint32_t mask, const std::array<Vec4, 16> &output) {
+    if (!mask) return output;
     std::array<Vec4, 16> packed{};
-    uint32_t mask = p.regs[VS_BLOCK + OUTPUT_MASK] & 0xFFFF;
-    if (!mask) packed = output;
-    for (uint32_t reg = 0, slot = 0; reg < 16 && mask; reg++) {
+    for (uint32_t reg = 0, slot = 0; reg < 16; reg++) {
         if (mask >> reg & 1) packed[slot++] = output[reg];
     }
+    return packed;
+}
+
+// one vertex through the stage's last shader (block: its registers, for the
+// output mask), and its outputs to the rasterizer's values: the enabled
+// output registers in order, each component named by the output map
+static void place(const Pica &p, uint32_t block, const std::array<Vec4, 16> &output, Vertex &v) {
+    std::array<Vec4, 16> packed = pack(p.regs[block + OUTPUT_MASK] & 0xFFFF, output);
     float values[24] = {};
     values[3] = 1; // w, when nothing says
     uint32_t total = std::min(p.regs[OUTPUT_TOTAL] & 7, 7u);
@@ -147,7 +153,7 @@ static void place(const Pica &p, const std::array<Vec4, 16> &output, Vertex &v) 
 static void shade(const Pica &p, const Program &program, Runner &runner, const std::array<Vec4, 16> &inputs, Vertex &v) {
     runner.input = inputs;
     runner.run(p.vertex_shader, program);
-    place(p, runner.output, v);
+    place(p, VS_BLOCK, runner.output, v);
 }
 
 // BATCH vertices from first on (fewer at the end): together, or one at a
@@ -169,7 +175,7 @@ static void shade_batch(const Pica &p, const Program &program, BatchRunner &batc
         for (int reg = 0; reg < 16; reg++) {
             for (int c = 0; c < 4; c++) o[reg][c] = batch.output[reg][c][l];
         }
-        place(p, o, out[first + l]);
+        place(p, VS_BLOCK, o, out[first + l]);
     }
 }
 
@@ -223,9 +229,45 @@ void VertexStage::assemble(Pica &p, const std::vector<Vertex> &vertices, const s
     }
 }
 
+// After Zakuro's raster.rs geometry_stage: each vertex's outputs (those its
+// mask enables, the first VS_OUTPUT_TOTAL of them) in draw order, as many
+// vertices' as one run takes going into the geometry shader's inputs by its
+// input map; what is left over at the end is dropped. Only mode 0 (that
+// many inputs a run), which is all Zakuro has too.
+bool VertexStage::geometry(Pica &p, const std::vector<uint32_t> *order, size_t count, std::vector<Vertex> &triangles) {
+    if ((p.regs[GS_CONFIG] & 0xFF) != 0) return false;
+    if (geometry_program_->version != p.geometry_shader.version) geometry_program_->decode(p.geometry_shader);
+    uint32_t mask = p.regs[VS_BLOCK + OUTPUT_MASK] & 0xFFFF;
+    outputs_.resize(inputs_.size());
+    shaded += inputs_.size();
+    for (size_t i = 0; i < inputs_.size(); i++) {
+        runner_.input = inputs_[i];
+        runner_.run(p.vertex_shader, *program_);
+        outputs_[i] = pack(mask, runner_.output);
+    }
+    uint32_t per_vertex = (p.regs[VS_OUTPUT_TOTAL] & 0xF) + 1, per_run = (p.regs[GS_BLOCK + INPUT_CONFIG] & 0xF) + 1;
+    uint64_t map = p.regs[GS_BLOCK + INPUT_MAP_LOW] | uint64_t(p.regs[GS_BLOCK + INPUT_MAP_HIGH]) << 32;
+    std::vector<Vec4> pending;
+    emitted_.clear();
+    geometry_runner_.emitted = &emitted_;
+    for (size_t i = 0; i < count; i++) {
+        const auto &o = outputs_[order ? (*order)[i] : i];
+        pending.insert(pending.end(), o.begin(), o.begin() + per_vertex);
+        if (pending.size() < per_run) continue;
+        geometry_runner_.input = {};
+        for (uint32_t id = 0; id < per_run; id++) geometry_runner_.input[(map >> (id * 4)) & 0xF] = pending[id];
+        geometry_runner_.run(p.geometry_shader, *geometry_program_);
+        pending.clear();
+    }
+    geometry_runner_.emitted = nullptr;
+    triangles.resize(emitted_.size());
+    for (size_t i = 0; i < emitted_.size(); i++) place(p, GS_BLOCK, emitted_[i], triangles[i]);
+    return true;
+}
+
 bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
     triangles.clear();
-    if ((p.regs[GEOSTAGE_CONFIG] & 3) == 2) return false; // a geometry shader: not yet
+    bool geometry_on = (p.regs[GEOSTAGE_CONFIG] & 3) == 2;
     uint32_t count = p.regs[VERTEX_COUNT], first = p.regs[VERTEX_OFFSET];
     if (!count || count > 0x10000) return true;
     if (program_->version != p.vertex_shader.version) program_->decode(p.vertex_shader);
@@ -251,11 +293,13 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
             }
             order_[i] = seen_[index * 2 + 1];
         }
+        if (geometry_on) return geometry(p, &order_, count, triangles);
         shade_all(p);
         assemble(p, shaded_, &order_, count, triangles);
     } else {
         inputs_.resize(count);
         for (uint32_t i = 0; i < count; i++) fetch(p.memory, base, l, first + i, inputs_[i]);
+        if (geometry_on) return geometry(p, nullptr, count, triangles);
         shade_all(p);
         assemble(p, shaded_, nullptr, count, triangles);
     }
@@ -264,7 +308,6 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
 
 bool VertexStage::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>> &attributes, std::vector<Vertex> &triangles) {
     triangles.clear();
-    if ((p.regs[GEOSTAGE_CONFIG] & 3) == 2) return false;
     if (program_->version != p.vertex_shader.version) program_->decode(p.vertex_shader);
     uint64_t map = p.regs[VS_BLOCK + INPUT_MAP_LOW] | uint64_t(p.regs[VS_BLOCK + INPUT_MAP_HIGH]) << 32;
     uint32_t count = (p.regs[VS_ATTRIBUTE_COUNT] & 0xF) + 1;
@@ -272,6 +315,7 @@ bool VertexStage::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>
     for (size_t v = 0; v < attributes.size(); v++) {
         for (uint32_t id = 0; id < count && id < 16; id++) inputs_[v][(map >> (id * 4)) & 0xF] = attributes[v][id];
     }
+    if ((p.regs[GEOSTAGE_CONFIG] & 3) == 2) return geometry(p, nullptr, inputs_.size(), triangles);
     shade_all(p);
     assemble(p, shaded_, nullptr, shaded_.size(), triangles);
     return true;

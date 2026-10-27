@@ -31,10 +31,12 @@ struct Program {
     void decode(const ShaderUnit &unit);
 };
 
-// one vertex through a program
+// one vertex through a program; as the geometry shader, with emitted set,
+// the triangles it emits: three output sets each, in order
 class Runner {
 public:
     std::array<Vec4, 16> input{}, output{};
+    std::vector<std::array<Vec4, 16>> *emitted = nullptr;
     void run(const ShaderUnit &unit, const Program &program);
 
 private:
@@ -53,6 +55,11 @@ private:
     int32_t address_[3]{};
     bool cond_[2]{};
     std::vector<Block> blocks_;
+    // the geometry shader's: the vertices set aside (SETEMIT picks the
+    // next one's slot, and whether it ends a triangle, turned round or not)
+    std::array<std::array<Vec4, 16>, 3> slots_{};
+    uint32_t slot_ = 0;
+    bool primitive_ = false, winding_ = false;
 };
 
 // the same over BATCH vertices at once (batch.cpp): registers by component

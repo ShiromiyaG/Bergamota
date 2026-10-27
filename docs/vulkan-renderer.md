@@ -124,8 +124,12 @@ software rasterizer, 1.6% of pixels off by more than 16.
    recordings (the intro to the field, 845 thousand draws of gameplay, a
    battle):
    - a geometry shader: 2,782 of a battle's 451 thousand draws (none
-     elsewhere), which the renderer dropped without a word; now counted as
-     refused;
+     elsewhere), which the renderer dropped without a word. Done: run on
+     the CPU after the vertex shader (mode 0, as Zakuro; another mode is
+     counted as refused), SETEMIT's bit 22 turning a triangle round as
+     Citra has it. The battle's are a particle system whose vertex shader
+     finds every particle past its life, so the geometry shader emits
+     nothing there and the frames stay the same;
    - textures with mipmap levels: 9-34% of the draws, sampled at level 0
      only;
    - the scissor test: on in every draw, keeping the screen's 240×400 (or
