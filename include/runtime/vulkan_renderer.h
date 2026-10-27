@@ -17,7 +17,9 @@ int vk_logic_op(uint32_t pica_op);
 
 class VulkanRenderer : public pica::Backend {
 public:
-    explicit VulkanRenderer(Memory &memory);
+    // pipeline_cache: a file the compiled pipelines are kept in between runs
+    // (none: they are compiled anew each run)
+    explicit VulkanRenderer(Memory &memory, std::string pipeline_cache = {});
     ~VulkanRenderer() override;
     // false when there is no Vulkan 1.3 device; error says why
     bool ready() const;
@@ -33,6 +35,9 @@ public:
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
+    // pipelines made this run, and the seconds the driver took making them
+    uint64_t pipelines = 0;
+    double time_pipelines = 0;
     // where the time went, in seconds: the vertex stage, recording draws, syncs
     double time_vertices = 0, time_render = 0, time_sync = 0;
     // write-backs by cause: the CPU (guards), the front end, a fill, a texture

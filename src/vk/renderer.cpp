@@ -18,6 +18,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <unordered_map>
 
@@ -196,7 +199,53 @@ struct VulkanRenderer::Impl {
     pica::ShaderTables shader_tables{}; // lighting's, fog's
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
-    Impl(VulkanRenderer &s, Memory &m) : self(s), memory(m) {}
+    Impl(VulkanRenderer &s, Memory &m, std::string cache) : self(s), memory(m), cache_path(std::move(cache)) {}
+
+    // the pipelines compiled in earlier runs, from cache_path; the driver
+    // takes what it can use (its own, for this device and version) and
+    // ignores the rest
+    std::string cache_path;
+    VkPipelineCache cache = VK_NULL_HANDLE;
+    uint64_t saved_at = 0; // pipelines made when the cache was last written
+
+    void load_cache() {
+        std::vector<char> data;
+        if (!cache_path.empty()) {
+            std::ifstream in(std::filesystem::path(std::u8string(cache_path.begin(), cache_path.end())), std::ios::binary);
+            data.assign(std::istreambuf_iterator<char>(in), {});
+        }
+        VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        ci.initialDataSize = data.size();
+        ci.pInitialData = data.empty() ? nullptr : data.data();
+        if (vkCreatePipelineCache(device, &ci, nullptr, &cache) != VK_SUCCESS && !data.empty()) {
+            std::fprintf(stderr, "vulkan: the pipeline cache in %s is not usable, starting a new one\n", cache_path.c_str());
+            ci.initialDataSize = 0;
+            ci.pInitialData = nullptr;
+            vkCreatePipelineCache(device, &ci, nullptr, &cache);
+        }
+    }
+
+    // writes the cache out, beside and then over the old file, so a run cut
+    // short leaves a whole one
+    void save_cache() {
+        if (cache_path.empty() || !cache) return;
+        size_t size = 0;
+        vkGetPipelineCacheData(device, cache, &size, nullptr);
+        std::vector<char> data(size);
+        if (vkGetPipelineCacheData(device, cache, &size, data.data()) != VK_SUCCESS) return;
+        std::filesystem::path path(std::u8string(cache_path.begin(), cache_path.end())), part = path;
+        part += ".part";
+        std::error_code ec;
+        std::filesystem::create_directories(path.parent_path(), ec);
+        {
+            std::ofstream out(part, std::ios::binary | std::ios::trunc);
+            out.write(data.data(), std::streamsize(size));
+            if (!out) return;
+        }
+        std::filesystem::rename(part, path, ec);
+        if (ec) std::fprintf(stderr, "vulkan: could not write the pipeline cache to %s\n", cache_path.c_str());
+        saved_at = self.pipelines;
+    }
 
     bool fail(const char *what, VkResult r) {
         self.error = std::string(what) + " failed (" + std::to_string(int(r)) + ")";
@@ -291,6 +340,7 @@ struct VulkanRenderer::Impl {
             device = VK_NULL_HANDLE;
             return false;
         }
+        load_cache();
 
         VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -357,7 +407,7 @@ struct VulkanRenderer::Impl {
         VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
         cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_COMPUTE_BIT, depth_module, "main", nullptr};
         cpi.layout = depth_layout;
-        vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi, nullptr, &depth_pipeline);
+        vkCreateComputePipelines(device, cache, 1, &cpi, nullptr, &depth_pipeline);
         VkSamplerCreateInfo nsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         vkCreateSampler(device, &nsi, nullptr, &nearest);
 
@@ -1044,7 +1094,12 @@ struct VulkanRenderer::Impl {
         gi.pDynamicState = &dyn;
         gi.layout = layout;
         VkPipeline pipe = VK_NULL_HANDLE;
-        vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gi, nullptr, &pipe);
+        auto made = std::chrono::steady_clock::now();
+        vkCreateGraphicsPipelines(device, cache, 1, &gi, nullptr, &pipe);
+        self.time_pipelines += std::chrono::duration<double>(std::chrono::steady_clock::now() - made).count();
+        self.pipelines++;
+        // written now and then, so a run that does not end well keeps them
+        if (self.pipelines - saved_at >= 32) save_cache();
         pipelines[key] = pipe;
         return pipe;
     }
@@ -1236,6 +1291,8 @@ struct VulkanRenderer::Impl {
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
+        save_cache();
+        if (cache) vkDestroyPipelineCache(device, cache, nullptr);
         for (auto &[k, s] : samplers) vkDestroySampler(device, s, nullptr);
         for (Buffer &b : staging) destroy(b);
         for (ScreenCopy &c : screen_copies) {
@@ -1267,7 +1324,8 @@ struct VulkanRenderer::Impl {
     }
 };
 
-VulkanRenderer::VulkanRenderer(Memory &memory) : impl_(std::make_unique<Impl>(*this, memory)) {
+VulkanRenderer::VulkanRenderer(Memory &memory, std::string pipeline_cache)
+    : impl_(std::make_unique<Impl>(*this, memory, std::move(pipeline_cache))) {
     if (!impl_->init()) return;
     // the CPU's accesses to what was drawn bring it down first (memory's guards)
     memory.gpu_sync = [this, &memory](uint32_t vaddr, uint32_t size, bool write) {
