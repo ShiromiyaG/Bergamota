@@ -9,7 +9,10 @@
 //   RUNTIME_REPLAY=file     the input a Zakuro recording holds, frame by frame
 //   RUNTIME_SHOTS=folder    both screens every RUNTIME_SHOT_EVERY frames (100)
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
+//   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
+//                           functions it replaces; the library built with it
 
+#include "runtime/decomp.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
 #include "runtime/pica_sketch.h"
@@ -94,6 +97,8 @@ const char *env(const char *name) {
 } // namespace
 
 int main(int argc, char **argv) {
+    // what it said so far stays in a log even when a hung run is stopped
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
     if (argc < 4) {
         std::fprintf(stderr, "boot <exheader.bin> <code.bin> <library> [seconds]\n");
         return 2;
@@ -132,12 +137,26 @@ int main(int argc, char **argv) {
         if (!fs.update_romfs) std::fprintf(stderr, "%s\n", error.c_str());
     }
     handlers.fs = &fs;
-    handlers.on_module = [](const std::string &name, uint32_t base) {
-        library.place(name, base);
+    // RUNTIME_DECOMP=folder: the decomp's decomp.bin and decomp.txt, with a
+    // library recompiled with it (3dsrecomp build --decomp)
+    std::unique_ptr<Decomp> decomp;
+    if (const char *dir = env("RUNTIME_DECOMP")) {
+        decomp = std::make_unique<Decomp>();
+        if (!read_decomp(dir, *decomp, error)) {
+            std::fprintf(stderr, "%s\n", error.c_str());
+            return 1;
+        }
+    }
+    System system(config, lookup, services);
+    handlers.on_module = [&](const std::string &name, uint32_t base) {
+        module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
         std::printf("module %s %s 0x%08X\n", name.c_str(), base ? "at" : "gone from", base);
     };
-    System system(config, lookup, services);
-    load(system, exheader, read_file(argv[2]));
+    load(system, exheader, read_file(argv[2]), decomp.get());
+    if (!link_code(library, system.memory, decomp.get(), error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+        return 1;
+    }
     // RUNTIME_RENDERER=native: the runtime's own renderer (docs/vulkan-renderer.md)
     struct {
         std::function<Picture(uint32_t)> screen;

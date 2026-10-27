@@ -18,6 +18,7 @@ add_library(recomp_runtime STATIC
     src/memory.cpp
     src/system.cpp
     src/loader.cpp
+    src/decomp.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -100,6 +101,9 @@ if(RUNTIME_VULKAN)
     target_link_libraries(fixed_function_test PRIVATE recomp_runtime)
     add_test(NAME fixed_function COMMAND fixed_function_test)
 endif()
+add_executable(decomp_test tests/decomp_test.cpp)
+target_link_libraries(decomp_test PRIVATE recomp_runtime)
+add_test(NAME decomp COMMAND decomp_test)
 
 # boots a game on the runtime and reports how far it gets
 add_executable(boot tools/boot.cpp)

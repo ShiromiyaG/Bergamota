@@ -15,6 +15,7 @@
 #include "settings.h"
 #include "ui.h"
 
+#include "runtime/decomp.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
 #include "runtime/vulkan_renderer.h"
@@ -124,9 +125,19 @@ int main(int argc, char **argv) {
     if (!settings.game.update.empty()) fs.update_romfs = find_romfs(settings.game.update, error);
     if (!fs.romfs) return fail(error);
     handlers.fs = &fs;
-    handlers.on_module = [](const std::string &name, uint32_t base) { library.place(name, base); };
+    // the decomp in place of the functions it replaces, with a library
+    // recompiled with it
+    std::unique_ptr<Decomp> decomp;
+    if (!settings.game.decomp.empty()) {
+        decomp = std::make_unique<Decomp>();
+        if (!read_decomp(settings.game.decomp, *decomp, error)) return fail(error);
+    }
     System system(config, lookup, services);
-    load(system, exheader, read_file(settings.game.code));
+    handlers.on_module = [&](const std::string &name, uint32_t base) {
+        module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
+    };
+    load(system, exheader, read_file(settings.game.code), decomp.get());
+    if (!link_code(library, system.memory, decomp.get(), error)) return fail(error);
     // the renderer: the runtime's own, or Zakuro's through its bridge
     struct {
         std::function<Picture(uint32_t)> screen;
