@@ -5,7 +5,8 @@
 //   boot <exheader.bin> <code.bin> <recompiled library> [seconds] [game .3ds] [update .cia] [user folder]
 //
 // For comparing with Zakuro (tools/compare.py), on the virtual clock:
-//   RUNTIME_FRAMES=n        run n frames instead of seconds
+//   RUNTIME_FRAMES=n        run n frames instead of seconds (seconds, when given, still
+//                           cap the run on the host's clock)
 //   RUNTIME_REPLAY=file     the input a Zakuro recording holds, frame by frame
 //   RUNTIME_SHOTS=folder    both screens every RUNTIME_SHOT_EVERY frames (100)
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
@@ -46,6 +47,7 @@ std::vector<uint8_t> read_file(const char *path) {
 Library library;
 
 Code lookup(uint32_t address) { return library.lookup(address); }
+uint32_t redirect(uint32_t address) { return library.redirect(address); }
 
 Services *services_ptr = nullptr;
 
@@ -148,6 +150,7 @@ int main(int argc, char **argv) {
         }
     }
     System system(config, lookup, services);
+    system.set_redirect(redirect);
     handlers.on_module = [&](const std::string &name, uint32_t base) {
         module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
         std::printf("module %s %s 0x%08X\n", name.c_str(), base ? "at" : "gone from", base);
@@ -235,7 +238,8 @@ int main(int argc, char **argv) {
                 }
             }
 #endif
-            return handlers.vblanks >= frames;
+            // seconds given with RUNTIME_FRAMES: a hung run still stops and says where it is
+            return handlers.vblanks >= frames || (argc > 4 && seconds > 0 && now >= until);
         }
         // A pressed for a tenth of each second, to get past the title as the bots do
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();

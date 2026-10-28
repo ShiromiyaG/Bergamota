@@ -61,14 +61,19 @@ System::System(const Config &config, Lookup lookup, ServiceHandler services)
     host_.write16 = host_write16;
     host_.write32 = host_write32;
     host_.interpret = host_interpret;
-    host_.lookup = [](Context *c, uint32_t address) { return system_of(c).lookup_(address); };
+    // the code sets r15 to address before it asks; a redirect moves it on
+    host_.lookup = [](Context *c, uint32_t address) {
+        c->r[15] = address & ~1u;
+        c->thumb = address & 1;
+        return system_of(c).find(*c);
+    };
     // C calling into the guest (recomp_call_guest, CALL_WHOLE): the code
     // runs on to the stop address on the same thread; a syscall that blocks
     // cannot be waited for there, and leaves it to the main loop
     host_.run = [](Context *c, uint32_t stop) {
         System &s = system_of(c);
         while (!(c->r[15] == stop && !c->thumb)) {
-            Code code = s.lookup_(c->r[15] | c->thumb);
+            Code code = s.find(*c);
             c->exit = EXIT_NONE;
             if (code) {
                 code(c);
@@ -140,6 +145,19 @@ void System::request(Kernel &, Thread &thread, const std::string &service, uint3
 
 void System::memory_syscall(Kernel &k, Thread &thread, uint32_t number) {
     runtime::memory_syscall(memory, k, thread, number, config_.region);
+}
+
+Code System::find(Context &c) {
+    uint32_t address = c.r[15] | c.thumb;
+    if (redirect_) {
+        uint32_t to = redirect_(address);
+        if (to != address) {
+            c.r[15] = to & ~1u;
+            c.thumb = to & 1;
+            address = to;
+        }
+    }
+    return lookup_(address);
 }
 
 bool System::interpret(Context &c) {
@@ -219,7 +237,7 @@ bool System::run(const std::function<bool()> &stop) {
             kernel.syscall(0x09);
             continue;
         }
-        Code code = lookup_(c.r[15] | c.thumb);
+        Code code = find(c);
         c.exit = EXIT_NONE;
         c.budget = config_.slice;
         c.depth = 0;
@@ -233,7 +251,7 @@ bool System::run(const std::function<bool()> &stop) {
                 profile.slices++;
                 bool left = c.exit == EXIT_NONE || c.exit == EXIT_UNWIND;
                 if (!left || c.budget <= 0 || (c.r[15] == THREAD_EXIT && !c.thumb)) break;
-                code = lookup_(c.r[15] | c.thumb);
+                code = find(c);
                 if (!code) break;
                 c.exit = EXIT_NONE;
                 c.depth = 0;

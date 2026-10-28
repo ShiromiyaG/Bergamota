@@ -152,10 +152,22 @@ Code Library::lookup(uint32_t address) const {
     return nullptr;
 }
 
+uint32_t Library::redirect(uint32_t address) const {
+    if (aliases_.empty()) return address;
+    auto alias = aliases_.find(address);
+    return alias == aliases_.end() ? address : alias->second;
+}
+
 bool Library::place(const std::string &name, uint32_t base, Memory *memory) {
     for (size_t i = 0; i < module_count_; i++) {
         if (name != modules_[i].name) continue;
         *modules_[i].base = base; // the code reads it on entry
+        for (const Placed &p : placed_) {
+            if (p.index != i) continue;
+            for (auto it = aliases_.begin(); it != aliases_.end();) {
+                it = it->first - p.base < p.size ? aliases_.erase(it) : std::next(it);
+            }
+        }
         placed_.erase(std::remove_if(placed_.begin(), placed_.end(), [&](const Placed &p) { return p.index == i; }),
                       placed_.end());
         if (base) placed_.push_back(Placed{base, modules_[i].size, i});
@@ -239,6 +251,17 @@ void module_changed(Library &library, Memory &memory, const Decomp *decomp, cons
         }
     }
     library.place(name, base, &memory);
+    // the module was recompiled without the jumps to the decomp: its hooked
+    // functions go straight to the decomp's (ARM ones; a Thumb jump changes
+    // state and keeps to the interpreter)
+    if (decomp && base) {
+        std::string bare = name.size() > 4 && name.compare(name.size() - 4, 4, ".cro") == 0
+                               ? name.substr(0, name.size() - 4)
+                               : name;
+        for (const ModuleHook &hook : decomp->module_hooks) {
+            if (hook.module == bare && !(hook.offset & 1)) library.alias(base + hook.offset, hook.target);
+        }
+    }
 }
 
 void load(System &system, const ExHeader &exheader, const std::vector<uint8_t> &code_bin, const Decomp *decomp) {

@@ -49,6 +49,7 @@ std::vector<uint8_t> read_file(const std::string &path) {
 
 Library library;
 Code lookup(uint32_t address) { return library.lookup(address); }
+uint32_t redirect(uint32_t address) { return library.redirect(address); }
 Services *services_ptr = nullptr;
 void services(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
     services_ptr->request(system, thread, service, subhandle);
@@ -133,6 +134,7 @@ int main(int argc, char **argv) {
         if (!read_decomp(settings.game.decomp, *decomp, error)) return fail(error);
     }
     System system(config, lookup, services);
+    system.set_redirect(redirect);
     handlers.on_module = [&](const std::string &name, uint32_t base) {
         module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
     };
