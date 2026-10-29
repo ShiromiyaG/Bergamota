@@ -180,9 +180,29 @@ void the_library_has_to_have_the_decomp() {
     CHECK(decomp_base == 0x07800000 && library.lookup(0x07800000) == code_b);
 }
 
+void hooked_module_functions_go_to_the_decomp() {
+    uint32_t decomp_base = 0, bag_base = 0;
+    Entry decomp_entries[] = {{0x10, code_b}};
+    Entry bag_entries[] = {{0x100, code_a}};
+    Module modules[] = {{"decomp", &decomp_base, 0x1000, 1, decomp_entries}, {"Bag", &bag_base, 0x1000, 1, bag_entries}};
+    Library library;
+    library.linked(nullptr, 0, modules, 2, nullptr);
+    library.place("decomp", 0x07800000);
+    library.place("Bag", 0x00800000);
+    CHECK(library.redirect(0x00800100) == 0x00800100);
+    library.alias(0x00800100, 0x07800010);
+    CHECK(library.redirect(0x00800100) == 0x07800010 && library.lookup(0x07800010) == code_b);
+    CHECK(library.lookup(0x00800100) == code_a); // the lookup itself is not redirected
+    // gone with the module, not there when it loads again
+    library.place("Bag", 0);
+    library.place("Bag", 0x00800000);
+    CHECK(library.redirect(0x00800100) == 0x00800100);
+}
+
 } // namespace
 
 int main() {
+    hooked_module_functions_go_to_the_decomp();
     the_library_has_to_have_the_decomp();
     stale_functions_are_skipped();
     modules_get_their_jumps();

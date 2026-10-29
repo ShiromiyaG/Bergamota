@@ -20,6 +20,9 @@ namespace runtime {
 
 // the code for a guest address (bit 0 set for Thumb), or null
 using Lookup = Code (*)(uint32_t address);
+// where the code for an address really is (bit 0 set for Thumb): itself, or
+// the decomp's function a module's hooked one jumps to
+using Redirect = uint32_t (*)(uint32_t address);
 
 // what the services answer: called for each SendSyncRequest, with the
 // command in the thread's TLS (Memory, at tls + 0x80)
@@ -56,6 +59,11 @@ public:
     // why run() could not go on, when it could not
     const std::string &error() const { return error_; }
 
+    // every jump through the lookup goes where redirect says first, r15 with it
+    void set_redirect(Redirect redirect) { redirect_ = redirect; }
+    // the code for the context's r15, redirected
+    Code find(Context &c);
+
     // runs a context's code from r15 in the interpreter, up to an address
     // the C has, a syscall or a slice's end; false when it cannot go on
     bool interpret(Context &c);
@@ -83,6 +91,7 @@ private:
 
     Config config_;
     Lookup lookup_;
+    Redirect redirect_ = nullptr;
     ServiceHandler services_;
     Host host_{};
     uint32_t tls_used_ = 0;

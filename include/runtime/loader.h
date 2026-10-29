@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "recomp.h"
@@ -49,6 +50,13 @@ public:
     // tells the code where module name was loaded; 0 when it goes away.
     // with memory, the module's code there is checked (see check)
     bool place(const std::string &name, uint32_t base, Memory *memory = nullptr);
+    // a jump to from goes to to: a module's function the decomp replaces,
+    // whose jump the module was not recompiled with and would otherwise run
+    // in the interpreter on every call (System::set_redirect with redirect).
+    // place drops a module's when it moves or goes away
+    void alias(uint32_t from, uint32_t to) { aliases_[from] = to; }
+    // where a jump to address goes: to its alias, or itself
+    uint32_t redirect(uint32_t address) const;
     // checks the functions of unit (0 the executable, i + 1 module i)
     // against the code in memory, its offsets added to base: those whose
     // bytes changed since it was recompiled (a mod, an update, a jump to the
@@ -74,6 +82,7 @@ private:
     // one per unit, from generation 3 on
     const Origins *origins_ = nullptr;
     std::vector<Placed> placed_;
+    std::unordered_map<uint32_t, uint32_t> aliases_;
 };
 
 struct Decomp;
