@@ -18,6 +18,7 @@ add_library(recomp_runtime STATIC
     src/memory.cpp
     src/system.cpp
     src/loader.cpp
+    src/async_gpu.cpp
     src/decomp.cpp
     src/interpreter.cpp
     src/cro.cpp
@@ -65,9 +66,9 @@ if(WIN32)
     target_link_libraries(recomp_runtime PUBLIC winmm)
 endif()
 
-# drawing with Zakuro's renderer until the native one exists: a Rust static
-# library, bridge/zakuro-gpu-c, built with cargo
-option(RUNTIME_ZAKURO_GPU "draw with Zakuro's renderer (needs cargo)" ON)
+# Zakuro's renderer, a Rust static library (bridge/zakuro-gpu-c, built with
+# cargo), kept only to compare against: the runtime's own draws the games
+option(RUNTIME_ZAKURO_GPU "also draw with Zakuro's renderer, to compare (needs cargo)" OFF)
 if(RUNTIME_ZAKURO_GPU)
     set(ZGPU_DIR ${CMAKE_CURRENT_SOURCE_DIR}/bridge/zakuro-gpu-c)
     set(ZGPU_LIB ${ZGPU_DIR}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}zakuro_gpu_c${CMAKE_STATIC_LIBRARY_SUFFIX})
@@ -98,6 +99,9 @@ add_test(NAME lighting COMMAND lighting_test)
 add_executable(decomp_test tests/decomp_test.cpp)
 target_link_libraries(decomp_test PRIVATE recomp_runtime)
 add_test(NAME decomp COMMAND decomp_test)
+add_executable(program_test tests/program_test.cpp)
+target_link_libraries(program_test PRIVATE recomp_runtime)
+add_test(NAME program COMMAND program_test)
 
 # boots a game on the runtime and reports how far it gets
 add_executable(boot tools/boot.cpp)
@@ -105,7 +109,7 @@ target_link_libraries(boot PRIVATE recomp_runtime)
 
 # a game in a window: SDL3 for the window, the input and (later) the sound
 option(RUNTIME_PLAYER "build the player (fetches SDL3)" ON)
-if(RUNTIME_PLAYER AND RUNTIME_ZAKURO_GPU)
+if(RUNTIME_PLAYER)
     include(FetchContent)
     set(SDL_SHARED OFF CACHE BOOL "" FORCE)
     set(SDL_STATIC ON CACHE BOOL "" FORCE)

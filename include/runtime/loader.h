@@ -8,6 +8,8 @@
 #define RUNTIME_LOADER_H
 
 #include <cstdint>
+#include <filesystem>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,6 +34,17 @@ struct ExHeader {
     Region region;
     uint16_t kernel_version;
 };
+
+// the places in the executable's code the interpreter ran for want of C
+// (System::interpreted_at, odd for Thumb), added to the hints 3dsrecomp
+// build reads, <its library folder>/<program id>.hints (APPDATAdsrecomp
+// on Windows), as Zakuro writes them: the next recompile takes them in. how
+// many were new, or -1 with why in error
+// where 3dsrecomp build installs a title's library, <its library folder>/
+// <program id>.dll (.so, .dylib), as Zakuro and 3dsrecomp look for it
+std::filesystem::path installed_library(uint64_t program_id);
+
+int save_hints(const std::map<uint32_t, uint64_t> &interpreted, const ExHeader &exheader, std::string &error);
 
 // false with why in error when it is not one
 bool parse_exheader(const std::vector<uint8_t> &bytes, ExHeader &out, std::string &error);

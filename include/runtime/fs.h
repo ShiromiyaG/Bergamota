@@ -29,10 +29,25 @@ struct RomFsImage {
 // content, both decrypted; nullopt with why when it is not one
 std::optional<RomFsImage> find_romfs(const std::filesystem::path &dump, std::string &error);
 
+// the program a dump runs, its exheader (0x800 bytes, as ctrtool writes it)
+// and its code, decompressed: from a .3ds, or from an update's CIA, whose
+// program takes the game's place. false with why in error
+bool read_program(const std::filesystem::path &dump, std::vector<uint8_t> &exheader, std::vector<uint8_t> &code,
+                  std::string &error);
+
+// the game's name as its icon gives it (the English short title, UTF-8),
+// empty when the dump has none
+std::string read_title(const std::filesystem::path &dump);
+
 class Fs {
 public:
     // user: where saves and extra data are (Zakuro's data folder/user)
-    Fs(std::filesystem::path user, uint64_t program_id) : user_(std::move(user)), program_id_(program_id) {}
+    // (a folder that holds a user folder, Zakuro's data folder itself, is
+    // taken for that user folder)
+    Fs(std::filesystem::path user, uint64_t program_id) : user_(std::move(user)), program_id_(program_id) {
+        std::error_code ec;
+        if (std::filesystem::is_directory(user_ / "user", ec) && !std::filesystem::exists(user_ / "savedata", ec)) user_ /= "user";
+    }
 
     std::optional<RomFsImage> romfs, update_romfs;
 

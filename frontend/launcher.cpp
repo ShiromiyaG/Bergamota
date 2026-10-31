@@ -100,17 +100,23 @@ bool launcher(SDL_Window *window, SDL_Renderer *renderer, Settings &s, const std
         ImGui::SeparatorText("Game");
         path_row(window, "Game (.3ds or .cia)", s.game.game, false, &GAME);
         path_row(window, "Update (.cia, optional)", s.game.update, false, &UPDATE);
-        path_row(window, "Exheader (exheader.bin)", s.game.exheader, false, &EXHEADER);
-        path_row(window, "Code (code.bin)", s.game.code, false, &EXHEADER);
-        path_row(window, "Recompiled library", s.game.library, false, &LIBRARY);
         path_row(window, "Saves folder", s.game.user, true);
-        path_row(window, "Decomp folder (optional)", s.game.decomp, true);
+        // the program comes from the dumps and the library from where
+        // 3dsrecomp installs it; these only to point elsewhere
+        if (ImGui::CollapsingHeader("Advanced")) {
+            path_row(window, "Recompiled library (optional)", s.game.library, false, &LIBRARY);
+            path_row(window, "Exheader (optional)", s.game.exheader, false, &EXHEADER);
+            path_row(window, "Code (optional)", s.game.code, false, &EXHEADER);
+            path_row(window, "Decomp folder (optional)", s.game.decomp, true);
+        }
 
         ImGui::SeparatorText("Video");
+#ifdef RUNTIME_ZAKURO_GPU
         int which = s.video.renderer == "zakuro" ? 1 : 0;
         if (ImGui::Combo("Renderer", &which, "The runtime's (Vulkan)\0Zakuro's (Vulkan, through its bridge)\0")) {
             s.video.renderer = which ? "zakuro" : "native";
         }
+#endif
         ImGui::Checkbox("Fullscreen", &s.video.fullscreen);
         ImGui::TextDisabled("The rest (filter, layout, volume, controls) is in the overlay: F1 in the game.");
 
@@ -121,7 +127,7 @@ bool launcher(SDL_Window *window, SDL_Renderer *renderer, Settings &s, const std
         ImGui::EndDisabled();
         ImGui::SameLine();
         bool quit = ImGui::Button("Quit", ImVec2(160, 0));
-        if (!ready) ImGui::TextDisabled("The game, its exheader, code and library, and a saves folder are needed.");
+        if (!ready) ImGui::TextDisabled("The game and a saves folder are needed (and the update, if you have one).");
         if (!message.empty()) ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1), "%s", message.c_str());
         ImGui::TextDisabled("Settings: %s", utf8(file).c_str());
         ImGui::End();

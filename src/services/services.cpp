@@ -415,6 +415,12 @@ void Services::dsp_write_pipe(System &system, uint32_t channel, const std::vecto
 
 void Services::tick(System &system) {
     uint64_t now = system.ticks();
+    // what a GPU beside the game finished since
+    if (gpu && gpu->deferred()) {
+        gsp_finished_.clear();
+        gpu->take_interrupts(gsp_finished_);
+        for (uint8_t id : gsp_finished_) gsp_interrupt(system, id);
+    }
     // the screens refresh 60 times a second (the 3DS's 59.83)
     if (gpu && gsp_.shared) {
         constexpr uint64_t FRAME = CPU_CLOCK_HZ * 100 / 5983;
@@ -635,6 +641,13 @@ void Services::gpu_sync(System &system, uint32_t vaddr, uint32_t size) {
     if (gpu && size) gpu->sync(gsp_physical(system, vaddr), size);
 }
 
+// the interrupt for a GPU command just given: now, or once a GPU that runs
+// beside the game got to it
+void Services::gsp_done(System &system, uint8_t id) {
+    if (gpu && gpu->deferred()) gpu->after(id);
+    else gsp_interrupt(system, id);
+}
+
 // an interrupt into the client's queue (in the shared block), and its event
 void Services::gsp_interrupt(System &system, uint8_t id) {
     uint32_t queue = gsp_shared(system);
@@ -697,7 +710,7 @@ void Services::gsp_queue(System &system) {
         }
         case 0x01: // ProcessCommandList(address, size)
             gpu->command_list(gsp_physical(system, d[0] & ~7u), d[1] & ~3u);
-            gsp_interrupt(system, P3D);
+            gsp_done(system, P3D);
             break;
         case 0x02: // MemoryFill: two banks
             for (uint32_t bank = 0; bank < 2; bank++) {
@@ -706,16 +719,16 @@ void Services::gsp_queue(System &system) {
                 uint32_t control2 = d[6] >> (bank * 16), width = (control2 & 0x300) == 0 ? 2 : (control2 & 0x300) == 0x100 ? 3 : 4;
                 uint32_t p = gsp_physical(system, start);
                 gpu->memory_fill(p, p + (end - start), value, width);
-                gsp_interrupt(system, bank ? PSC1 : PSC0);
+                gsp_done(system, bank ? PSC1 : PSC0);
             }
             break;
         case 0x03: // DisplayTransfer
             gpu->display_transfer(gsp_physical(system, d[0]), gsp_physical(system, d[1]), d[2], d[3], d[4]);
-            gsp_interrupt(system, PPF);
+            gsp_done(system, PPF);
             break;
         case 0x04: // TextureCopy
             gpu->texture_copy(gsp_physical(system, d[0]), gsp_physical(system, d[1]), d[2], d[3], d[4]);
-            gsp_interrupt(system, PPF);
+            gsp_done(system, PPF);
             break;
         default: break; // FlushCacheRegions and the rest
         }
@@ -756,7 +769,7 @@ bool Services::gsp(System &system, CommandBuffer &b) {
         return true;
     case 0x0006: // SetCommandList
         gpu->command_list(gsp_physical(system, b.get(1) & ~7u), b.get(2) & ~3u);
-        gsp_interrupt(system, P3D);
+        gsp_done(system, P3D);
         b.reply(command);
         return true;
     case 0x0007: { // RequestDma
@@ -786,12 +799,12 @@ bool Services::gsp(System &system, CommandBuffer &b) {
     }
     case 0x000D: // SetDisplayTransfer
         gpu->display_transfer(gsp_physical(system, b.get(1)), gsp_physical(system, b.get(2)), b.get(3), b.get(4), b.get(5));
-        gsp_interrupt(system, PPF);
+        gsp_done(system, PPF);
         b.reply(command);
         return true;
     case 0x000E: // SetTextureCopy
         gpu->texture_copy(gsp_physical(system, b.get(1)), gsp_physical(system, b.get(2)), b.get(3), b.get(4), b.get(5));
-        gsp_interrupt(system, PPF);
+        gsp_done(system, PPF);
         b.reply(command);
         return true;
     case 0x000F: // SetMemoryFill(start0, value0, end0, start1, value1, end1, control0, control1)
@@ -800,7 +813,7 @@ bool Services::gsp(System &system, CommandBuffer &b) {
             if (!start || end <= start) continue;
             uint32_t width = (control & 0x300) == 0 ? 2 : (control & 0x300) == 0x100 ? 3 : 4, p = gsp_physical(system, start);
             gpu->memory_fill(p, p + (end - start), value, width);
-            gsp_interrupt(system, bank ? PSC1 : PSC0);
+            gsp_done(system, bank ? PSC1 : PSC0);
         }
         b.reply(command);
         return true;

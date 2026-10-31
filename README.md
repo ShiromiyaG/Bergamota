@@ -24,13 +24,14 @@ renderer, at full speed on a desktop GPU.
 | The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`) | `decomp.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
 | Services: srv, APT, cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h` | what USUM uses |
 | Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer | `audio.h`, `src/audio.cpp` | done; AAC (X/Y's music) not yet |
-| Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | first pixels to the field; lighting next ([plan](docs/vulkan-renderer.md)) |
+| Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | to the field, with fragment lighting, fog, logic ops, mipmaps, scissor, the procedural texture, cube maps, shadows, the geometry shader, a resolution scale and a pipeline cache on disk; what a game asks for that is not done is counted ([plan](docs/vulkan-renderer.md)) |
 | The player: SDL3 window, keyboard, gamepad, mouse as the stylus, `config.toml`, a launcher and an ImGui overlay (F1) | `frontend/` | done |
 
 ## Building
 
 Needs CMake 3.25+, Ninja, clang (or MSVC), the [Vulkan SDK](https://vulkan.lunarg.com/)
-(for `glslc` and the headers) and, for Zakuro's renderer as a fallback, Rust.
+(for `glslc` and the headers). Rust only with `-DRUNTIME_ZAKURO_GPU=ON`, which also
+builds Zakuro's renderer to compare against (off by default).
 SDL3, Dear ImGui and toml++ are fetched by CMake at configure time.
 
 ```sh

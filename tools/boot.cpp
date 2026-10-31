@@ -16,6 +16,7 @@
 #include "runtime/decomp.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
+#include "runtime/async_gpu.h"
 #include "runtime/pica_sketch.h"
 #ifdef RUNTIME_VULKAN
 #include "runtime/vulkan_renderer.h"
@@ -160,7 +161,8 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
-    // RUNTIME_RENDERER=native: the runtime's own renderer (docs/vulkan-renderer.md)
+    // the runtime's own renderer (docs/vulkan-renderer.md); RUNTIME_RENDERER=zakuro
+    // Zakuro's, when built with it, to compare
     struct {
         std::function<Picture(uint32_t)> screen;
         std::function<double()> busy;
@@ -168,12 +170,13 @@ int main(int argc, char **argv) {
     } gpu;
     // RUNTIME_RENDERER=sketch: the same, its draws filled flat on canvases saved with the shots
     const std::string renderer = env("RUNTIME_RENDERER") ? env("RUNTIME_RENDERER") : "";
-    const bool native = renderer == "native" || renderer == "sketch";
+    const bool native = renderer != "zakuro";
     std::unique_ptr<pica::Sketch> sketch;
 #ifdef RUNTIME_VULKAN
     std::unique_ptr<VulkanRenderer> vulkan;
 #endif
     std::unique_ptr<pica::Pica> pica_gpu;
+    std::unique_ptr<AsyncGpu> async;
 #ifdef RUNTIME_ZAKURO_GPU
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
     if (!native) {
@@ -191,22 +194,39 @@ int main(int argc, char **argv) {
             pica_gpu->backend = sketch.get();
         }
 #ifdef RUNTIME_VULKAN
-        if (renderer == "native") {
+        if (renderer != "sketch") {
             vulkan = std::make_unique<VulkanRenderer>(system.memory);
             if (vulkan->ready()) pica_gpu->backend = vulkan.get();
             else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
+            vulkan->count_shapes = env("RUNTIME_SHAPES") && *env("RUNTIME_SHAPES") == '1';
+            // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's,
+            // saved with the shots as <frame>-between-top.ppm
+            vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
         }
 #endif
         std::printf("drawing with the runtime's renderer\n");
         handlers.gpu = pica_gpu.get();
         gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
                [&] { return pica_gpu->lists; }};
+        // RUNTIME_ASYNC=1: the GPU on a thread of its own, as the player runs it
+        if (env("RUNTIME_ASYNC") && *env("RUNTIME_ASYNC") == '1') {
+            async = std::make_unique<AsyncGpu>(*pica_gpu, system.memory);
+            handlers.gpu = async.get();
+            gpu.screen = [&](uint32_t s) {
+                Picture p;
+                async->locked([&] { p = pica_gpu->screen(s); });
+                return p;
+            };
+        }
     }
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     int shots = 0;
-    uint64_t shot_frame = 0;
+    uint64_t shot_frame = 0, shapes_vblank = 0, trail_vblank = 0;
+    int between_trail = 0;
+    uint64_t trail_frames = 0;
+    bool trail_new_before = false;
     bool went_on = system.run([&] {
         auto now = std::chrono::steady_clock::now();
         if (frames) {
@@ -218,7 +238,13 @@ int main(int argc, char **argv) {
             handlers.input.touch.reset();
             if (in.tx >= 0) handlers.input.touch = std::make_pair(uint16_t(in.tx), uint16_t(in.ty));
             handlers.tick(system);
-#ifdef RUNTIME_ZAKURO_GPU
+#ifdef RUNTIME_VULKAN
+            // RUNTIME_SHAPES=1: each frame's draws matched against the last's
+            if (vulkan && (vulkan->count_shapes || vulkan->between) && handlers.vblanks != shapes_vblank) {
+                shapes_vblank = handlers.vblanks;
+                vulkan->frame_done();
+            }
+#endif
             if (shots_dir && handlers.vblanks >= shot_frame + shot_every) {
                 shot_frame = handlers.vblanks / shot_every * shot_every;
                 if (pica_gpu) pica_gpu->frame_done();
@@ -236,6 +262,37 @@ int main(int argc, char **argv) {
                     out << "P6\n" << p.width << " " << p.height << "\n255\n";
                     for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&p.rgba[i]), 3);
                 }
+#ifdef RUNTIME_VULKAN
+                if (vulkan && vulkan->between) between_trail = env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 8;
+#endif
+            }
+#ifdef RUNTIME_VULKAN
+            // with frames between: the next few vertical blanks, the game's top
+            // screen and the frame between, to see one fall between two
+            if (vulkan && between_trail && handlers.vblanks != trail_vblank) {
+                trail_vblank = handlers.vblanks;
+                between_trail--;
+                const auto &top = pica_gpu->screens[0];
+                uint32_t stride = top.stride ? top.stride : 240 * pica::bytes_per_pixel(top.format);
+                Picture shots_of[3];
+                shots_of[0] = gpu.screen(0);
+                vulkan->picture_between(0, top.address, stride, top.format, shots_of[1]);
+                // what the player shows: the frame between on the tick a new
+                // game frame comes, the game's the tick after (frontend/player.cpp)
+                bool new_frame = vulkan->game_frames != trail_frames;
+                trail_frames = vulkan->game_frames;
+                bool show_between = new_frame && !trail_new_before && !shots_of[1].rgba.empty();
+                trail_new_before = new_frame;
+                shots_of[2] = shots_of[show_between ? 1 : 0];
+                for (int k = 0; k < 3; k++) {
+                    if (shots_of[k].rgba.empty()) continue;
+                    char name[512];
+                    std::snprintf(name, sizeof name, "%s/%06llu-%s-top.ppm", shots_dir, (unsigned long long)handlers.vblanks,
+                                  k == 2 ? "shown" : k ? "between" : "game");
+                    std::ofstream out(name, std::ios::binary);
+                    out << "P6\n" << shots_of[k].width << " " << shots_of[k].height << "\n255\n";
+                    for (size_t i = 0; i < shots_of[k].rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&shots_of[k].rgba[i]), 3);
+                }
             }
 #endif
             // seconds given with RUNTIME_FRAMES: a hung run still stops and says where it is
@@ -245,7 +302,6 @@ int main(int argc, char **argv) {
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
         handlers.tick(system);
-#ifdef RUNTIME_ZAKURO_GPU
         // both screens to a picture every five seconds
         if (now > next_shot) {
             next_shot = now + std::chrono::seconds(5);
@@ -259,14 +315,12 @@ int main(int argc, char **argv) {
             }
             shots++;
         }
-#endif
         return now > until;
     });
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
-#ifdef RUNTIME_ZAKURO_GPU
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
+    if (async) std::printf("the game waited %.1f s for the GPU's thread\n", async->waited);
     std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy(), (unsigned long long)gpu.lists(), system.idle);
-#endif
     {
         int peak = 0;
         for (int16_t s : handlers.audio.output) peak = std::max(peak, std::abs(int(s)));
@@ -290,6 +344,11 @@ int main(int argc, char **argv) {
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],
                     (unsigned long long)vulkan->write_back_causes[1], (unsigned long long)vulkan->write_back_causes[2],
                     (unsigned long long)vulkan->write_back_causes[3]);
+        if (vulkan->count_shapes && vulkan->draws_seen) {
+            std::printf("frames: %llu, draws matched to the frame before %.1f%%, of them moving %.1f%%\n",
+                        (unsigned long long)vulkan->frames_seen, 100.0 * vulkan->draws_matched / vulkan->draws_seen,
+                        vulkan->draws_matched ? 100.0 * vulkan->draws_moved / vulkan->draws_matched : 0.0);
+        }
     }
 #endif
     if (sketch) {
@@ -302,6 +361,12 @@ int main(int argc, char **argv) {
         for (auto [at, n] : system.interpreted_at) top.push_back({n, at});
         std::sort(top.rbegin(), top.rend());
         for (size_t i = 0; i < top.size() && i < 8; i++) std::printf("  interpreted from 0x%08X x%llu\n", top[i].second, (unsigned long long)top[i].first);
+    }
+    if (const char *hints = std::getenv("RUNTIME_HINTS"); hints && *hints == '1') {
+        std::string why;
+        int added = save_hints(system.interpreted_at, exheader, why);
+        if (added < 0) std::printf("hints: %s\n", why.c_str());
+        else std::printf("hints: %d new\n", added);
     }
     if (!system.error().empty()) std::printf("error: %s\n", system.error().c_str());
     if (const char *usage = env("RUNTIME_USAGE")) {

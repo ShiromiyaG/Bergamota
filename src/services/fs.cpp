@@ -100,8 +100,9 @@ void format(const fsys::path &root, uint32_t total, uint32_t dirs, uint32_t file
 
 } // namespace
 
-std::optional<RomFsImage> find_romfs(const fsys::path &dump, std::string &error) {
-    std::ifstream in(dump, std::ios::binary);
+// where the executable NCCH of a .3ds (its first partition) or a CIA (its
+// first content) starts in it
+static std::optional<uint64_t> find_ncch(std::ifstream &in, const fsys::path &dump, std::string &error) {
     if (!in) {
         error = "cannot open " + dump.string();
         return std::nullopt;
@@ -127,6 +128,126 @@ std::optional<RomFsImage> find_romfs(const fsys::path &dump, std::string &error)
         error = dump.string() + ": no NCCH where one should be (is it decrypted?)";
         return std::nullopt;
     }
+    return ncch;
+}
+
+// backwards LZSS ("BLZ"), as the SDK compresses an ExeFS's .code: from the
+// end back, a control byte, then per bit a byte copied or a run from what
+// was already written. Translated from zakuro-fs's lz77.rs
+static bool blz_decompress(std::vector<uint8_t> &data, std::string &error) {
+    size_t size = data.size();
+    if (size < 8) {
+        error = "the code is shorter than its footer";
+        return false;
+    }
+    auto u32 = [&](size_t at) { return uint32_t(data[at]) | data[at + 1] << 8 | data[at + 2] << 16 | uint32_t(data[at + 3]) << 24; };
+    uint32_t footer = u32(size - 8);
+    size_t footer_size = footer >> 24, payload = footer & 0xFFFFFF, out_size = size + u32(size - 4);
+    if (footer_size > size || payload > size) {
+        error = "the code's footer points outside it";
+        return false;
+    }
+    std::vector<uint8_t> in = data;
+    data.resize(out_size);
+    size_t index = size - footer_size, stop = size - payload, out = out_size;
+    while (index > stop) {
+        uint8_t control = in[--index];
+        for (int bit = 0; bit < 8; bit++, control <<= 1) {
+            if (index <= stop || index == 0 || out == 0) break;
+            if (control & 0x80) {
+                if (index < 2) {
+                    error = "the code's back-reference is cut short";
+                    return false;
+                }
+                index -= 2;
+                unsigned raw = in[index] | in[index + 1] << 8;
+                size_t run = ((raw >> 12) & 0xF) + 3, offset = (raw & 0xFFF) + 2;
+                if (out < run) {
+                    error = "the code's run goes before its start";
+                    return false;
+                }
+                for (size_t i = 0; i < run; i++) {
+                    if (out + offset >= out_size) {
+                        error = "the code's run reads past its end";
+                        return false;
+                    }
+                    uint8_t byte = data[out + offset];
+                    data[--out] = byte;
+                }
+            } else {
+                data[--out] = in[--index];
+            }
+        }
+    }
+    return true;
+}
+
+bool read_program(const fsys::path &dump, std::vector<uint8_t> &exheader, std::vector<uint8_t> &code, std::string &error) {
+    std::ifstream in(dump, std::ios::binary);
+    std::optional<uint64_t> ncch = find_ncch(in, dump, error);
+    if (!ncch) return false;
+    exheader.resize(0x800);
+    in.seekg(static_cast<std::streamoff>(*ncch + 0x200));
+    in.read(reinterpret_cast<char *>(exheader.data()), 0x800);
+    uint64_t exefs = *ncch + uint64_t(read_le<uint32_t>(in, *ncch + 0x1A0)) * 0x200;
+    for (int i = 0; i < 10; i++) {
+        char name[8];
+        in.seekg(static_cast<std::streamoff>(exefs + i * 0x10));
+        in.read(name, 8);
+        if (std::strncmp(name, ".code", 8) != 0) continue;
+        uint32_t offset = read_le<uint32_t>(in, exefs + i * 0x10 + 8), size = read_le<uint32_t>(in, exefs + i * 0x10 + 12);
+        code.resize(size);
+        in.seekg(static_cast<std::streamoff>(exefs + 0x200 + offset));
+        in.read(reinterpret_cast<char *>(code.data()), size);
+        if (!in) {
+            error = dump.string() + ": its code is cut short";
+            return false;
+        }
+        // the exheader's flags, bit 0: the code is compressed
+        return !(exheader[0x0D] & 1) || blz_decompress(code, error);
+    }
+    error = dump.string() + ": no code in its ExeFS";
+    return false;
+}
+
+std::string read_title(const fsys::path &dump) {
+    std::ifstream in(dump, std::ios::binary);
+    std::string error;
+    std::optional<uint64_t> ncch = find_ncch(in, dump, error);
+    if (!ncch) return {};
+    uint64_t exefs = *ncch + uint64_t(read_le<uint32_t>(in, *ncch + 0x1A0)) * 0x200;
+    for (int i = 0; i < 10; i++) {
+        char name[8];
+        in.seekg(static_cast<std::streamoff>(exefs + i * 0x10));
+        in.read(name, 8);
+        if (std::strncmp(name, "icon", 8) != 0) continue;
+        // the SMDH: "SMDH", then per language a short title (0x80 bytes of
+        // UTF-16), a long one and the publisher; English is the second
+        uint64_t smdh = exefs + 0x200 + read_le<uint32_t>(in, exefs + i * 0x10 + 8);
+        char magic[4];
+        in.seekg(static_cast<std::streamoff>(smdh));
+        in.read(magic, 4);
+        if (std::memcmp(magic, "SMDH", 4) != 0) return {};
+        std::string title;
+        for (int c = 0; c < 0x40; c++) {
+            uint16_t unit = read_le<uint16_t>(in, smdh + 0x08 + 0x200 + c * 2);
+            if (!unit) break;
+            // the titles are within the basic plane: one to three bytes each
+            if (unit < 0x80) title += char(unit);
+            else if (unit < 0x800) title += char(0xC0 | unit >> 6), title += char(0x80 | (unit & 0x3F));
+            else title += char(0xE0 | unit >> 12), title += char(0x80 | (unit >> 6 & 0x3F)), title += char(0x80 | (unit & 0x3F));
+        }
+        return title;
+    }
+    return {};
+}
+
+std::optional<RomFsImage> find_romfs(const fsys::path &dump, std::string &error) {
+    std::ifstream in(dump, std::ios::binary);
+    std::optional<uint64_t> found = find_ncch(in, dump, error);
+    if (!found) return std::nullopt;
+    uint64_t ncch = *found;
+    char magic[4];
     uint64_t romfs = ncch + uint64_t(read_le<uint32_t>(in, ncch + 0x1B0)) * 0x200;
     uint64_t romfs_size = uint64_t(read_le<uint32_t>(in, ncch + 0x1B4)) * 0x200;
     in.seekg(static_cast<std::streamoff>(romfs));

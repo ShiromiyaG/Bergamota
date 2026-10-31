@@ -16,6 +16,7 @@
 #include "ui.h"
 
 #include "runtime/decomp.h"
+#include "runtime/async_gpu.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
 #include "runtime/vulkan_renderer.h"
@@ -112,9 +113,26 @@ int main(int argc, char **argv) {
     }
 
     // the game
+    // the program: from the files named, else straight from the dumps (the
+    // update's when there is one, whose program takes the game's place)
     ExHeader exheader;
-    if (!parse_exheader(read_file(settings.game.exheader), exheader, error) || !library.open(settings.game.library, error)) {
+    std::vector<uint8_t> exheader_bytes, code;
+    if (!settings.game.exheader.empty() && !settings.game.code.empty()) {
+        exheader_bytes = read_file(settings.game.exheader);
+        code = read_file(settings.game.code);
+    } else if (!read_program(settings.game.update.empty() ? settings.game.game : settings.game.update, exheader_bytes,
+                             code, error)) {
         return fail(error);
+    }
+    if (!parse_exheader(exheader_bytes, exheader, error)) return fail(error);
+    // the window named after the game, as its icon names it
+    std::string title = read_title(settings.game.game);
+    if (!title.empty()) SDL_SetWindowTitle(window, title.c_str());
+    // the library: the one named, else where 3dsrecomp build installs it
+    std::string library_path = settings.game.library;
+    if (library_path.empty()) library_path = frontend::utf8(installed_library(exheader.program_id));
+    if (!library.open(library_path, error)) {
+        return fail(error + "\n(recompile the game first: 3dsrecomp build, or Solstice's launcher)");
     }
     Config config;
     config.app_bytes = exheader.app_bytes;
@@ -138,7 +156,7 @@ int main(int argc, char **argv) {
     handlers.on_module = [&](const std::string &name, uint32_t base) {
         module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
     };
-    load(system, exheader, read_file(settings.game.code), decomp.get());
+    load(system, exheader, code, decomp.get());
     if (!link_code(library, system.memory, decomp.get(), error)) return fail(error);
     // the renderer: the runtime's own, or Zakuro's through its bridge
     struct {
@@ -148,27 +166,37 @@ int main(int argc, char **argv) {
     } gpu;
     std::unique_ptr<pica::Pica> pica_gpu;
     std::unique_ptr<VulkanRenderer> vulkan;
+    std::unique_ptr<AsyncGpu> async; // declared after what it drives: it goes first
+#ifdef RUNTIME_ZAKURO_GPU
     std::unique_ptr<ZakuroGpu> zakuro_gpu;
+#endif
     if (settings.video.renderer != "zakuro") {
         pica_gpu = std::make_unique<pica::Pica>(system.memory);
         vulkan = std::make_unique<VulkanRenderer>(system.memory);
         if (vulkan->ready()) {
             pica_gpu->backend = vulkan.get();
-            handlers.gpu = pica_gpu.get();
+            // the GPU on a thread of its own, beside the game's (async_gpu.h);
+            // RUNTIME_SYNC_GPU=1 keeps it on the game's, to compare
+            if (!SDL_getenv("RUNTIME_SYNC_GPU")) async = std::make_unique<AsyncGpu>(*pica_gpu, system.memory);
+            handlers.gpu = async ? static_cast<Gpu *>(async.get()) : pica_gpu.get();
             gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; }, [&] { pica_gpu->frame_done(); }};
             std::printf("drawing with the runtime's renderer\n");
         } else {
-            std::fprintf(stderr, "no Vulkan for the runtime's renderer (%s), Zakuro's instead\n", vulkan->error.c_str());
+            std::fprintf(stderr, "no Vulkan for the runtime's renderer (%s)\n", vulkan->error.c_str());
             vulkan.reset();
             pica_gpu.reset();
         }
     }
+#ifdef RUNTIME_ZAKURO_GPU
+    // Zakuro's renderer, to compare, in a build that has it
     if (!handlers.gpu) {
         zakuro_gpu = std::make_unique<ZakuroGpu>(system.memory, true, exheader.program_id);
         handlers.gpu = zakuro_gpu.get();
         gpu = {[&](uint32_t s) { return zakuro_gpu->screen(s); }, [&] { return zakuro_gpu->busy; }};
         std::printf("drawing with Zakuro's renderer\n");
     }
+#endif
+    if (!handlers.gpu) return fail("the game needs Vulkan, which this computer's GPU or driver does not give");
 
     SDL_Texture *screens[2] = {
         SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240),
@@ -203,6 +231,8 @@ int main(int argc, char **argv) {
     auto second = next_frame, last_shown = next_frame;
     frontend::Stats stats, counting;
     double busy_before = 0, idle_before = 0, screens_ms = 0, send_ms = 0;
+    uint64_t frames_seen = 0;
+    bool new_frame_before = false;
     system.run([&] {
         handlers.tick(system);
         auto &out = handlers.audio.output;
@@ -267,15 +297,47 @@ int main(int argc, char **argv) {
         auto drawing = std::chrono::steady_clock::now();
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+        // frames between (settings.video.between): the game frame just done is
+        // drawn between first, then the screens are taken: a 30 Hz scene goes
+        // ..., N-1, between, N, between, ... at 60, a game frame behind
+        // the frame between on the tick a new game frame comes in (it is the
+        // one from the frame before to that one), the game's own the tick
+        // after; two new ones in a row (a scene at 60) show the game's
+        // all of it with the GPU's thread idle and the renderer to this one
+        Picture pictures[2];
+        auto take = [&] {
+            bool show_between = false;
+            if (vulkan) {
+                vulkan->between = settings.video.between ? 1 : 0;
+                vulkan->prepare_between();
+                bool new_frame = vulkan->game_frames != frames_seen;
+                frames_seen = vulkan->game_frames;
+                show_between = new_frame && !new_frame_before;
+                new_frame_before = new_frame;
+            }
+            for (uint32_t s = 0; s < (both ? 2u : 1u); s++) {
+                pictures[s] = gpu.screen(s);
+                // the top screen only: the bottom one is drawn at 60 as it is
+                if (vulkan && vulkan->between && s == 0) {
+                    const auto &shown = pica_gpu->screens[s];
+                    uint32_t stride = shown.stride ? shown.stride : 240 * pica::bytes_per_pixel(shown.format);
+                    Picture b;
+                    bool got = vulkan->picture_between(s, shown.address, stride, shown.format, b);
+                    if (got && show_between && b.width == pictures[s].width) pictures[s] = std::move(b);
+                }
+            }
+            gpu.frame_done();
+        };
+        if (async) async->locked(take);
+        else take();
         for (uint32_t s = 0; s < (both ? 2u : 1u); s++) {
-            Picture p = gpu.screen(s);
+            Picture &p = pictures[s];
             SDL_UpdateTexture(screens[s], nullptr, p.rgba.data(), int(p.width * 4));
             SDL_FRect at{s ? 40.0f : 0.0f, s ? 240.0f : 0.0f, float(p.width), 240.0f};
             SDL_RenderTexture(renderer, screens[s], nullptr, &at);
         }
         auto taken = std::chrono::steady_clock::now();
-        gpu.frame_done();
-        auto sent = std::chrono::steady_clock::now();
+        auto sent = taken;
         screens_ms += std::chrono::duration<double, std::milli>(taken - drawing).count();
         send_ms += std::chrono::duration<double, std::milli>(sent - taken).count();
         // the overlay over them, at the window's own size
@@ -314,6 +376,8 @@ int main(int argc, char **argv) {
         return quit;
     });
     if (!system.error().empty()) std::fprintf(stderr, "stopped: %s\n", system.error().c_str());
+    // where the C had nothing, for the next recompile to take in
+    if (save_hints(system.interpreted_at, exheader, error) < 0) std::fprintf(stderr, "hints: %s\n", error.c_str());
     frontend::save(config_file, settings, error);
     frontend::ui_shutdown();
     SDL_Quit();

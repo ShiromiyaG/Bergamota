@@ -25,10 +25,14 @@ Settings::Settings() {
 
 bool Settings::game_ready() const {
     namespace fs = std::filesystem;
-    for (const std::string *p : {&game.exheader, &game.code, &game.library, &game.game}) {
-        if (p->empty() || !fs::exists(path_of(*p))) return false;
+    // the game and a saves folder; the update, exheader, code and library
+    // only when named (the program comes from the dumps, the library from
+    // where 3dsrecomp installs it)
+    if (game.game.empty() || !fs::exists(path_of(game.game)) || game.user.empty()) return false;
+    for (const std::string *p : {&game.update, &game.exheader, &game.code, &game.library}) {
+        if (!p->empty() && !fs::exists(path_of(*p))) return false;
     }
-    return !game.user.empty();
+    return true;
 }
 
 std::filesystem::path default_path() {
@@ -77,6 +81,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "fullscreen", s.video.fullscreen);
     get(t, "video", "vsync", s.video.vsync);
     get(t, "video", "smooth", s.video.smooth);
+    get(t, "video", "between", s.video.between);
     get(t, "video", "layout", s.video.layout);
     number = s.audio.volume;
     get(t, "audio", "volume", number);
@@ -104,6 +109,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"fullscreen", s.video.fullscreen},
                               {"vsync", s.video.vsync},
                               {"smooth", s.video.smooth},
+                              {"between", s.video.between},
                               {"layout", s.video.layout}}},
         {"audio", toml::table{{"volume", s.audio.volume}, {"mute", s.audio.mute}}},
         {"keyboard", keys},

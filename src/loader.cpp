@@ -6,7 +6,11 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <set>
 
 #include "runtime/decomp.h"
 
@@ -325,6 +329,86 @@ void load(System &system, const ExHeader &exheader, const std::vector<uint8_t> &
         if (!map_decomp(memory, exheader.region, *decomp, error)) std::fprintf(stderr, "decomp: %s\n", error.c_str());
     }
     system.kernel.start(exheader.text.address, STACK_TOP, exheader.priority);
+}
+
+} // namespace runtime
+
+namespace runtime {
+
+// 3dsrecomp's abi::library_dir: where its libraries and their hints are
+static std::filesystem::path library_dir() {
+    auto var = [](const char *name) -> std::filesystem::path {
+        const char *value = std::getenv(name);
+        return value && *value ? std::filesystem::path(value) : std::filesystem::path();
+    };
+#if defined(_WIN32)
+    std::filesystem::path dir = var("APPDATA");
+#elif defined(__APPLE__)
+    std::filesystem::path dir = var("HOME").empty() ? std::filesystem::path() : var("HOME") / "Library/Application Support";
+#else
+    std::filesystem::path dir = var("XDG_DATA_HOME");
+    if (dir.empty() && !var("HOME").empty()) dir = var("HOME") / ".local/share";
+#endif
+    return dir.empty() ? dir : dir / "3dsrecomp";
+}
+
+std::filesystem::path installed_library(uint64_t program_id) {
+    std::filesystem::path dir = library_dir();
+    if (dir.empty()) return dir;
+#if defined(_WIN32)
+    const char *extension = "dll";
+#elif defined(__APPLE__)
+    const char *extension = "dylib";
+#else
+    const char *extension = "so";
+#endif
+    char name[48];
+    std::snprintf(name, sizeof name, "%016llX.%s", (unsigned long long)program_id, extension);
+    return dir / name;
+}
+
+int save_hints(const std::map<uint32_t, uint64_t> &interpreted, const ExHeader &exheader, std::string &error) {
+    std::filesystem::path dir = library_dir();
+    if (dir.empty()) {
+        error = "no folder for 3dsrecomp's hints";
+        return -1;
+    }
+    char name[32];
+    std::snprintf(name, sizeof name, "%016llX.hints", (unsigned long long)exheader.program_id);
+    std::filesystem::path path = dir / name;
+    // the file as it is: its comments and every address in it stay
+    std::set<uint32_t> known;
+    std::string text;
+    if (std::ifstream in(path); in) {
+        std::string line;
+        while (std::getline(in, line)) {
+            text += line + "\n";
+            size_t start = line.find_first_not_of(" \t");
+            if (start == std::string::npos || line[start] == '#') continue;
+            known.insert(uint32_t(std::strtoul(line.c_str() + start, nullptr, 16)));
+        }
+    }
+    if (text.empty()) text = "# where the runtime interpreted this title's code, odd for Thumb, which 3dsrecomp build recompiles\n";
+    uint32_t begin = exheader.text.address, end = begin + exheader.text.size;
+    int added = 0;
+    for (auto [address, count] : interpreted) {
+        uint32_t at = address & ~1u;
+        if (at < begin || at >= end || known.count(address)) continue;
+        char line[16];
+        std::snprintf(line, sizeof line, "%08X\n", address);
+        text += line;
+        known.insert(address);
+        added++;
+    }
+    if (!added) return 0;
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!(out << text)) {
+        error = "could not write " + path.string();
+        return -1;
+    }
+    return added;
 }
 
 } // namespace runtime

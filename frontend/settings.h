@@ -34,6 +34,7 @@ struct Settings {
         bool fullscreen = false;
         bool vsync = false;      // waits for the display, which the game, on the same thread, pays for
         bool smooth = true;      // the screens scaled up smoothly, or in sharp pixels
+        bool between = false;    // a frame drawn between each two of the game's (30 Hz scenes shown at 60)
         std::string layout = "both"; // both screens stacked, or "top" alone
     } video;
     struct {

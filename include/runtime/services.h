@@ -122,6 +122,8 @@ private:
     bool online(System &, CommandBuffer &, const std::string &service);
     uint32_t gsp_shared(System &) const;
     void gsp_interrupt(System &, uint8_t id);
+    void gsp_done(System &, uint8_t id);
+    std::vector<uint8_t> gsp_finished_;
     void gsp_queue(System &);
     void gsp_refresh(System &);
     uint32_t gsp_physical(System &, uint32_t vaddr) const;

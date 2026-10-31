@@ -34,6 +34,11 @@ struct Gpu {
     // the GPU (a service, a DMA) writes or reads it: a GPU that keeps what it
     // draws, and the textures it read, elsewhere puts it back or drops it
     virtual void sync(uint32_t, uint32_t) {}
+    // a GPU that runs beside the game (AsyncGpu): gsp queues each command's
+    // interrupt with after(), and takes those done at its tick
+    virtual bool deferred() const { return false; }
+    virtual void after(uint8_t) {}
+    virtual void take_interrupts(std::vector<uint8_t> &) {}
 };
 
 class NullGpu : public Gpu {
