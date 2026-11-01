@@ -65,6 +65,11 @@ public:
     // so a scene at 30 shows at 60. 0 or 1; set from any thread, taken at
     // the next vertical blank
     std::atomic<int> between{0};
+    // the top screen shown this much wider than it is drawn (widescreen,
+    // anamorphic: a port's override frames its 3D wider): what is drawn
+    // flat on it (2D, every w 1) goes narrower by as much, centered, so it
+    // keeps its shape once stretched. 1 for none; set from any thread
+    std::atomic<float> top_wide{1};
     // the frames' pictures read back to the CPU (boot's shots, a dump):
     // without, only the GPU's copies for a presenter
     std::atomic<bool> cpu_pictures{true};

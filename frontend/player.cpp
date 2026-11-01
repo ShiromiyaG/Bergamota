@@ -418,6 +418,7 @@ int main(int argc, char **argv) {
         view.smooth = settings.video.smooth;
         view.top = top_width(settings);
         runtime_top_aspect = view.top > 400 ? view.top / 240 : 0;
+        vulkan.top_wide = view.top / 400;
         view.vsync = settings.video.vsync;
         presenter.present(fresh ? &showing : nullptr, view,
                           [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });

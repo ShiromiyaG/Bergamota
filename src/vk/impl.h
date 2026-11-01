@@ -296,6 +296,10 @@ struct VulkanRenderer::Impl {
     uint64_t blanks = 0, top_blank = 0; // vertical blanks so far, and at the last frame for the top screen
     uint64_t top_frames = 0, top_frames_shown = 0;
     uint32_t top_output = 0, top_shown = 0; // the buffer the last frame went to, the one the top screen showed
+    // the buffer drawn into that the last top screen's frame came from, and
+    // its rows (games draw both screens into one, each in rows of its own)
+    uint32_t top_source = 0, top_rows[2] = {0, 0};
+    bool drawn_flat() const;                // the draw about to go: 2D, every w 1
     // the newest picture in each buffer (a counter of the transfers and
     // writes into it), and the buffer each screen showed
     std::unordered_map<uint32_t, uint64_t> picture_in;

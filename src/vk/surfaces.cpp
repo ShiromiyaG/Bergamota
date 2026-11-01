@@ -253,6 +253,10 @@ bool Impl::transfer(const Backend::Transfer &t) {
     out->dirty = true;
     guard(*out);
     // a frame for the top screen (240x400) is done
+    if (t.out_height == 400) {
+        top_source = in->address;
+        top_rows[0] = row, top_rows[1] = row + t.copy_height * t.scale_y;
+    }
     if (between && !replaying && t.out_height == 400) frame_end(t.output);
     return true;
 }

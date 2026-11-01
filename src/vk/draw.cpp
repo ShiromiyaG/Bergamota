@@ -295,6 +295,17 @@ void Impl::render(Pica &p) {
     // the viewport, rows the PICA's way up
     float vw = f24(r[VIEWPORT_WIDTH]) * 2, vh = f24(r[VIEWPORT_HEIGHT]) * 2;
     float vx = float(int32_t(r[VIEWPORT_XY] << 22) >> 22), vy = float(int32_t((r[VIEWPORT_XY] >> 16) << 22) >> 22);
+    // widescreen: 2D on the top screen narrower by as much as it is shown
+    // wider, centered on the long side (rows; the screen is on its side)
+    // (a viewport the top screen's size: games draw both screens into one
+    // buffer, even into the same rows one after the other)
+    const float top_size = float(top_rows[1] - top_rows[0]);
+    if (const float wide = self.top_wide.load(std::memory_order_relaxed);
+        wide > 1.001f && color->address == top_source && std::abs(vh - top_size) < 1 && drawn_flat()) {
+        float narrower = vh / wide;
+        vy += (vh - narrower) / 2;
+        vh = narrower;
+    }
     VkViewport viewport{vx, float(h) - (vy + vh), vw, vh, 0, 1};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     VkRect2D scissor{{0, 0}, {w, h}};
@@ -414,6 +425,15 @@ void Impl::render(Pica &p) {
 
 // the vertex shader unit as the GPU's shader reads it: its program (made
 // again only when it changes) and the draw's uniforms and output map
+// every position's w 1 (an orthographic projection: 2D); on the GPU's
+// path a few of its vertices run here
+bool Impl::drawn_flat() const {
+    auto flat = [](const std::vector<Vertex> &v) {
+        return !v.empty() && std::all_of(v.begin(), v.end(), [](const Vertex &x) { return std::abs(x.position[3] - 1.0f) < 1e-4f; });
+    };
+    return gpu_draw ? flat(sample_positions(*gpu_draw)) : flat(triangles);
+}
+
 void Impl::gpu_unit(Pica &p, GpuDraw &d) {
     const ShaderUnit &u = p.vertex_shader;
     if (program_version != u.version || !program_now) {
