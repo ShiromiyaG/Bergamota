@@ -66,7 +66,7 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
     const auto &r = p.regs;
     const uint32_t fog = r[0x0E0] & 7, operation = r[COLOR_OPERATION] & 3;
     stats.lacking[1] += fog == 7 || operation == 1;
-    stats.lacking[2] += (r[GEOSTAGE_CONFIG] & 3) == 2 && (r[GS_CONFIG] & 0xFF) != 0;
+    stats.lacking[2] += (r[GEOSTAGE_CONFIG] & 3) == 2 && (r[GS_CONFIG] & 0xFF) > 2;
     stats.lacking[3] += operation == 3;
     if (r[TEXTURE_CONFIG] & 1) {
         const uint32_t type = (r[0x083] >> 28) & 7;

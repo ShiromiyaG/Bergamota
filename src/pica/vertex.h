@@ -57,6 +57,7 @@ private:
     std::vector<Vertex> shaded_;
     std::vector<std::array<Vec4, 16>> inputs_;
     std::vector<uint32_t> indices_, order_, seen_;
+    std::vector<uint32_t> raw_indices_; // an indexed draw's indices as they came (counts among them, for geometry mode 1)
     uint32_t stamp_ = 0;
 };
 

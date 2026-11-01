@@ -17,7 +17,7 @@ using namespace runtime::pica;
 
 namespace {
 
-constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, DEPTH = 0x20200000, TEXTURE = 0x20300000, SIZE = 64;
+constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, DEPTH = 0x20200000, TEXTURE = 0x20300000, VERTICES = 0x20400000, SIZE = 64;
 
 // a float as the PICA's 24-bit one (1.7.16)
 uint32_t to_f24(float f) {
@@ -263,5 +263,71 @@ int main() {
     int flat_read = projected(0), over_w = projected(3);
     std::printf("  read as they are %d, over w %d\n", flat_read, over_w);
     check("a projected texture reads its coordinates over w", flat_read == 128 && over_w == 64);
+
+    // the geometry shader's other modes: the vertices go into its uniforms,
+    // and a shader that copies them out draws a triangle over the buffer
+    auto uniform_geometry = [&](uint32_t mode, const std::vector<uint32_t> &program_words, bool indexed) {
+        b.pica.memory_fill(COLOR, COLOR + SIZE * SIZE * 4, 0, 4);
+        List l = base;
+        table(l, 4, std::vector<uint32_t>(256, 0xFF808080));
+        l.put(VS_COM_MODE, 1);
+        l.put(GEOSTAGE_CONFIG, 2);
+        l.put(VS_OUTPUT_TOTAL, 1);
+        l.put(GS_BLOCK + OUTPUT_MASK, 3);
+        l.put(GS_BLOCK + ENTRY_POINT, 0);
+        // mode 2: three vertices from uniform 0, two outputs each; mode 1:
+        // the first vertex with all its outputs
+        l.put(GS_CONFIG, mode | 2 << 8 | 1 << 12 | 0 << 16);
+        l.put(GS_MAIN_VERTICES, 0);
+        l.put(GS_BLOCK + PROGRAM_INDEX, 0);
+        for (uint32_t word : program_words) l.put(GS_BLOCK + PROGRAM_DATA, word);
+        const float corners[3][2] = {{-1, -1}, {3, -1}, {-1, 3}};
+        if (!indexed) {
+            l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+            for (auto &c : corners) {
+                l.put4(FIXED_ATTRIBUTE_DATA, c[0], c[1], 0, 1);
+                l.put4(FIXED_ATTRIBUTE_DATA, 0.5f, 0.5f, 0, 0);
+            }
+            l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        } else {
+            // an array of the three, two float vectors each, and the indices:
+            // a count of 3, then the three
+            float *v = reinterpret_cast<float *>(b.memory.host(VERTICES, 3 * 32));
+            for (int i = 0; i < 3; i++) {
+                const float one[8] = {corners[i][0], corners[i][1], 0, 1, 0.5f, 0.5f, 0, 0};
+                std::memcpy(v + i * 8, one, sizeof one);
+            }
+            const uint16_t indices[4] = {3, 0, 1, 2};
+            std::memcpy(b.memory.host(VERTICES + 0x100, sizeof indices), indices, sizeof indices);
+            l.put(VS_BLOCK + INPUT_CONFIG, 1);
+            l.put(ATTRIBUTE_BASE, VERTICES >> 3);
+            l.put(ATTRIBUTE_FORMAT_LOW, 0xFF); // both four floats
+            l.put(ATTRIBUTE_FORMAT_HIGH, 0);
+            l.put(ATTRIBUTE_LOADER, 0);
+            l.put(ATTRIBUTE_LOADER + 1, 0x10); // attributes 0 and 1
+            l.put(ATTRIBUTE_LOADER + 2, 32 << 16 | 2u << 28);
+            l.put(INDEX_ARRAY, 0x100 | 1u << 31);
+            l.put(VERTEX_COUNT, 4);
+            l.put(VERTEX_OFFSET, 0);
+            l.put(DRAW_ELEMENTS, 1);
+        }
+        int grey = 0;
+        for (auto &p : b.draw(l)) grey += std::abs(p[0] - 128) <= 1;
+        return grey;
+    };
+    // fixed primitives: c0-c5 are the three vertices' position and coordinates
+    const uint32_t fixed_program[] = {setemit(0, false), mov(0, 0x20), mov(1, 0x21), 0x2Au << 26,
+                                      setemit(1, false), mov(0, 0x22), 0x2Au << 26,  setemit(2, true),
+                                      mov(0, 0x24),      0x2Au << 26,  0x22u << 26};
+    int fixed = uniform_geometry(2, {std::begin(fixed_program), std::end(fixed_program)}, false);
+    // variable primitives: c0 the count, c1-c2 the first vertex whole, c3 and
+    // c4 the others' positions
+    const uint32_t variable_program[] = {setemit(0, false), mov(0, 0x21), mov(1, 0x22), 0x2Au << 26,
+                                         setemit(1, false), mov(0, 0x23), 0x2Au << 26,  setemit(2, true),
+                                         mov(0, 0x24),      0x2Au << 26,  0x22u << 26};
+    int variable = uniform_geometry(1, {std::begin(variable_program), std::end(variable_program)}, true);
+    std::printf("  fixed primitives %d, variable %d of %d pixels grey\n", fixed, variable, SIZE * SIZE);
+    check("the geometry shader's fixed primitives are drawn", fixed == SIZE * SIZE);
+    check("the geometry shader's variable primitives are drawn", variable == SIZE * SIZE);
     return failed ? 1 : 0;
 }

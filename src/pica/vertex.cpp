@@ -242,8 +242,10 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
         if (seen_.size() < 0x10000 * 2) seen_.assign(0x10000 * 2, 0);
         if (++stamp_ == 0) std::fill(seen_.begin(), seen_.end(), 0), stamp_ = 1;
         order_.resize(count);
+        raw_indices_.resize(count);
         for (uint32_t i = 0; i < count; i++) {
             uint32_t index = shorts ? uint32_t(bytes[i * 2] | bytes[i * 2 + 1] << 8) : bytes[i];
+            raw_indices_[i] = index;
             if (seen_[index * 2] != stamp_) {
                 seen_[index * 2] = stamp_;
                 seen_[index * 2 + 1] = uint32_t(inputs_.size());
@@ -264,14 +266,24 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
     return true;
 }
 
-// with a geometry shader (mode 0): the vertices in draw order, each its
-// vertex shader outputs (VS_OUTPUT_TOTAL of them, packed by its mask), so
-// many at a time (the geometry unit's input configuration) through the
-// geometry shader, its input map placing them; the triangles it emits as a
-// list (Zakuro's raster.rs, geometry_stage). on the CPU, a vertex at a time
+// with a geometry shader: the vertices in draw order, each its vertex
+// shader outputs (VS_OUTPUT_TOTAL of them, packed by its mask), handed to
+// the geometry shader as its mode says, the triangles it emits drawn as a
+// list. on the CPU, a vertex at a time. the modes:
+// 0, points: so many outputs at a time (its input configuration) into its
+//    input registers, through its input map (Zakuro's geometry_stage);
+// 1, variable primitives (indexed draws only): an index that is a count,
+//    into float uniform 0 on all four lanes, then that many vertices into
+//    the uniforms after it, the first few (GS_MAIN_VERTICES) all their
+//    outputs and the rest their first alone, the shader run at the last;
+// 2, fixed primitives: so many vertices (GS_CONFIG) into the uniforms from
+//    the one it names, the shader run when they are all there.
+// after each run bool uniform 15 is set, for a shader to tell its first run
+// of a draw from the rest
 void VertexStage::geometry(Pica &p, const std::vector<uint32_t> *order, size_t count, std::vector<Vertex> &triangles) {
     triangles.clear();
-    if ((p.regs[GS_CONFIG] & 0xFF) != 0) return; // the other modes: not done
+    const uint32_t config = p.regs[GS_CONFIG], mode = config & 0xFF;
+    if (mode > 2 || (mode == 1 && !order)) return;
     if (!geometry_program_) geometry_program_ = std::make_unique<Program>();
     if (geometry_program_->version != p.geometry_shader.version) geometry_program_->decode(p.geometry_shader);
     const uint32_t mask = p.regs[VS_BLOCK + OUTPUT_MASK] & 0xFFFF, per_vertex = (p.regs[VS_OUTPUT_TOTAL] & 0xF) + 1,
@@ -287,21 +299,64 @@ void VertexStage::geometry(Pica &p, const std::vector<uint32_t> *order, size_t c
         }
     }
     shaded += inputs_.size();
+    ShaderUnit &unit = p.geometry_shader;
     Runner gs;
     std::vector<Runner::Triangle> emitted;
     gs.emitted = &emitted;
-    std::vector<Vec4> pending;
-    for (size_t i = 0; i < count; i++) {
-        const auto &o = outputs[order ? (*order)[i] : i];
-        pending.insert(pending.end(), o.begin(), o.begin() + std::min(per_vertex, 16u));
-        if (pending.size() < per_invocation) continue;
-        gs.input = {};
-        for (uint32_t id = 0; id < per_invocation; id++) gs.input[(map >> (id * 4)) & 0xF] = pending[id];
-        pending.clear();
+    auto run = [&] {
         emitted.clear();
-        gs.run(p.geometry_shader, *geometry_program_);
+        gs.run(unit, *geometry_program_);
+        unit.bools |= 1u << 15;
         for (const Runner::Triangle &t : emitted) {
             for (const auto &out : t) place(p, out, triangles.emplace_back(), GS_BLOCK);
+        }
+    };
+    const uint32_t outputs_each = std::min(per_vertex, 16u);
+    // a uniform written, none past the last
+    auto set = [&](uint32_t at, const Vec4 &v) {
+        if (at < unit.floats.size()) unit.floats[at] = v;
+    };
+    if (mode == 0) {
+        std::vector<Vec4> pending;
+        for (size_t i = 0; i < count; i++) {
+            const auto &o = outputs[order ? (*order)[i] : i];
+            pending.insert(pending.end(), o.begin(), o.begin() + outputs_each);
+            if (pending.size() < per_invocation) continue;
+            gs.input = {};
+            for (uint32_t id = 0; id < per_invocation; id++) gs.input[(map >> (id * 4)) & 0xF] = pending[id];
+            pending.clear();
+            run();
+        }
+    } else if (mode == 2) {
+        const uint32_t vertices = ((config >> 8) & 0xF) + 1, first = (config >> 16) & 0xFF;
+        uint32_t at = first, taken = 0;
+        for (size_t i = 0; i < count; i++) {
+            const auto &o = outputs[order ? (*order)[i] : i];
+            for (uint32_t k = 0; k < outputs_each; k++) set(at++, o[k]);
+            if (++taken < vertices) continue;
+            run();
+            at = first, taken = 0;
+        }
+    } else {
+        const uint32_t main = (p.regs[GS_MAIN_VERTICES] & 0xFF) + 1;
+        uint32_t left = 0, main_left = 0, at = 0;
+        for (size_t i = 0; i < count; i++) {
+            if (!left) {
+                // a count, not a vertex
+                left = raw_indices_[i];
+                float n = float(left);
+                set(0, {n, n, n, n});
+                at = 1, main_left = main;
+                continue;
+            }
+            const auto &o = outputs[(*order)[i]];
+            if (main_left) {
+                for (uint32_t k = 0; k < outputs_each; k++) set(at++, o[k]);
+                main_left--;
+            } else {
+                set(at++, o[0]);
+            }
+            if (--left == 0) run();
         }
     }
 }

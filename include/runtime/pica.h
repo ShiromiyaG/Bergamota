@@ -70,7 +70,8 @@ enum Reg : uint32_t {
     VS_ATTRIBUTE_COUNT = 0x242,
     VS_COM_MODE = 0x244,
     VS_OUTPUT_TOTAL = 0x24A, // the vertex shader's outputs each vertex, less one, for the geometry shader
-    GS_CONFIG = 0x252,
+    GS_CONFIG = 0x252,       // the geometry shader's mode, and fixed primitives' size, stride and first uniform
+    GS_MAIN_VERTICES = 0x254, // variable primitives' vertices with all their outputs, less one
     PRIMITIVE_CONFIG = 0x25E,
     GS_BLOCK = 0x280,
     VS_BLOCK = 0x2B0,
