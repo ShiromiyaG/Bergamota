@@ -173,22 +173,42 @@ Surface *Impl::surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format
     return surfaces.back().get();
 }
 
-// another resolution: every buffer back to memory and away, made again at
-// the new size as the game draws (screens' images and the read-back
-// buffers follow)
+// another resolution: every buffer resampled into an image of the new
+// size on the GPU, what it holds and whether memory has it kept as they
+// were (through memory, a texture a game made on the GPU at a battle's
+// start came back other colors); a depth buffer the GPU cannot blit goes
+// through memory. the copies made of them (read as color, the frame
+// between's) are made again; the screens' images and the read-back
+// buffers follow
 void Impl::rescale(float to) {
     end_rendering();
+    res = to;
+    VkFormatProperties dp;
+    vkGetPhysicalDeviceFormatProperties(physical, depth_format, &dp);
+    const VkFormatFeatureFlags BLITS = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT;
+    const bool depth_blits = (dp.optimalTilingFeatures & BLITS) == BLITS;
     for (auto &s : surfaces) {
-        if (s->dirty) write_back(*s);
+        if (s->as_color.image) let_go(s->as_color), s->as_color = {}, s->converted = ~0ull;
+        if (s->between.image) let_go(s->between), s->between = {};
+        Image fresh = image(scaled(s->width), scaled(s->height), s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
+        if (s->depth && !depth_blits) {
+            if (s->dirty) write_back(*s);
+            s->stale = true; // loaded into the new image when next used
+        } else {
+            VkImageBlit b{};
+            VkImageAspectFlags aspect = s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+            b.srcSubresource = b.dstSubresource = {aspect, 0, 0, 1};
+            b.srcOffsets[1] = {int32_t(s->image.width), int32_t(s->image.height), 1};
+            b.dstOffsets[1] = {int32_t(fresh.width), int32_t(fresh.height), 1};
+            vkCmdBlitImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, fresh.image, VK_IMAGE_LAYOUT_GENERAL, 1, &b, VK_FILTER_NEAREST);
+        }
         let_go(s->image);
-        if (s->as_color.image) let_go(s->as_color);
-        if (s->between.image) let_go(s->between);
+        s->image = fresh;
     }
-    surfaces.clear();
+    barrier();
     drop_ops();
     draws_before.clear();
     between_ready = false;
-    res = to;
     // the read-back buffers as large as the screens now are
     submit();
     for (Buffer &b : shown.buffers) {

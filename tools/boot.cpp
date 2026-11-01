@@ -14,6 +14,7 @@
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
 //   RUNTIME_SCALE=n         the buffers drawn n times as large each way (2.25: 1080p)
+//   RUNTIME_RESCALE=f:n     and changed to n at frame f, as the player may
 //   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
 //                           it was found in most, sampled every millisecond
 //   RUNTIME_SAMPLE_FROM=s   sampled from s seconds in (on the host's clock)
@@ -260,6 +261,14 @@ int main(int argc, char **argv) {
             if (in.tx >= 0) handlers.input.touch = std::make_pair(uint16_t(in.tx), uint16_t(in.ty));
             handlers.tick(system);
             take_frames();
+#ifdef RUNTIME_VULKAN
+            // RUNTIME_RESCALE=frame:n: the resolution changed to n at that frame, as the player may
+            if (vulkan && env("RUNTIME_RESCALE")) {
+                unsigned long long at = 0;
+                float to = 1;
+                if (std::sscanf(env("RUNTIME_RESCALE"), "%llu:%f", &at, &to) == 2 && handlers.vblanks == at) vulkan->scale = to;
+            }
+#endif
             if (sketch && shots_dir && handlers.vblanks >= sketch_frame + shot_every) {
                 sketch_frame = handlers.vblanks / shot_every * shot_every;
                 char prefix[512];
