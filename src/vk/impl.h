@@ -153,6 +153,12 @@ struct Surface {
     // frame it was kept for, Impl::ops_epoch): a frame between starts there
     Image start;
     uint64_t start_ops = ~0ull;
+    // read by a frame before it drew into it (a shadow map the frame before
+    // drew for it): the frame's frames between start from what the frame
+    // before's left in it at the same picture (ends, from the frame ends_ops)
+    bool read_first = false, read_first_before = false;
+    std::vector<Image> ends;
+    uint64_t ends_ops = ~0ull;
     uint32_t offset(uint32_t x, uint32_t y, uint32_t bpp) const {
         return linear ? (y * width + x) * bpp : tiled_offset(x, y, width, bpp);
     }
@@ -389,7 +395,7 @@ struct VulkanRenderer::Impl {
 
     static float jump_limit(const std::vector<Vertex> &before, const std::vector<Vertex> &now);
 
-    void draw_between(float t);
+    void draw_between(float t, int picture);
 
     bool keep_between(uint32_t output, int slot);
 
@@ -400,6 +406,8 @@ struct VulkanRenderer::Impl {
     void drop_ops();
     uint64_t ops_epoch = 0; // counts the frames' ops let go of (drop_ops)
     void keep_start(Surface &s);
+    void note_reads(const VkImageView *views);
+    void let_go_ends(Surface &s);
     static bool projected_lookup(const uint32_t *regs);
 
     void let_go(const Image &i);
