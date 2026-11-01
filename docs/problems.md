@@ -222,6 +222,45 @@ presentation tick. Every cause below comes from that difference.
    still marks the surface stale, so the next `surface()` uploads older
    memory into the between image.
 
+### Still open (2026-11-01): flashes in cutscenes
+
+Not solved; left for later. With "60 FPS" or more on, cutscenes flash for a
+frame: scenery and characters, on abrupt camera moves and when a character
+comes in or goes. Seen in Kukui's video call (USUM): a horizontal streak
+across the picture at eye height; the character drawn dark grey and
+untextured (his sunglasses still coloured); half of his face dark, split
+down the middle. Too short to capture on purpose; the owner caught three
+frames.
+
+What is known:
+
+- Only with frames between; never with them off.
+- With F1's "Debug: frames between without motion" on (the frame between
+  drawn again in full but at t = 1, every vertex where the game's frame
+  has it) it does not happen. So the drawing again (buffers, textures,
+  depth, passes) is right; the fault is in the motion: what a vertex is
+  mixed with, or what it is mixed into.
+- The dark character looks like a base drawn under a lit pass that failed
+  where it should have matched (depths equal), or a character falling into
+  its own shadow.
+
+Tried, none fixed it (commits in this repository, 2026-11-01): a jump told
+by a draw's size or against the frame's median motion; a cut told on the
+whole frame (a quarter of what moved jumped, or most things a quarter
+nearer or farther); vertices that crossed the eye's plane left unmixed
+(`e868b31`, kept); buffers a frame let go of kept for its replay
+(`4a4b901`, kept); the frame's draws paired as a whole, the likeliest
+first (`3e7668a`, kept); texture 0's coordinates mixed with the position
+(shadow maps); one way for a frame's positions, all from the kept outputs
+or all run again, and twice the outputs' room (`2c30b94`, kept). The size,
+median, survey and coordinate rules were taken out again (`2c30b94`).
+
+Left to look at: the order the passes of one character overlap in and their
+depth and stencil tests (equal tests, a lit pass over a base); the
+outlines' edge filter reading a buffer drawn between; whether the dark pass
+pairs with a draw of another pass; lighting values (the view vector,
+quaternions) kept from this frame while the position is mixed.
+
 ## Performance
 
 1. **The game's thread does the presentation** (sure). `System::run` calls
