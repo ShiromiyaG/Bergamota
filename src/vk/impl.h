@@ -374,7 +374,8 @@ struct VulkanRenderer::Impl {
     // on the CPU
     static std::vector<Vertex> sample_positions(const GpuDraw &d);
 
-    static bool jumps(const Op &before, const Op &now);
+    // scene: how far the frame's things moved as a rule (survey)
+    static bool jumps(const Op &before, const Op &now, float scene = 0);
 
     static float distance(const Op &before, const Op &now);
     static float extent(const std::vector<Vertex> &vertices);
@@ -384,7 +385,8 @@ struct VulkanRenderer::Impl {
 
     bool keep_between(uint32_t output, int slot);
 
-    bool cut();
+    float scene_motion = 0;
+    bool survey();
 
     void frame_end(uint32_t output);
 

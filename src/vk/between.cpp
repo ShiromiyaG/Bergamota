@@ -262,25 +262,28 @@ std::vector<Vertex> Impl::sample_positions(const GpuDraw &d) {
     return out;
 }
 
-// a pair that jumps (more than a quarter of the screen) is not the same
-// thing moving (a camera cut): drawn where it is now. one shaded on the
-// GPU tells it from a few vertices run here, when its uniforms changed
-// a small thing that moved more than its own size is another one (NPCs'
-// shadows, alike quads: one gone and one come paired, drawn halfway, would
-// flash up between them): past the larger of its size and a fortieth of the
-// screen, up to the quarter that tells a cut
-static float jump_past(const std::vector<Vertex> &now) {
-    return std::clamp(Impl::extent(now), 0.05f, 0.5f);
-}
-
-bool Impl::jumps(const Op &before, const Op &now) {
-    if (!now.gpu) return moved(before.vertices, now.vertices) > jump_past(now.vertices);
-    if (!before.gpu || std::memcmp(&before.gpu->unit, &now.gpu->unit, sizeof(UnitBlock)) == 0) return false;
-    // each once: this frame's are the next one's frame before
-    for (GpuDraw *d : {before.gpu.get(), now.gpu.get()}) {
-        if (d->samples.empty()) d->samples = sample_positions(*d);
+// a pair that jumps is not the same thing moving: drawn where it is now.
+// more than a quarter of the screen is a cut; less, a thing that moved past
+// its own size (or a fortieth of the screen) and far past what the scene
+// did as a rule (scene: the frame's median, the camera's sweep), another one
+// (NPCs' shadows, alike quads, one gone and one come; a character appearing
+// paired with another of its model) that drawn halfway would flash up. With
+// the camera sweeping everything moves past its size, together: none of it
+// jumps. one shaded on the GPU tells it from a few vertices run here, when
+// its uniforms changed
+bool Impl::jumps(const Op &before, const Op &now, float scene) {
+    float d, size;
+    if (!now.gpu) {
+        d = moved(before.vertices, now.vertices), size = extent(now.vertices);
+    } else {
+        if (!before.gpu || std::memcmp(&before.gpu->unit, &now.gpu->unit, sizeof(UnitBlock)) == 0) return false;
+        // each once: this frame's are the next one's frame before
+        for (GpuDraw *g : {before.gpu.get(), now.gpu.get()}) {
+            if (g->samples.empty()) g->samples = sample_positions(*g);
+        }
+        d = moved(before.gpu->samples, now.gpu->samples), size = extent(now.gpu->samples);
     }
-    return moved(before.gpu->samples, now.gpu->samples) > jump_past(now.gpu->samples);
+    return d > 0.5f || (d > std::clamp(size, 0.05f, 0.5f) && d > std::max(scene * 4, 0.05f));
 }
 
 // the game frame just drawn, drawn again at t (0 the frame before, 1
@@ -339,11 +342,11 @@ void Impl::draw_between(float t) {
             // the GPU's shader runs both and puts each vertex between, those
             // past the limit its few vertices run here give left where they are
             gpu_draw = op.gpu.get();
-            gpu_before = before && !jumps(*before, op) ? before->gpu.get() : nullptr;
+            gpu_before = before && !jumps(*before, op, scene_motion) ? before->gpu.get() : nullptr;
             gpu_t = t;
             gpu_jump = gpu_before && !gpu_before->samples.empty() && !op.gpu->samples.empty()
                            ? jump_limit(gpu_before->samples, op.gpu->samples) : 1e9f;
-        } else if (before && !jumps(*before, op)) {
+        } else if (before && !jumps(*before, op, scene_motion)) {
             // a triangle with a vertex far past the rest's moves (another
             // thing's, a batch reordered) is left where it is, whole
             const float limit = jump_limit(before->vertices, op.vertices);
@@ -421,33 +424,43 @@ bool Impl::keep_between(uint32_t output, int slot) {
     return true;
 }
 
-// a frame for the top screen ended in a transfer into output: drawn
-// between as many times as the blanks since the one before show pictures
-// (`between` a blank, the last the game's own: one for a scene at 30 shown
-// at 60, none for one at 60 unless more than 60), then kept as the frame
-// before
-// the frame a cut (a cutscene's camera to another shot): of the pairs the
-// frame before has that moved, more than a quarter jumped. Each draw tells
-// a jump of its own (jumps), but across a cut a few things land near where
+// what the frame's pairs did, before any is drawn between: scene_motion,
+// the median of how far those that moved went (the camera's sweep, for
+// jumps), and whether it is a cut (a cutscene's camera to another shot):
+// more than a quarter of them past a quarter of the screen. Each draw tells
+// a jump of its own, but across a cut a few things land near where
 // something like them was (a big piece of the set, a character on the same
 // side) and would be drawn halfway between two shots while the rest is in
 // the new one, a picture of neither that flashes up; a cut gets no frames
 // between at all
-bool Impl::cut() {
+bool Impl::survey() {
     std::map<uint32_t, Matching> matched;
-    size_t moving = 0, jumped = 0;
+    std::vector<float> moves;
+    size_t far = 0;
     for (const Op &op : ops_now) {
         if (op.kind != Op::Draw) continue;
         auto last = draws_before.find(op_target(op));
         if (last == draws_before.end()) continue;
         const Op *before = match(last->second, matched[op_target(op)], op);
-        if (!before || distance(*before, op) < 0.002f) continue;
-        moving++;
-        if (jumps(*before, op)) jumped++;
+        if (!before) continue;
+        float d = distance(*before, op);
+        if (d < 0.002f) continue;
+        moves.push_back(d);
+        if (d > 0.5f) far++;
     }
-    return moving >= 4 && jumped * 4 > moving;
+    scene_motion = 0;
+    if (!moves.empty()) {
+        std::nth_element(moves.begin(), moves.begin() + moves.size() / 2, moves.end());
+        scene_motion = moves[moves.size() / 2];
+    }
+    return moves.size() >= 4 && far * 4 > moves.size();
 }
 
+// a frame for the top screen ended in a transfer into output: drawn
+// between as many times as the blanks since the one before show pictures
+// (`between` a blank, the last the game's own: one for a scene at 30 shown
+// at 60, none for one at 60 unless more than 60), then kept as the frame
+// before
 void Impl::frame_end(uint32_t output) {
     top_frames++;
     top_output = output;
@@ -456,7 +469,7 @@ void Impl::frame_end(uint32_t output) {
     between_ready = false;
     bool drew = std::any_of(ops_now.begin(), ops_now.end(), [](const Op &op) { return op.kind == Op::Draw; });
     const int pictures = span * std::clamp(between, 0, PARTS);
-    if (drew && pictures > 1 && last_pica && !cut()) {
+    if (drew && pictures > 1 && last_pica && !survey()) {
         bool kept = true;
         between_list ^= 1;
         for (int k = 1; k < pictures; k++) {
