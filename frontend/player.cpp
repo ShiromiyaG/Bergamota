@@ -229,7 +229,7 @@ public:
         stats = counting_;
         static constexpr const char *LACKING[4] = {"w buffer", "gas", "geometry shader modes", "shadow"};
         for (int i = 0; i < 4; i++) {
-            if (!vulkan.lacking[i] || told_[i]) continue;
+            if (!vulkan.stats.lacking[i] || told_[i]) continue;
             told_[i] = true;
             std::time_t now = std::time(nullptr);
             char when[32];
@@ -241,14 +241,14 @@ public:
             std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms; "
                         "sound: %llu DSP frames, %llu let go, starved %llu times\n",
                         stats.shown, (unsigned long long)(services.pictures - pictures_before_), stats.worst_ms, stats.gpu_ms,
-                        stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before_) * 1000,
+                        stats.idle_ms, (vulkan.stats.gpu_seconds - host_gpu_before_) * 1000,
                         (unsigned long long)(services.dsp_frames - dsp_before_),
                         (unsigned long long)(services.dsp_dropped - dropped_before_), (unsigned long long)starved.exchange(0));
             std::fflush(stdout);
         }
         dsp_before_ = services.dsp_frames;
         dropped_before_ = services.dsp_dropped;
-        host_gpu_before_ = vulkan.gpu_seconds;
+        host_gpu_before_ = vulkan.stats.gpu_seconds;
         pictures_before_ = services.pictures;
         counting_ = {};
         second_ = at;

@@ -65,10 +65,10 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
     auto t = clock::now();
     const auto &r = p.regs;
     const uint32_t fog = r[0x0E0] & 7, operation = r[COLOR_OPERATION] & 3;
-    lacking[0] += !(r[DEPTHMAP_ENABLE] & 1) && (r[DEPTH_COLOR_MASK] & 0x1001);
-    lacking[1] += fog == 7 || operation == 1;
-    lacking[2] += (r[GEOSTAGE_CONFIG] & 3) == 2 && (r[GS_CONFIG] & 0xFF) != 0;
-    lacking[3] += operation == 3;
+    stats.lacking[0] += !(r[DEPTHMAP_ENABLE] & 1) && (r[DEPTH_COLOR_MASK] & 0x1001);
+    stats.lacking[1] += fog == 7 || operation == 1;
+    stats.lacking[2] += (r[GEOSTAGE_CONFIG] & 3) == 2 && (r[GS_CONFIG] & 0xFF) != 0;
+    stats.lacking[3] += operation == 3;
     // the inputs gathered here and the shader run on the GPU, or all of it here
     if (d.gpu_vertices && d.stage.gather(p, indexed, d.gathered)) {
         GpuDraw &live = d.live;
@@ -76,19 +76,19 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
         std::swap(live.indices, d.gathered.indices);
         live.stride = d.gathered.stride;
         d.gpu_unit(p, live);
-        time_vertices += since(t);
+        stats.time_vertices += since(t);
         t = clock::now();
         d.gpu_draw = &live;
         d.render(p);
         d.gpu_draw = nullptr;
-        time_render += since(t);
+        stats.time_render += since(t);
         return;
     }
     d.stage.draw(p, indexed, d.triangles);
-    time_vertices += since(t);
+    stats.time_vertices += since(t);
     t = clock::now();
     d.render(p);
-    time_render += since(t);
+    stats.time_render += since(t);
 }
 
 void VulkanRenderer::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>> &vertices) {
@@ -100,7 +100,7 @@ void VulkanRenderer::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 
 void VulkanRenderer::fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
     auto t = clock::now();
     if (ready()) impl_->cause = 2, impl_->fill(start, end, value, width);
-    time_sync += since(t);
+    stats.time_sync += since(t);
 }
 
 bool VulkanRenderer::vblank(Pica &p) { return ready() && impl_->vblank(p); }
@@ -108,14 +108,14 @@ bool VulkanRenderer::vblank(Pica &p) { return ready() && impl_->vblank(p); }
 bool VulkanRenderer::display_transfer(const Transfer &transfer) {
     auto t = clock::now();
     bool done = ready() && impl_->transfer(transfer);
-    time_sync += since(t);
+    stats.time_sync += since(t);
     return done;
 }
 
 void VulkanRenderer::sync(uint32_t paddr, uint32_t size, bool write) {
     auto t = clock::now();
     if (ready()) impl_->cause = 1, impl_->sync(paddr, size, write);
-    time_sync += since(t);
+    stats.time_sync += since(t);
 }
 
 } // namespace runtime

@@ -424,7 +424,7 @@ void Impl::barrier() {
 
 void Impl::end_rendering() {
     if (!rendering) return;
-    self.pass_ends[end_cause]++;
+    self.stats.pass_ends[end_cause]++;
     end_cause = 2;
     vkCmdEndRendering(cmd);
     gpu_close(pass_scope);
@@ -446,10 +446,10 @@ void Impl::retire(Slot &s) {
         std::vector<uint64_t> ticks(used);
         if (used && vkGetQueryPoolResults(device, timestamps, base, used, used * 8, ticks.data(), 8, VK_QUERY_RESULT_64_BIT) ==
                         VK_SUCCESS) {
-            if (ticks[1] > ticks[0]) self.gpu_seconds += double(ticks[1] - ticks[0]) * timestamp_ns * 1e-9;
+            if (ticks[1] > ticks[0]) self.stats.gpu_seconds += double(ticks[1] - ticks[0]) * timestamp_ns * 1e-9;
             for (auto [part, at] : scopes[slot]) {
                 uint64_t a = ticks[at - base], b = ticks[at - base + 1];
-                if (b > a) self.gpu_parts[part] += double(b - a) * timestamp_ns * 1e-9;
+                if (b > a) self.stats.gpu_parts[part] += double(b - a) * timestamp_ns * 1e-9;
             }
         }
     }
@@ -490,7 +490,7 @@ void Impl::submit(bool wait) {
     staging.clear();
     dead.clear();
     recording = false;
-    self.submits++;
+    self.stats.submits++;
     if (wait) retire(s);
     // the other slot, once its commands ran
     current ^= 1;

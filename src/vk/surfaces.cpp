@@ -17,7 +17,7 @@ void Impl::copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspect
     vkCmdCopyBufferToImage(cmd, b.buffer, i.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
     barrier();
     staging.push_back(b);
-    self.uploads++;
+    self.stats.uploads++;
 }
 
 void Impl::upload_color(Image &i, const uint8_t *rgba, VkDeviceSize size) { copy_in(i, rgba, size, VK_IMAGE_ASPECT_COLOR_BIT); }
@@ -60,7 +60,7 @@ void Impl::upload(Surface &s) {
 
 void Impl::write_back(Surface &s) {
     if (replaying) return; // a frame between the game's never reaches memory
-    self.write_back_causes[cause]++;
+    self.stats.write_back_causes[cause]++;
     auto started = std::chrono::steady_clock::now();
     uint32_t w = s.width, h = s.height;
     VkDeviceSize texels = VkDeviceSize(w) * h;
@@ -108,7 +108,7 @@ void Impl::write_back(Surface &s) {
     give_back(a);
     give_back(b);
     s.dirty = false;
-    self.write_backs++;
+    self.stats.write_backs++;
     if (debug) {
         static int shown = 0;
         if (shown++ < 30) {

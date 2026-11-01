@@ -30,7 +30,9 @@ One `Impl` struct holds everything. By what it does:
 - the `RUNTIME_VK_*` variables read once at start (done for
   `RUNTIME_VK_DEBUG`; `RUNTIME_VK_NO_PICTURE` is gone);
 - the counters and timers (`draws`, `time_vertices`, `part[]`,
-  `write_back_causes`...) in one `Stats` struct, timed only when asked.
+  `write_back_causes`...) in one `Stats` struct (done:
+  `VulkanRenderer::stats`; still timed always, which costs nothing that
+  shows).
 
 ## 2. One place for the frames between and for presenting
 

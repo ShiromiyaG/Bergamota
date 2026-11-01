@@ -108,7 +108,7 @@ VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vert
 
 void Impl::render(Pica &p) {
     const auto &r = p.regs;
-    self.draws++;
+    self.stats.draws++;
     const bool on_gpu = gpu_draw != nullptr;
     if (on_gpu ? gpu_draw->indices.empty() : triangles.empty()) return;
     uint32_t dims = r[FRAMEBUFFER_DIMENSIONS], w = dims & 0x7FF, h = ((dims >> 12) & 0x3FF) + 1;
@@ -253,7 +253,7 @@ void Impl::render(Pica &p) {
         ri.pDepthAttachment = depth ? &da : nullptr;
         ri.pStencilAttachment = depth ? &da : nullptr;
         vkCmdBeginRendering(cmd, &ri);
-        self.passes++;
+        self.stats.passes++;
         pass_scope = gpu_open(0);
         rendering = true;
         color_target = color, depth_target = depth;
@@ -269,7 +269,7 @@ void Impl::render(Pica &p) {
     if (on_gpu && translator) {
         pipe = translator->pipeline(gpu_draw->program, gpu_draw->program_hash, gpu_draw->unit.misc[1], key, depth != nullptr);
     }
-    if (on_gpu && pipe) self.translated_draws++;
+    if (on_gpu && pipe) self.stats.translated_draws++;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe ? pipe : pipeline(key, depth != nullptr));
 
     // the viewport, rows the PICA's way up
@@ -329,7 +329,7 @@ void Impl::render(Pica &p) {
         push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
-        self.triangles += triangles.size() / 3;
+        self.stats.triangles += triangles.size() / 3;
     } else {
         VkDescriptorBufferInfo gpu_info[6] = {
             {uniforms.buffer, program_offset, sizeof(ProgramBlock)},
@@ -355,12 +355,12 @@ void Impl::render(Pica &p) {
             push.between = 2;
             push.now_out = gpu_draw->outputs;
             push.before_out = gpu_before ? gpu_before->outputs : gpu_draw->outputs;
-            self.reused_draws++;
+            self.stats.reused_draws++;
         }
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, &push);
         vkCmdBindIndexBuffer(cmd, vertices.buffer, index_off, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, uint32_t(gpu_draw->indices.size()), 1, 0, 0, 0);
-        self.triangles += gpu_draw->indices.size() / 3;
+        self.stats.triangles += gpu_draw->indices.size() / 3;
     }
 
     // drawn: memory is behind until written back, which the CPU asks for

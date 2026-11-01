@@ -340,26 +340,26 @@ int main(int argc, char **argv) {
 #ifdef RUNTIME_VULKAN
     if (vulkan) {
         std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
-                    (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
-                    (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
-        std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s; the host's GPU %.1f s\n", vulkan->time_vertices,
-                    vulkan->time_render, vulkan->time_sync, vulkan->gpu_seconds);
-        std::printf("the host's GPU: passes %.1f s, frames between %.1f s (copies %.1f s), screens %.1f s\n", vulkan->gpu_parts[0],
-                    vulkan->gpu_parts[2], vulkan->gpu_parts[1], vulkan->gpu_parts[3]);
+                    (unsigned long long)vulkan->stats.draws, (unsigned long long)vulkan->stats.triangles, (unsigned long long)vulkan->stats.uploads,
+                    (unsigned long long)vulkan->stats.write_backs, (unsigned long long)vulkan->stats.submits);
+        std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s; the host's GPU %.1f s\n", vulkan->stats.time_vertices,
+                    vulkan->stats.time_render, vulkan->stats.time_sync, vulkan->stats.gpu_seconds);
+        std::printf("the host's GPU: passes %.1f s, frames between %.1f s (copies %.1f s), screens %.1f s\n", vulkan->stats.gpu_parts[0],
+                    vulkan->stats.gpu_parts[2], vulkan->stats.gpu_parts[1], vulkan->stats.gpu_parts[3]);
         std::printf("passes %llu: ended for another target %llu, a texture that was the target %llu, the rest %llu\n",
-                    (unsigned long long)vulkan->passes, (unsigned long long)vulkan->pass_ends[0],
-                    (unsigned long long)vulkan->pass_ends[1], (unsigned long long)vulkan->pass_ends[2]);
+                    (unsigned long long)vulkan->stats.passes, (unsigned long long)vulkan->stats.pass_ends[0],
+                    (unsigned long long)vulkan->stats.pass_ends[1], (unsigned long long)vulkan->stats.pass_ends[2]);
         uint64_t compiled, loaded, failed;
         vulkan->translation_counts(compiled, loaded, failed);
         std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them, %llu between reused\n",
                     (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
-                    (unsigned long long)vulkan->translated_draws, (unsigned long long)vulkan->reused_draws);
+                    (unsigned long long)vulkan->stats.translated_draws, (unsigned long long)vulkan->stats.reused_draws);
         std::printf("draws the renderer lacks: w buffer %llu, gas %llu, geometry shader modes %llu, shadow %llu\n",
-                    (unsigned long long)vulkan->lacking[0], (unsigned long long)vulkan->lacking[1],
-                    (unsigned long long)vulkan->lacking[2], (unsigned long long)vulkan->lacking[3]);
-        std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],
-                    (unsigned long long)vulkan->write_back_causes[1], (unsigned long long)vulkan->write_back_causes[2],
-                    (unsigned long long)vulkan->write_back_causes[3]);
+                    (unsigned long long)vulkan->stats.lacking[0], (unsigned long long)vulkan->stats.lacking[1],
+                    (unsigned long long)vulkan->stats.lacking[2], (unsigned long long)vulkan->stats.lacking[3]);
+        std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->stats.write_back_causes[0],
+                    (unsigned long long)vulkan->stats.write_back_causes[1], (unsigned long long)vulkan->stats.write_back_causes[2],
+                    (unsigned long long)vulkan->stats.write_back_causes[3]);
     }
 #endif
     if (sketch) {
