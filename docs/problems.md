@@ -138,23 +138,26 @@ Nothing of the list is left.
 
 ## What the renderer lacks (2026-11-01)
 
-`boot` counts the draws that ask for what the renderer does not do
-(`VulkanRenderer::lacking`, "draws the renderer lacks"). From the title to
-the field: fog in 48727 draws (about a third), none with gas, procedural
-textures, a geometry shader or the shadow output. Fog is done since (the
-table after the lighting tables, mixed in at the end of `pica.frag` as
-Zakuro's `fog.rs` does); the depth it reads is the w buffer's when
-`DEPTHMAP_ENABLE` is off. The renderer's own depth still ignores the w
-buffer, which the counter now has in fog's place (none so far).
-Procedural textures and the geometry shader (mode 0, on the CPU: its draws
-go the CPU's way, the triangles it emits as a list) are done since, both
-from Zakuro's and checked by `render_test`, which draws command lists made
-by hand and reads the buffer back. The counter keeps the w buffer, gas,
-the geometry shader's other modes and the shadow output, none of which
-Zakuro does either; each waits for a scene that uses it: the counter tells, in `boot` and in the
-player, which notes the first draw of each in a session in
-`renderer-lacks.txt` beside its config (`%APPDATA%\Solstice` for the
-port).
+`boot` and the player count the draws that ask for what the renderer does
+not do (`VulkanRenderer::stats.lacking`; the player notes the first of
+each in a session in `renderer-lacks.txt` beside its config). From the
+title to the field a third of the draws used fog, which it then ignored.
+
+Done since, each checked by `render_test` (command lists made by hand,
+the buffers read back): fog and procedural textures (from Zakuro's, MIT);
+the geometry shader in its three modes (points from Zakuro's; variable
+and fixed primitives); the w buffer (a second build of `pica.frag` writes
+the depth, chosen by the pipeline's key so the rest keep the early depth
+test); texture 0 projected, as a cube map, and as a shadow map (2D and
+cube); the shadow output (a third build of `pica.frag`, with no
+attachment, keeps the map's word, depth over intensity, through an atomic
+compare-and-swap on the color buffer seen as R32_UINT). What Zakuro does
+not have was written from the hardware's behavior, Azahar (GPL) read as a
+reference only, none of its code taken. None of these showed from the
+title to the field.
+
+The counter keeps what is left: gas, which Azahar does not do either, and
+a geometry shader mode past the three there are.
 
 ## Flashes with "60 FPS" (frames between)
 

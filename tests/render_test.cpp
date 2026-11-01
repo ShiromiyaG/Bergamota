@@ -367,5 +367,62 @@ int main() {
     }
     std::printf("\n");
     check("a cube map reads the face its direction points at", faces_right);
+
+    // the shadow output (mode 3) into a map that starts far and full
+    // (0xFFFFFFFF): a fragment with an intensity (green 128) lowers only the
+    // intensity, one with none (green 0) only the depth (0.25 here)
+    b.pica.memory_fill(COLOR, COLOR + SIZE * SIZE * 4, 0xFFFFFFFF, 4);
+    auto shadow_draw = [&](uint32_t color) {
+        List l = base;
+        table(l, 4, std::vector<uint32_t>(256, color));
+        l.put(COLOR_OPERATION, 3);
+        l.put(0x130, 0x3C00); // constant 1, linear 0
+        l.put(DEPTH_RANGE, to_f24(1));
+        l.put(DEPTH_NEAR, 0);
+        l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+        const float corners[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
+        for (auto &c : corners) {
+            l.put4(FIXED_ATTRIBUTE_DATA, c[0], c[1], 0.25f, 1);
+            l.put4(FIXED_ATTRIBUTE_DATA, 0.5f, 0.5f, 0, 0);
+        }
+        l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        b.draw(l);
+    };
+    shadow_draw(0xFF808080);
+    shadow_draw(0xFF000000);
+    const uint8_t *shadow_word = b.memory.host(COLOR, SIZE * SIZE * 4) + tiled_offset(SIZE / 2, SIZE / 2, SIZE, 4);
+    uint32_t kept_depth = uint32_t(shadow_word[0]) << 16 | shadow_word[1] << 8 | shadow_word[2], kept_intensity = shadow_word[3];
+    std::printf("  shadow map: depth %06X, intensity %u\n", kept_depth, kept_intensity);
+    check("the shadow output keeps the nearest depth and the lowest intensity",
+          kept_depth >= 0x3FFFF0 && kept_depth <= 0x400000 && kept_intensity == 128);
+
+    // the map read as a shadow texture (type 2, orthographic): in front of
+    // what it saw (0.2) its intensity, behind (0.3) none
+    auto shadow_read = [&](float z) {
+        List l = base;
+        l.put(COLOR_BUFFER_ADDRESS, (COLOR + 0x10000) >> 3); // drawn elsewhere, the map read
+        l.put(TEV_STAGE0, 3 | 3 << 16);
+        l.put(TEXTURE_CONFIG, 1);
+        l.put(0x082, SIZE | SIZE << 16);
+        l.put(0x083, 2u << 28);
+        l.put(0x085, COLOR >> 3);
+        l.put(0x08B, 1); // orthographic, no bias
+        l.put(0x08E, 0);
+        l.put(OUTPUT_MAP + 1, 0x1F100D0C);
+        l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+        const float corners[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
+        for (auto &c : corners) {
+            l.put4(FIXED_ATTRIBUTE_DATA, c[0], c[1], 0, 1);
+            l.put4(FIXED_ATTRIBUTE_DATA, (c[0] + 1) / 2, (c[1] + 1) / 2, z, 0);
+        }
+        l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        std::memcpy(b.memory.host(LIST, uint32_t(l.words.size() * 4)), l.words.data(), l.words.size() * 4);
+        b.pica.command_list(LIST, uint32_t(l.words.size() * 4));
+        b.renderer.sync(COLOR + 0x10000, SIZE * SIZE * 4, false);
+        return int(b.memory.host(COLOR + 0x10000, SIZE * SIZE * 4)[tiled_offset(SIZE / 2, SIZE / 2, SIZE, 4) + 3]);
+    };
+    int in_front = shadow_read(0.2f), behind = shadow_read(0.3f);
+    std::printf("  shadow texture: in front %d, behind %d\n", in_front, behind);
+    check("a shadow texture gives its intensity in front of what it saw, none behind", in_front == 128 && behind == 0);
     return failed ? 1 : 0;
 }

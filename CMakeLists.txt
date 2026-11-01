@@ -71,6 +71,12 @@ if(RUNTIME_VULKAN)
         COMMAND Vulkan::glslc -O -mfmt=num -DW_BUFFER -o ${SHADER_OUT}/pica_wbuffer.frag.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica.frag
         DEPENDS src/vk/pica.frag
         VERBATIM)
+    # and for the shadow output, writing a shadow map through atomics
+    add_custom_command(
+        OUTPUT ${SHADER_OUT}/pica_shadow.frag.inc
+        COMMAND Vulkan::glslc -O -mfmt=num -DSHADOW -o ${SHADER_OUT}/pica_shadow.frag.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica.frag
+        DEPENDS src/vk/pica.frag
+        VERBATIM)
     add_custom_command(
         OUTPUT ${SHADER_OUT}/depth.comp.inc
         COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/depth.comp.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/depth.comp
@@ -79,7 +85,7 @@ if(RUNTIME_VULKAN)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
         src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/vk/translate.cpp src/vk/present.cpp src/pica/texture.cpp
         ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica_gpu.vert.txt ${SHADER_OUT}/pica.frag.inc
-        ${SHADER_OUT}/pica_wbuffer.frag.inc ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc
+        ${SHADER_OUT}/pica_wbuffer.frag.inc ${SHADER_OUT}/pica_shadow.frag.inc ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc
         ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     # the game's vertex programs compiled while it runs (shaderc, from the SDK, linked in)

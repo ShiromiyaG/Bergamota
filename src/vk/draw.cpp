@@ -18,10 +18,11 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
 // for the GPU's shader (key bit 41). touches nothing of the renderer's, so
 // the translator's thread makes them too
 VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const {
-    bool on_gpu = (key >> 41) & 1, w_buffer = (key >> 42) & 1;
+    bool on_gpu = (key >> 41) & 1, w_buffer = (key >> 42) & 1, shadow = (key >> 43) & 1;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr},
-        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, w_buffer ? frag_wbuffer : frag,
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
+         shadow ? frag_shadow : w_buffer ? frag_wbuffer : frag,
          "main", nullptr},
     };
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
@@ -72,7 +73,7 @@ VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vert
     blend.dstAlphaBlendFactor = FACTOR[(func >> 28) & 15];
     blend.colorWriteMask = (key >> 4) & 15;
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1;
+    cb.attachmentCount = shadow ? 0 : 1; // the shadow output writes through an image, no attachment
     cb.pAttachments = &blend;
     VkDynamicState dynamic[] = {
         VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_CULL_MODE, VK_DYNAMIC_STATE_FRONT_FACE,
@@ -85,7 +86,7 @@ VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vert
     dyn.pDynamicStates = dynamic;
     VkFormat color_format = VK_FORMAT_R8G8B8A8_UNORM;
     VkPipelineRenderingCreateInfo ri{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
-    ri.colorAttachmentCount = 1;
+    ri.colorAttachmentCount = shadow ? 0 : 1;
     ri.pColorAttachmentFormats = &color_format;
     ri.depthAttachmentFormat = has_depth ? depth_format : VK_FORMAT_UNDEFINED;
     ri.stencilAttachmentFormat = has_depth ? depth_format : VK_FORMAT_UNDEFINED;
@@ -119,7 +120,10 @@ void Impl::render(Pica &p) {
     uint32_t mask_reg = r[DEPTH_COLOR_MASK], stencil_reg = r[STENCIL_TEST];
     bool depth_test = mask_reg & 1, depth_write = (mask_reg >> 12) & 1 && (r[DEPTH_STENCIL_WRITE] & 2);
     bool stencil = (stencil_reg & 1) && (r[DEPTH_BUFFER_FORMAT] & 3) == 3;
-    bool use_depth = depth_address && (depth_test || depth_write || stencil);
+    // the shadow output (mode 3): a shadow map written through an image, no
+    // depth or stencil test (as Azahar's software renderer has it)
+    const bool shadow = (r[COLOR_OPERATION] & 3) == 3;
+    bool use_depth = !shadow && depth_address && (depth_test || depth_write || stencil);
 
     // what the draw reads first, outside a pass
     VkImageView views[3];
@@ -133,7 +137,7 @@ void Impl::render(Pica &p) {
     if (!color) return;
     if (between && !replaying) note_draw(p, views);
     // a texture that is this pass's target cannot be read inside it
-    if (rendering && (color_target != color || depth_target != depth)) end_cause = 0, end_rendering();
+    if (rendering && (color_target != color || depth_target != depth || shadow_pass != shadow)) end_cause = 0, end_rendering();
 
     VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
     VkDeviceSize in_size = 0, index_size = 0, before_size = 0;
@@ -242,6 +246,16 @@ void Impl::render(Pica &p) {
         if (submitted == serial) break;
     }
 
+    if (!rendering && shadow) {
+        VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+        ri.renderArea = {{0, 0}, {w, h}};
+        ri.layerCount = 1;
+        vkCmdBeginRendering(cmd, &ri);
+        self.stats.passes++;
+        pass_scope = gpu_open(0);
+        rendering = shadow_pass = true;
+        color_target = color, depth_target = nullptr;
+    }
     if (!rendering) {
         VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
         ca.imageView = color->image.view;
@@ -269,7 +283,7 @@ void Impl::render(Pica &p) {
     uint32_t color_mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
     uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
                    uint64_t(depth != nullptr) << 40 | uint64_t(on_gpu) << 41 |
-                   uint64_t(depth != nullptr && !(r[DEPTHMAP_ENABLE] & 1)) << 42;
+                   uint64_t(depth != nullptr && !(r[DEPTHMAP_ENABLE] & 1)) << 42 | uint64_t(shadow) << 43;
     // the program's own shader once it is made, the interpreter until then
     VkPipeline pipe = VK_NULL_HANDLE;
     if (on_gpu && translator) {
@@ -315,7 +329,8 @@ void Impl::render(Pica &p) {
     VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
     VkDescriptorImageInfo face_images[5];
     for (int f = 0; f < 5; f++) face_images[f] = {sampler(r[UNIT_BASE[0] + 2]), faces[f], VK_IMAGE_LAYOUT_GENERAL};
-    VkWriteDescriptorSet writes[11]{};
+    VkDescriptorImageInfo shadow_map{VK_NULL_HANDLE, shadow ? words_view(color->image) : VK_NULL_HANDLE, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[12]{};
     for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
@@ -337,8 +352,17 @@ void Impl::render(Pica &p) {
     writes[4].descriptorCount = 5;
     writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     writes[4].pImageInfo = face_images;
+    // the shadow map last, so the rest stay where they are without it
+    const uint32_t fixed_writes = 5;
+    auto shadow_write = [&](VkWriteDescriptorSet &w) {
+        w.dstBinding = 11;
+        w.descriptorCount = 1;
+        w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w.pImageInfo = &shadow_map;
+    };
     if (!on_gpu) {
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 5, writes);
+        if (shadow) shadow_write(writes[fixed_writes]);
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, fixed_writes + shadow, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.stats.triangles += triangles.size() / 3;
@@ -360,7 +384,8 @@ void Impl::render(Pica &p) {
             writes[5 + k].descriptorType = TYPES[k];
             writes[5 + k].pBufferInfo = &gpu_info[k];
         }
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 11, writes);
+        if (shadow) shadow_write(writes[11]);
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 11 + shadow, writes);
         VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u,
                         0, 0, store, 0};
         if (from_outputs) {

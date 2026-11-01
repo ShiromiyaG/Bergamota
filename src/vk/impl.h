@@ -78,6 +78,7 @@ constexpr uint32_t STATE_REGS[] = {
     0x0D8, 0x0D9, 0x0DA, 0x0DB, 0x0DC, 0x0F0, 0x0F1, 0x0F2, 0x0F3, 0x0F4, 0x0F8, 0x0F9, 0x0FA, 0x0FB, 0x0FC,
     0x0E0, 0x0FD, 0x104, 0x080, 0x083, 0x093, 0x09B, 0x081, 0x091, 0x099, 0x0E1,
     0x0A8, 0x0A9, 0x0AA, 0x0AB, 0x0AC, 0x0AD,
+    0x08B, 0x130, // texture 0's shadow (perspective, bias); the shadow output's constant and linear
 };
 
 // a texture unit's registers: border color, then size, parameters, address
@@ -107,6 +108,7 @@ struct Image {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkImageView depth = VK_NULL_HANDLE, stencil = VK_NULL_HANDLE; // a depth image's aspects, to sample
+    VkImageView words = VK_NULL_HANDLE; // an RGBA8 image as R32_UINT, made when a shadow map needs it
     uint32_t width = 0, height = 0;
 };
 
@@ -177,6 +179,9 @@ struct VulkanRenderer::Impl {
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, depth_module = VK_NULL_HANDLE;
     VkShaderModule frag_wbuffer = VK_NULL_HANDLE; // pica.frag with W_BUFFER
+    VkShaderModule frag_shadow = VK_NULL_HANDLE;  // and with SHADOW
+    bool shadow_pass = false;                     // a pass with no attachments, for the shadow output
+    VkImageView words_view(Image &i);
     VkDescriptorSetLayout depth_set = VK_NULL_HANDLE;
     VkPipelineLayout depth_layout = VK_NULL_HANDLE;
     VkPipeline depth_pipeline = VK_NULL_HANDLE;

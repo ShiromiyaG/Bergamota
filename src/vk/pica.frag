@@ -14,7 +14,9 @@ layout(location = 5) in vec4 v_quaternion;
 layout(location = 6) in vec3 v_view;
 layout(location = 7) in float v_depth;
 
+#ifndef SHADOW
 layout(location = 0) out vec4 out_color;
+#endif
 
 layout(std140, set = 0, binding = 0) uniform State {
     uvec4 regs[16];
@@ -22,6 +24,10 @@ layout(std140, set = 0, binding = 0) uniform State {
 } s;
 layout(set = 0, binding = 1) uniform sampler2D textures[3];
 layout(set = 0, binding = 10) uniform sampler2D cube_faces[5]; // -X, +Y, -Y, +Z, -Z
+#ifdef SHADOW
+// the shadow map, a word a pixel: its depth (24 bits) over its intensity
+layout(set = 0, binding = 11, r32ui) uniform coherent uimage2D shadow_map;
+#endif
 
 // the lighting, as LightingBlock in pica_lighting.h lays it out
 struct Light {
@@ -173,7 +179,7 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, PROCTEX = 41; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
+          FOG_COLOR = 40, PROCTEX = 41, TEX_SHADOW = 47, SHADOW_OUTPUT = 48; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
 // where the tables are in t.entries, after lighting's 24 of 256
 const int FOG_TABLE = 24 * 256, PROCTEX_MAPS = FOG_TABLE + 128, PROCTEX_COLORS = PROCTEX_MAPS + 3 * 128,
           PROCTEX_STEPS = PROCTEX_COLORS + 2 * 256;
@@ -308,23 +314,29 @@ vec4 texel(int unit, vec2 uv) {
 }
 
 // texture 0 as a cube map: the face the direction (u, v, w) points at most,
-// and where on it, the larger component over the others
-vec4 cube_texel(vec3 d) {
+// where on it (the other components over the largest), and how far along
+int cube_face(vec3 d, out vec2 uv, out float far) {
     vec3 a = abs(d);
     int face;
     vec2 st;
     if (a.x > a.y && a.x > a.z) {
         face = d.x > 0.0 ? 0 : 1;
         st = vec2(-d.z, d.x > 0.0 ? -d.y : d.y) / d.x;
+        far = a.x;
     } else if (a.y > a.z) {
         face = d.y > 0.0 ? 2 : 3;
         st = vec2(d.y > 0.0 ? d.x : -d.x, d.z) / d.y;
+        far = a.y;
     } else {
         face = d.z > 0.0 ? 4 : 5;
         st = vec2(d.x, d.z > 0.0 ? -d.y : d.y) / d.z;
+        far = a.z;
     }
-    vec2 uv = st * 0.5 + 0.5;
-    vec2 at = vec2(uv.x, 1.0 - uv.y);
+    uv = st * 0.5 + 0.5;
+    return face;
+}
+
+vec4 face_texel(int face, vec2 at) {
     switch (face) {
     case 0: return texture(textures[0], at);
     case 1: return texture(cube_faces[0], at);
@@ -333,6 +345,48 @@ vec4 cube_texel(vec3 d) {
     case 4: return texture(cube_faces[3], at);
     default: return texture(cube_faces[4], at);
     }
+}
+
+// one texel as it is, no filtering (a shadow map's depths cannot be mixed)
+vec4 face_fetch(int face, vec2 uv) {
+    ivec2 size = face == 0 ? textureSize(textures[0], 0) : textureSize(cube_faces[max(face - 1, 0)], 0);
+    ivec2 at = clamp(ivec2(floor(vec2(uv.x, 1.0 - uv.y) * vec2(size))), ivec2(0), size - 1);
+    switch (face) {
+    case 0: return texelFetch(textures[0], at, 0);
+    case 1: return texelFetch(cube_faces[0], at, 0);
+    case 2: return texelFetch(cube_faces[1], at, 0);
+    case 3: return texelFetch(cube_faces[2], at, 0);
+    case 4: return texelFetch(cube_faces[3], at, 0);
+    default: return texelFetch(cube_faces[4], at, 0);
+    }
+}
+
+vec4 cube_texel(vec3 d) {
+    vec2 uv;
+    float far;
+    int face = cube_face(d, uv, far);
+    return face_texel(face, vec2(uv.x, 1.0 - uv.y));
+}
+
+// texture 0 as a shadow map (2D, type 2, or cube, 4): its texel's depth
+// (alpha, blue and green, high to low) against the fragment's, less the
+// bias: the texel's intensity (red) where the fragment is in front of what
+// the map saw, none behind
+vec4 shadow_texel(bool cube) {
+    uint config = reg(TEX_SHADOW);
+    vec2 uv;
+    float far;
+    int face = 0;
+    if (cube) {
+        face = cube_face(vec3(v_uv0, v_w0), uv, far);
+    } else {
+        uv = (config & 1u) != 0u ? v_uv0 : v_uv0 / v_w0; // orthographic, or over w
+        far = abs(v_w0);
+    }
+    int z = int(min(far, 1.0) * 16777215.0) - int(((config >> 1) & 0x7FFFFFu) << 1);
+    uvec4 c = uvec4(round(face_fetch(face, uv) * 255.0));
+    int stored = int(c.a << 16 | c.b << 8 | c.g);
+    return vec4(stored >= z ? float(c.r) / 255.0 : 0.0);
 }
 
 vec3 color_operand(vec4 v, uint op) {
@@ -412,8 +466,10 @@ void main() {
     // texture 0 projected (its type, 3): the coordinates over their w; a
     // cube map (1): (u, v, w) a direction
     uint type0 = (reg(TEX_PARAMS) >> 28) & 7u;
-    tex[0] = type0 == 1u && (reg(TEX_CONFIG) & 1u) != 0u ? cube_texel(vec3(v_uv0, v_w0))
-                                                        : texel(0, type0 == 3u ? v_uv0 / v_w0 : v_uv0);
+    bool on0 = (reg(TEX_CONFIG) & 1u) != 0u;
+    if (on0 && type0 == 1u) tex[0] = cube_texel(vec3(v_uv0, v_w0));
+    else if (on0 && (type0 == 2u || type0 == 4u)) tex[0] = shadow_texel(type0 == 4u);
+    else tex[0] = texel(0, type0 == 3u ? v_uv0 / v_w0 : v_uv0);
     tex[1] = texel(1, v_uv1);
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
     // the procedural one reads coordinate set 0, 1 or 2
@@ -485,7 +541,37 @@ void main() {
         float factor = clamp(e.x + e.y * (index - entry), 0.0, 1.0);
         previous.rgb = mix(unpack(reg(FOG_COLOR)).rgb, previous.rgb, factor);
     }
+#ifndef SHADOW
     out_color = previous;
+#else
+    // the shadow output (mode 3): the map keeps the nearest depth; a
+    // fragment with an intensity (green) only lowers the intensity kept, by
+    // it over constant + linear times its depth over the map's (a softer
+    // edge farther off). the word changed only while nothing else did
+    float fragment_depth = gl_FragCoord.z;
+    if (s.depth.z == 0.0) fragment_depth /= gl_FragCoord.w;
+    uint depth = uint(clamp(fragment_depth, 0.0, 1.0) * 16777215.0);
+    uint intensity = uint(round(previous.g * 255.0));
+    vec2 falloff = unpackHalf2x16(reg(SHADOW_OUTPUT)); // constant, linear
+    ivec2 at = ivec2(gl_FragCoord.xy);
+    uint old = imageLoad(shadow_map, at).x;
+    for (int tries = 0; tries < 64; tries++) {
+        uint old_depth = old >> 8, old_intensity = old & 0xFFu, now;
+        if (depth >= old_depth) break;
+        if (intensity == 0u) {
+            now = depth << 8 | old_intensity;
+        } else {
+            float lowered = float(intensity) / (falloff.x + falloff.y * float(depth) / float(old_depth));
+            uint kept = uint(clamp(lowered, 0.0, 255.0));
+            if (kept >= old_intensity) break;
+            now = (old & 0xFFFFFF00u) | kept;
+        }
+        uint seen = imageAtomicCompSwap(shadow_map, at, old, now);
+        if (seen == old) break;
+        old = seen;
+    }
+    discard;
+#endif
 #ifdef W_BUFFER
     // the w buffer (DEPTHMAP_ENABLE off): the depth map times w, which
     // the rasterizer cannot give

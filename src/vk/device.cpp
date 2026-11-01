@@ -18,6 +18,9 @@ const uint32_t FRAG_SPV[] = {
 const uint32_t FRAG_WBUFFER_SPV[] = {
 #include "pica_wbuffer.frag.inc"
 };
+const uint32_t FRAG_SHADOW_SPV[] = {
+#include "pica_shadow.frag.inc"
+};
 const uint32_t DEPTH_SPV[] = {
 #include "depth.comp.inc"
 };
@@ -97,6 +100,8 @@ bool Impl::init() {
     vkGetPhysicalDeviceFeatures(physical, &has);
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.features.vertexPipelineStoresAndAtomics = has.vertexPipelineStoresAndAtomics;
+    // the shadow output's atomics on its map
+    features.features.fragmentStoresAndAtomics = has.fragmentStoresAndAtomics;
     store_outputs = has.vertexPipelineStoresAndAtomics;
     VkPhysicalDeviceVulkan12Features v12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     v12.timelineSemaphore = VK_TRUE;
@@ -172,7 +177,7 @@ bool Impl::init() {
     // its tables; for the vertex shader on the GPU, the program, the
     // uniforms and the inputs, this frame's and the frame before's
     constexpr VkShaderStageFlags V = VK_SHADER_STAGE_VERTEX_BIT;
-    VkDescriptorSetLayoutBinding bindings[11] = {
+    VkDescriptorSetLayoutBinding bindings[12] = {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -185,10 +190,12 @@ bool Impl::init() {
         {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
         // a cube map's faces past texture 0
         {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        // the shadow map the shadow output writes, a word a pixel
+        {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sli.bindingCount = 11;
+    sli.bindingCount = 12;
     sli.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
     VkPushConstantRange push{V, 0, sizeof(VertexPush)};
@@ -245,6 +252,9 @@ bool Impl::init() {
     smi.codeSize = sizeof FRAG_WBUFFER_SPV;
     smi.pCode = FRAG_WBUFFER_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &frag_wbuffer);
+    smi.codeSize = sizeof FRAG_SHADOW_SPV;
+    smi.pCode = FRAG_SHADOW_SPV;
+    vkCreateShaderModule(device, &smi, nullptr, &frag_shadow);
 
     // depth read as color (depth.comp)
     VkDescriptorSetLayoutBinding db[3] = {
@@ -341,6 +351,8 @@ Image Impl::image(uint32_t w, uint32_t h, VkFormat format, bool depth) {
     ii.extent = {w, h, 1};
     ii.mipLevels = ii.arrayLayers = 1;
     ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    // RGBA8 seen as a word a pixel too (the shadow output's atomics)
+    if (format == VK_FORMAT_R8G8B8A8_UNORM) ii.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     ii.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                VK_IMAGE_USAGE_SAMPLED_BIT |
                (depth ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
@@ -381,9 +393,22 @@ Image Impl::image(uint32_t w, uint32_t h, VkFormat format, bool depth) {
     return i;
 }
 
+VkImageView Impl::words_view(Image &i) {
+    if (!i.words) {
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = i.image;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = VK_FORMAT_R32_UINT;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCreateImageView(device, &vi, nullptr, &i.words);
+    }
+    return i.words;
+}
+
 void Impl::destroy(Image &i) {
     if (!i.image) return;
     vkDestroyImageView(device, i.view, nullptr);
+    if (i.words) vkDestroyImageView(device, i.words, nullptr);
     if (i.depth) vkDestroyImageView(device, i.depth, nullptr), vkDestroyImageView(device, i.stencil, nullptr);
     vkDestroyImage(device, i.image, nullptr);
     vkFreeMemory(device, i.memory, nullptr);
@@ -438,6 +463,7 @@ void Impl::end_rendering() {
     gpu_close(pass_scope);
     pass_scope = -1;
     rendering = false;
+    shadow_pass = false;
     color_target = depth_target = nullptr;
     barrier();
 }
@@ -564,6 +590,7 @@ void Impl::shutdown() {
     if (timestamps) vkDestroyQueryPool(device, timestamps, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
     vkDestroyShaderModule(device, frag_wbuffer, nullptr);
+    vkDestroyShaderModule(device, frag_shadow, nullptr);
     vkDestroyShaderModule(device, depth_module, nullptr);
     vkDestroyPipeline(device, depth_pipeline, nullptr);
     vkDestroyPipelineLayout(device, depth_layout, nullptr);

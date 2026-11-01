@@ -354,12 +354,8 @@ int main(int argc, char **argv) {
         std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them, %llu between reused\n",
                     (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
                     (unsigned long long)vulkan->stats.translated_draws, (unsigned long long)vulkan->stats.reused_draws);
-        std::printf("draws the renderer lacks: w buffer %llu, gas %llu, geometry shader modes %llu, shadow %llu, "
-                    "cube maps %llu, shadow textures %llu, projected textures %llu\n",
-                    (unsigned long long)vulkan->stats.lacking[0], (unsigned long long)vulkan->stats.lacking[1],
-                    (unsigned long long)vulkan->stats.lacking[2], (unsigned long long)vulkan->stats.lacking[3],
-                    (unsigned long long)vulkan->stats.lacking[4], (unsigned long long)vulkan->stats.lacking[5],
-                    (unsigned long long)vulkan->stats.lacking[6]);
+        std::printf("draws the renderer lacks: gas %llu, geometry shader modes %llu\n",
+                    (unsigned long long)vulkan->stats.lacking[0], (unsigned long long)vulkan->stats.lacking[1]);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->stats.write_back_causes[0],
                     (unsigned long long)vulkan->stats.write_back_causes[1], (unsigned long long)vulkan->stats.write_back_causes[2],
                     (unsigned long long)vulkan->stats.write_back_causes[3]);
