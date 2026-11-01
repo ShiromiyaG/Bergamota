@@ -588,8 +588,9 @@ int main(int argc, char **argv) {
     Transition transition;
     // the view last shown, for the mouse; the single screen's panel
     VulkanPresenter::View shown_view;
-    // RUNTIME_PANEL=1: open from the start (to look at it without a key)
-    bool panel_wanted = SDL_getenv("RUNTIME_PANEL") != nullptr;
+    // the panel out or in (video.panel_shown, kept); RUNTIME_PANEL=1 out
+    bool &panel_wanted = settings.video.panel_shown;
+    if (SDL_getenv("RUNTIME_PANEL")) panel_wanted = true;
     float panel = 0;
     auto panel_at = std::chrono::steady_clock::now();
     float scale_wanted = 1;

@@ -90,6 +90,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "panel_size", panel_size);
     s.video.panel_size = float(std::clamp(panel_size, 0.25, 1.0));
     get(t, "video", "panel_corner", s.video.panel_corner);
+    get(t, "video", "panel_shown", s.video.panel_shown);
     get(t, "video", "no_ghosting", s.video.no_ghosting);
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
@@ -131,6 +132,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"layout", s.video.layout},
                               {"panel_size", double(s.video.panel_size)},
                               {"panel_corner", s.video.panel_corner},
+                              {"panel_shown", s.video.panel_shown},
                               {"no_ghosting", s.video.no_ghosting},
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},

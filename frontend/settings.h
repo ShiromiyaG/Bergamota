@@ -49,6 +49,9 @@ struct Settings {
         // the top screen's height being 240) and the corner it sits in
         float panel_size = 0.35f;
         std::string panel_corner = "bottom-right"; // or bottom-left, top-right, top-left
+        // the panel out (the bottom screen shown) once a movie or cutscene
+        // shown stacked is past; Tab and L3 switch it and it is kept so
+        bool panel_shown = true;
         // the bloom's ghosting (a trail behind what moves outside) left out,
         // through the port's code (port_no_ghosting)
         bool no_ghosting = true;
