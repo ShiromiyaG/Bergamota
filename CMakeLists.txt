@@ -17,6 +17,7 @@ add_library(recomp_runtime STATIC
     src/svc.cpp
     src/memory.cpp
     src/system.cpp
+    src/session.cpp
     src/loader.cpp
     src/async_gpu.cpp
     src/decomp.cpp

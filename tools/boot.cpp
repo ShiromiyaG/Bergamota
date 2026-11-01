@@ -34,6 +34,7 @@
 #include "runtime/loader.h"
 #include "runtime/sampler.h"
 #include "runtime/services.h"
+#include "runtime/session.h"
 #include "runtime/system.h"
 
 #include <chrono>
@@ -54,17 +55,6 @@ namespace {
 std::vector<uint8_t> read_file(const char *path) {
     std::ifstream in(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
-}
-
-Library library;
-
-Code lookup(uint32_t address) { return library.lookup(address); }
-uint32_t redirect(uint32_t address) { return library.redirect(address); }
-
-Services *services_ptr = nullptr;
-
-void services(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
-    services_ptr->request(system, thread, service, subhandle);
 }
 
 // a Zakuro recording: the clock it started at, and a line per change of
@@ -118,14 +108,6 @@ int main(int argc, char **argv) {
         return 2;
     }
     double seconds = argc > 4 ? std::atof(argv[4]) : 10;
-    ExHeader exheader;
-    std::string error;
-    if (!parse_exheader(read_file(argv[1]), exheader, error) || !library.open(argv[3], error)) {
-        std::fprintf(stderr, "%s\n", error.c_str());
-        return 1;
-    }
-    std::printf("program %016llX, %zu functions, %zu modules, %u MiB\n", (unsigned long long)exheader.program_id,
-                library.entry_count(), library.module_count(), exheader.app_bytes >> 20);
     Replay replay;
     const char *replay_path = env("RUNTIME_REPLAY"), *shots_dir = env("RUNTIME_SHOTS");
     if (replay_path && !replay.open(replay_path)) {
@@ -137,41 +119,26 @@ int main(int argc, char **argv) {
     Config config;
     config.virtual_clock = frames != 0;
     if (replay_path) config.boot_clock_ms = replay.clock;
-    config.app_bytes = exheader.app_bytes;
-    config.region = exheader.region;
-    Services handlers(exheader.program_id);
-    services_ptr = &handlers;
-    Fs fs(argc > 7 ? argv[7] : "user", exheader.program_id);
-    if (argc > 5) {
-        fs.romfs = find_romfs(argv[5], error);
-        if (!fs.romfs) std::fprintf(stderr, "%s\n", error.c_str());
-    }
-    if (argc > 6) {
-        fs.update_romfs = find_romfs(argv[6], error);
-        if (!fs.update_romfs) std::fprintf(stderr, "%s\n", error.c_str());
-    }
-    handlers.fs = &fs;
-    // RUNTIME_DECOMP=folder: the decomp's decomp.bin and decomp.txt, with a
-    // library recompiled with it (3dsrecomp build --decomp)
-    std::unique_ptr<Decomp> decomp;
-    if (const char *dir = env("RUNTIME_DECOMP")) {
-        decomp = std::make_unique<Decomp>();
-        if (!read_decomp(dir, *decomp, error)) {
-            std::fprintf(stderr, "%s\n", error.c_str());
-            return 1;
-        }
-    }
-    System system(config, lookup, services);
-    system.set_redirect(redirect);
-    handlers.on_module = [&](const std::string &name, uint32_t base) {
-        module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
+    // the game, opened as the player opens it (session.h); RUNTIME_DECOMP=folder:
+    // the decomp's decomp.bin and decomp.txt, with a library recompiled with it
+    // (3dsrecomp build --decomp)
+    Session session;
+    Session::Files files{argv[1], argv[2], argv[3], argc > 5 ? argv[5] : "", argc > 6 ? argv[6] : "",
+                         argc > 7 ? argv[7] : "user", env("RUNTIME_DECOMP") ? env("RUNTIME_DECOMP") : ""};
+    std::string error;
+    auto told = [](const std::string &name, uint32_t base) {
         std::printf("module %s %s 0x%08X\n", name.c_str(), base ? "at" : "gone from", base);
     };
-    load(system, exheader, read_file(argv[2]), decomp.get());
-    if (!link_code(library, system.memory, decomp.get(), error)) {
+    if (!session.open(files, config, error, told)) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
+    const ExHeader &exheader = session.exheader;
+    Library &library = session.library;
+    System &system = *session.system;
+    Services &handlers = *session.services;
+    std::printf("program %016llX, %zu functions, %zu modules, %u MiB\n", (unsigned long long)exheader.program_id,
+                library.entry_count(), library.module_count(), exheader.app_bytes >> 20);
     // the runtime's own renderer (docs/vulkan-renderer.md); RUNTIME_RENDERER=sketch:
     // its draws filled flat on canvases saved with the shots instead
     const std::string renderer = env("RUNTIME_RENDERER") ? env("RUNTIME_RENDERER") : "";

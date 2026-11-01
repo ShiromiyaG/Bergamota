@@ -54,6 +54,10 @@ flashes 1 and 2). The player and `boot` both just take frames.
 
 ## 3. A session shared by the player and `boot`
 
+Done (2026-11-01): `runtime::Session` (`include/runtime/session.h`) opens
+the game for both; the globals went into it. The GPU stays each one's
+(the player's presents, `boot`'s takes shots).
+
 Both open a game the same way: the program (exheader, code), the title,
 the library, `Services`, `Fs` and the romfs, the decomp, `System`, `load`,
 `link_code`, the GPU (Pica, Vulkan, AsyncGpu). It is written twice, and

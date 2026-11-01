@@ -26,6 +26,7 @@
 #include "runtime/vulkan_renderer.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
+#include "runtime/session.h"
 #include "runtime/system.h"
 
 #include <SDL3/SDL.h>
@@ -74,14 +75,6 @@ float top_width(const Settings &s) {
 std::vector<uint8_t> read_file(const std::string &path) {
     std::ifstream in(frontend::path_of(path), std::ios::binary);
     return {std::istreambuf_iterator<char>(in), {}};
-}
-
-Library library;
-Code lookup(uint32_t address) { return library.lookup(address); }
-uint32_t redirect(uint32_t address) { return library.redirect(address); }
-Services *services_ptr = nullptr;
-void services(System &system, Thread &thread, const std::string &service, uint32_t subhandle) {
-    services_ptr->request(system, thread, service, subhandle);
 }
 
 // the bindings, resolved from their names: a scancode and a gamepad button
@@ -140,52 +133,15 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // the game
-    // the program: from the files named, else straight from the dumps (the
-    // update's when there is one, whose program takes the game's place)
-    ExHeader exheader;
-    std::vector<uint8_t> exheader_bytes, code;
-    if (!settings.game.exheader.empty() && !settings.game.code.empty()) {
-        exheader_bytes = read_file(settings.game.exheader);
-        code = read_file(settings.game.code);
-    } else if (!read_program(settings.game.update.empty() ? settings.game.game : settings.game.update, exheader_bytes,
-                             code, error)) {
-        return fail(error);
-    }
-    if (!parse_exheader(exheader_bytes, exheader, error)) return fail(error);
+    // the game, opened as boot opens it (session.h)
+    Session session;
+    const auto &g = settings.game;
+    if (!session.open({g.exheader, g.code, g.library, g.game, g.update, g.user, g.decomp}, Config{}, error)) return fail(error);
     // the window named after the game, as its icon names it
-    std::string title = read_title(settings.game.game);
-    if (!title.empty()) SDL_SetWindowTitle(window, title.c_str());
-    // the library: the one named, else where 3dsrecomp build installs it
-    std::string library_path = settings.game.library;
-    if (library_path.empty()) library_path = frontend::utf8(installed_library(exheader.program_id));
-    if (!library.open(library_path, error)) {
-        return fail(error + "\n(recompile the game first: 3dsrecomp build, or Solstice's launcher)");
-    }
-    Config config;
-    config.app_bytes = exheader.app_bytes;
-    config.region = exheader.region;
-    Services handlers(exheader.program_id);
-    services_ptr = &handlers;
-    Fs fs(settings.game.user, exheader.program_id);
-    fs.romfs = find_romfs(settings.game.game, error);
-    if (!settings.game.update.empty()) fs.update_romfs = find_romfs(settings.game.update, error);
-    if (!fs.romfs) return fail(error);
-    handlers.fs = &fs;
-    // the decomp in place of the functions it replaces, with a library
-    // recompiled with it
-    std::unique_ptr<Decomp> decomp;
-    if (!settings.game.decomp.empty()) {
-        decomp = std::make_unique<Decomp>();
-        if (!read_decomp(settings.game.decomp, *decomp, error)) return fail(error);
-    }
-    System system(config, lookup, services);
-    system.set_redirect(redirect);
-    handlers.on_module = [&](const std::string &name, uint32_t base) {
-        module_changed(library, system.memory, decomp.get(), handlers.cro, name, base);
-    };
-    load(system, exheader, code, decomp.get());
-    if (!link_code(library, system.memory, decomp.get(), error)) return fail(error);
+    if (!session.title.empty()) SDL_SetWindowTitle(window, session.title.c_str());
+    System &system = *session.system;
+    Services &handlers = *session.services;
+    const ExHeader &exheader = session.exheader;
     // the renderer, on a device that presents to the window as well: the
     // launcher's SDL renderer and its overlay go
     ImGui_ImplSDLRenderer3_Shutdown();
