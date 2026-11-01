@@ -120,6 +120,88 @@ void place_stacked(VulkanPresenter::View &view) {
     view.placements = {fill, top, bottom};
 }
 
+// the placements in the window's own pixels (the canvas fitted), so two
+// layouts with canvases of their own can be mixed
+void in_window(VulkanPresenter::View &view) {
+    VulkanPresenter::place_screens(view);
+    float scale, x0, y0;
+    VulkanPresenter::fit(view, scale, x0, y0);
+    for (VulkanPresenter::Placement &p : view.placements) {
+        p.to[0] = x0 + p.to[0] * scale, p.to[1] = y0 + p.to[1] * scale;
+        p.to[2] = x0 + p.to[2] * scale, p.to[3] = y0 + p.to[3] * scale;
+    }
+    view.canvas[0] = float(view.width), view.canvas[1] = float(view.height);
+}
+
+// from one layout to another: each screen moves and grows from where it
+// was to where it goes, the same kind of placement paired (a screen, a
+// blurred fill); one new comes in from a little below, one gone fades out
+class Transition {
+public:
+    static constexpr float SECONDS = 0.3f;
+
+    // view, in the window's pixels (in_window), as layout shows it now: on
+    // another layout than the last, a transition from what was shown starts
+    void apply(VulkanPresenter::View &view, const std::string &layout) {
+        using Placement = VulkanPresenter::Placement;
+        auto now = std::chrono::steady_clock::now();
+        if (layout != layout_) {
+            if (!layout_.empty()) from_ = shown_, start_ = now, running_ = true;
+            layout_ = layout;
+        }
+        if (running_) {
+            float t = std::chrono::duration<float>(now - start_).count() / SECONDS;
+            if (t >= 1) {
+                running_ = false;
+            } else {
+                t = t * t * (3 - 2 * t);
+                std::vector<bool> used(from_.size(), false);
+                std::vector<Placement> mixed;
+                // the ones going, first, under the rest
+                std::vector<Placement> to = view.placements;
+                std::vector<int> pair(to.size(), -1);
+                for (size_t i = 0; i < to.size(); i++) {
+                    for (size_t k = 0; k < from_.size(); k++) {
+                        if (!used[k] && from_[k].screen == to[i].screen && (from_[k].blur > 0) == (to[i].blur > 0)) {
+                            used[k] = true, pair[i] = int(k);
+                            break;
+                        }
+                    }
+                }
+                for (size_t k = 0; k < from_.size(); k++) {
+                    if (used[k]) continue;
+                    Placement going = from_[k];
+                    going.opacity *= 1 - t;
+                    mixed.push_back(going);
+                }
+                for (size_t i = 0; i < to.size(); i++) {
+                    Placement p = to[i];
+                    if (pair[i] >= 0) {
+                        const Placement &a = from_[pair[i]];
+                        for (int c = 0; c < 4; c++) p.to[c] = a.to[c] + (p.to[c] - a.to[c]) * t, p.from[c] = a.from[c] + (p.from[c] - a.from[c]) * t;
+                        p.brightness = a.brightness + (p.brightness - a.brightness) * t;
+                        p.opacity = a.opacity + (p.opacity - a.opacity) * t;
+                        p.blur = a.blur + (p.blur - a.blur) * t;
+                    } else {
+                        float rise = (p.to[3] - p.to[1]) * 0.15f * (1 - t);
+                        p.to[1] += rise, p.to[3] += rise;
+                        p.opacity *= t;
+                    }
+                    mixed.push_back(p);
+                }
+                view.placements = mixed;
+            }
+        }
+        shown_ = view.placements;
+    }
+
+private:
+    std::string layout_;
+    std::vector<VulkanPresenter::Placement> from_, shown_;
+    std::chrono::steady_clock::time_point start_;
+    bool running_ = false;
+};
+
 // how many of the host's pixels a 3DS pixel is drawn as, each way: as many
 // as fill the resolution asked for (a size, or the window's) with the
 // screens shown, both stacked (480 rows) or the top one alone (240)
@@ -450,6 +532,7 @@ int main(int argc, char **argv) {
 
     Dump dump;
     const frontend::Scene *scene_shown = nullptr;
+    Transition transition;
     // the view last shown, for the mouse; the single screen's panel
     VulkanPresenter::View shown_view;
     // RUNTIME_PANEL=1: open from the start (to look at it without a key)
@@ -537,13 +620,15 @@ int main(int argc, char **argv) {
             panel_at = at;
             panel = std::clamp(panel + (panel_wanted ? step : -step), 0.0f, 1.0f);
         }
+        // the layout: the single screen's by the scene, else the setting's
+        std::string layout = settings.video.layout;
         if (settings.video.layout == "single") {
             const frontend::Scene *scene = nullptr;
             {
                 std::lock_guard g(modules_lock);
                 scene = scenes.pick(modules);
             }
-            const std::string layout = scene ? scene->layout : "panel";
+            layout = scene ? scene->layout : "panel";
             if (scene != scene_shown) {
                 scene_shown = scene;
                 std::fprintf(stderr, "scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
@@ -551,7 +636,9 @@ int main(int argc, char **argv) {
             if (layout == "stacked") place_stacked(view);
             else place_single(view, layout == "top" ? 0.0f : panel);
         }
-        VulkanPresenter::place_screens(view);
+        // in the window's pixels, eased from the layout before
+        in_window(view);
+        transition.apply(view, layout);
         shown_view = view;
         // the resolution, once it held a moment (a window being resized
         // would make the buffers again at every step)
