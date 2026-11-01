@@ -87,6 +87,7 @@ private:
     void request(Kernel &, Thread &, const std::string &service, uint32_t subhandle) override;
     void memory_syscall(Kernel &, Thread &, uint32_t number) override;
     uint32_t allocate_tls() override;
+    void free_tls(uint32_t address) override { free_tls_.push_back(address); }
     void prepare(Context &context) override;
 
     Config config_;
@@ -95,6 +96,7 @@ private:
     ServiceHandler services_;
     Host host_{};
     uint32_t tls_used_ = 0;
+    std::vector<uint32_t> free_tls_; // ended threads' TLS, made again first
     uint64_t boot_ = 0;
     uint64_t virtual_ = 0; // the virtual clock
     std::string error_;

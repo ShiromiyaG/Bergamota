@@ -29,6 +29,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -237,10 +238,15 @@ int main(int argc, char **argv) {
         handlers.tick(system);
         auto &out = handlers.audio.output;
         if (sound && !out.empty()) {
-            // a quarter of a second queued at most, the rest is late
-            if (SDL_GetAudioStreamQueued(sound) < int(AUDIO_RATE / 4 * 4)) {
-                SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
-            }
+            // the queue kept near 60 ms by playing a little faster or slower
+            // (half a percent at most, not heard): the DSP's clock and the
+            // sound card's drift apart; a quarter of a second queued at
+            // most, the rest is late
+            constexpr int BYTES_PER_SECOND = int(AUDIO_RATE) * 4, TARGET = BYTES_PER_SECOND * 60 / 1000;
+            int queued = SDL_GetAudioStreamQueued(sound);
+            float off = std::clamp(float(queued - TARGET) / TARGET, -1.0f, 1.0f);
+            SDL_SetAudioStreamFrequencyRatio(sound, 1.0f + 0.005f * off);
+            if (queued < BYTES_PER_SECOND / 4) SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
             out.clear();
         }
         auto now = std::chrono::steady_clock::now();

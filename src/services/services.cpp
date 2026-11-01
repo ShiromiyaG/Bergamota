@@ -438,8 +438,12 @@ void Services::tick(System &system) {
     if (!dsp_.running) return;
     if (!dsp_.next_frame) dsp_.next_frame = now;
     if (now < dsp_.next_frame) return;
+    // one frame a call: when the caller came late, the missed ones follow
+    // on the next calls, with the game's code between them as on the
+    // console; past a tenth of a second behind, the rest is let go
+    constexpr uint64_t MOST_BEHIND = DSP_FRAME_TICKS * 20;
     dsp_.next_frame += DSP_FRAME_TICKS;
-    if (dsp_.next_frame < now) dsp_.next_frame = now + DSP_FRAME_TICKS; // fell far behind
+    if (now > dsp_.next_frame + MOST_BEHIND) dsp_.next_frame = now - MOST_BEHIND;
     audio.tick(system.memory);
     dsp_signal(system);
 }

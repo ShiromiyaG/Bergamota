@@ -148,8 +148,9 @@ struct Hooks {
     // UnmapMemoryBlock, GetProcessInfo: they read and write the context's
     // registers as the syscall does
     virtual void memory_syscall(Kernel &, Thread &, uint32_t number) = 0;
-    // a page for a new thread's TLS
+    // a page for a new thread's TLS, and one given back when a thread ends
     virtual uint32_t allocate_tls() = 0;
+    virtual void free_tls(uint32_t) {}
     // fills what a new thread's context needs besides its registers: the
     // page tables, the host's callbacks
     virtual void prepare(Context &context) = 0;
@@ -227,6 +228,9 @@ private:
     Clock &clock_;
     Hooks &hooks_;
     std::vector<std::unique_ptr<Thread>> threads_;
+    // the threads not dead, by id: what the scheduler looks at (a dead one
+    // stays in threads_ for the handles that still name it)
+    std::vector<ThreadId> live_;
     std::optional<ThreadId> current_;
     std::vector<std::optional<Slot>> slots_;
     std::vector<ObjectId> free_;

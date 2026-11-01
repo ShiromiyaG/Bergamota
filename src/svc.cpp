@@ -38,6 +38,7 @@ void Kernel::syscall(uint32_t number) {
         for (auto &t : threads_) {
             t->status = ThreadStatus::Dead;
         }
+        live_.clear();
         exited_ = true;
         break;
     case 0x08:
@@ -177,8 +178,9 @@ void Kernel::sleep_thread(Thread &self) {
     } else {
         // a zero sleep is a yield: it lets the others ready run a while, even
         // lower ones, or titles polling a worker this way would spin forever
-        bool others = std::any_of(threads_.begin(), threads_.end(), [&](const auto &t) {
-            return t->id != self.id && (t->status == ThreadStatus::Ready || t->status == ThreadStatus::Running);
+        bool others = std::any_of(live_.begin(), live_.end(), [&](ThreadId id) {
+            const Thread &t = *threads_[id];
+            return id != self.id && (t.status == ThreadStatus::Ready || t.status == ThreadStatus::Running);
         });
         if (!others) {
             return;

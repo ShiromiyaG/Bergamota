@@ -117,6 +117,13 @@ void System::start(uint32_t entry, uint32_t stack_top, uint32_t priority) {
 }
 
 uint32_t System::allocate_tls() {
+    if (!free_tls_.empty()) {
+        // an ended thread's, cleared as a new one's would be
+        uint32_t address = free_tls_.back();
+        free_tls_.pop_back();
+        for (uint32_t offset = 0; offset < map::TLS_SIZE; offset += 4) memory.write32(address + offset, 0);
+        return address;
+    }
     // eight threads' TLS to a page, each page mapped when first needed
     uint32_t address = map::TLS_VADDR + tls_used_ * map::TLS_SIZE;
     if (tls_used_ % (map::PAGE_SIZE / map::TLS_SIZE) == 0) {

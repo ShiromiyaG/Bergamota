@@ -27,6 +27,7 @@ ThreadId Kernel::start(uint32_t entry, uint32_t stack_top, uint32_t priority) {
     c.thumb = entry & 1;
     c.tls = thread->tls;
     threads_.push_back(std::move(thread));
+    live_.push_back(id);
     Thread &t = *threads_.back();
     t.context.vfp = t.vfp;
     t.context.fpscr = &t.fpscr;
@@ -108,9 +109,10 @@ void Kernel::signal_event(ObjectId object) {
     if (event->reset == ResetType::Pulse) {
         // a pulse wakes what waits on it now and is gone after, lost when
         // nothing does
-        bool waited = std::any_of(threads_.begin(), threads_.end(), [&](const auto &t) {
-            return t->status == ThreadStatus::WaitSync &&
-                   std::find(t->wait_objects.begin(), t->wait_objects.end(), object) != t->wait_objects.end();
+        bool waited = std::any_of(live_.begin(), live_.end(), [&](ThreadId id) {
+            const Thread &t = *threads_[id];
+            return t.status == ThreadStatus::WaitSync &&
+                   std::find(t.wait_objects.begin(), t.wait_objects.end(), object) != t.wait_objects.end();
         });
         if (!waited) {
             return;
@@ -247,9 +249,10 @@ bool Kernel::try_satisfy_wait(Thread &t, uint64_t now) {
 
 std::optional<ThreadId> Kernel::pick_next() const {
     std::optional<uint32_t> best;
-    for (const auto &t : threads_) {
-        if (t->status == ThreadStatus::Ready || t->status == ThreadStatus::Running) {
-            best = best ? std::min(*best, t->priority) : t->priority;
+    for (ThreadId id : live_) {
+        const Thread &t = *threads_[id];
+        if (t.status == ThreadStatus::Ready || t.status == ThreadStatus::Running) {
+            best = best ? std::min(*best, t.priority) : t.priority;
         }
     }
     if (!best) {
@@ -264,10 +267,10 @@ std::optional<ThreadId> Kernel::pick_next() const {
         }
     }
     // round robin within the priority, from the thread after the current one
-    size_t count = threads_.size();
-    size_t start = current_ ? *current_ + 1 : 0;
+    size_t count = live_.size();
+    size_t start = current_ ? std::upper_bound(live_.begin(), live_.end(), *current_) - live_.begin() : 0;
     for (size_t offset = 0; offset < count; offset++) {
-        const Thread &t = *threads_[(start + offset) % count];
+        const Thread &t = *threads_[live_[(start + offset) % count]];
         if ((t.status == ThreadStatus::Ready || t.status == ThreadStatus::Running) && t.priority == *best) {
             return t.id;
         }
@@ -294,8 +297,8 @@ void Kernel::apply_wait_result(Thread &t) {
 
 bool Kernel::schedule() {
     uint64_t now = clock_.ticks();
-    for (auto &t : threads_) {
-        try_satisfy_wait(*t, now);
+    for (ThreadId id : live_) {
+        try_satisfy_wait(*threads_[id], now);
     }
     for (ObjectId id : pulsed_) {
         if (auto *e = std::get_if<Event>(object(id))) {
@@ -323,10 +326,11 @@ bool Kernel::schedule() {
 
 std::optional<uint64_t> Kernel::next_wakeup() const {
     std::optional<uint64_t> best;
-    for (const auto &t : threads_) {
-        if (t->wakeup_at && (t->status == ThreadStatus::Sleeping || t->status == ThreadStatus::WaitSync ||
-                             t->status == ThreadStatus::WaitArbiter)) {
-            best = best ? std::min(*best, *t->wakeup_at) : *t->wakeup_at;
+    for (ThreadId id : live_) {
+        const Thread &t = *threads_[id];
+        if (t.wakeup_at && (t.status == ThreadStatus::Sleeping || t.status == ThreadStatus::WaitSync ||
+                            t.status == ThreadStatus::WaitArbiter)) {
+            best = best ? std::min(*best, *t.wakeup_at) : *t.wakeup_at;
         }
     }
     return best;
@@ -334,9 +338,16 @@ std::optional<uint64_t> Kernel::next_wakeup() const {
 
 void Kernel::end_thread(Thread &t) {
     end_wait(t);
+    if (t.status == ThreadStatus::Dead) {
+        return;
+    }
     t.status = ThreadStatus::Dead;
     t.wait_result.reset();
     t.wait_syscall = WaitSyscall::None;
+    live_.erase(std::lower_bound(live_.begin(), live_.end(), t.id));
+    // its TLS goes to the next thread made; the games make and end threads
+    // all the time (thousands in an hour)
+    hooks_.free_tls(t.tls);
     // the mutexes it holds go to whoever waits on them next, as on the 3DS
     for (auto &slot : slots_) {
         if (!slot) {
