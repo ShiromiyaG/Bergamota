@@ -318,6 +318,7 @@ struct VulkanRenderer::Impl {
     // its rows (games draw both screens into one, each in rows of its own)
     uint32_t top_source = 0, top_rows[2] = {0, 0};
     bool drawn_flat(const Pica &p) const;   // the draw about to go: 2D (draw.cpp)
+    bool edge_filter(const Pica &p) const;  // and an outline's edge filter
     // the resolution the buffers are drawn at (VulkanRenderer::scale): a
     // PICA pixel is res of the image's each way
     float res = 1;

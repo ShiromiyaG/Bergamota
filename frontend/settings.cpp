@@ -85,6 +85,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
     get(t, "video", "antialias", s.video.antialias);
+    get(t, "video", "outlines", s.video.outlines);
     double sharpen = s.video.sharpen;
     get(t, "video", "sharpen", sharpen);
     s.video.sharpen = float(std::clamp(sharpen, 0.0, 1.0));
@@ -118,6 +119,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},
                               {"antialias", s.video.antialias},
+                              {"outlines", s.video.outlines},
                               {"sharpen", double(s.video.sharpen)}}},
         {"audio", toml::table{{"volume", s.audio.volume}, {"mute", s.audio.mute}}},
         {"keyboard", keys},

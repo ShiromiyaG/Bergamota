@@ -170,6 +170,11 @@ void Impl::render(Pica &p) {
     st.depth[0] = f24(r[DEPTH_RANGE]);
     st.depth[1] = f24(r[DEPTH_NEAR]);
     st.depth[2] = float(r[DEPTHMAP_ENABLE] & 1);
+    // the outlines (VulkanRenderer::outlines): an edge filter's neighbors
+    // brought nearer, a pixel of the host's away for thin ones at any
+    // resolution, or onto the texel itself for none
+    st.depth[3] = 1;
+    if (int want = self.outlines.load(std::memory_order_relaxed); want && edge_filter(p)) st.depth[3] = want == 2 ? 0.0f : 1.0f / res;
     pica::LightingBlock lit;
     lighting.decode(r.data(), lit);
     // into the rings; a ring that runs out submits, which leaves what
@@ -446,6 +451,38 @@ bool Impl::drawn_flat(const Pica &p) const {
                });
     };
     return gpu_draw ? flat(sample_positions(*gpu_draw)) : flat(triangles);
+}
+
+// an edge filter, as games draw outlines: 2D, two or three texture units
+// all reading one buffer the game drew, the others a texel or less from
+// texture 0 (a difference of neighbors; a blur reads farther)
+bool Impl::edge_filter(const Pica &p) const {
+    const auto &r = p.regs;
+    uint32_t on = r[TEXTURE_CONFIG] & 7;
+    if (on != 3 && on != 7) return false;
+    uint32_t address = (r[UNIT_BASE[0] + 4] & 0x0FFFFFFF) << 3;
+    for (int u = 1; u < 3; u++) {
+        if (on >> u & 1 && ((r[UNIT_BASE[u] + 4] & 0x0FFFFFFF) << 3) != address) return false;
+    }
+    if (std::none_of(surfaces.begin(), surfaces.end(), [&](const auto &s) { return s->address == address; })) return false;
+    Vertex v;
+    if (gpu_draw) {
+        auto sampled = sample_positions(*gpu_draw);
+        if (sampled.empty()) return false;
+        v = sampled[0];
+    } else {
+        if (triangles.empty()) return false;
+        v = triangles[0];
+    }
+    if (std::abs(v.position[3] - 1.0f) > 1e-4f) return false;
+    uint32_t dims = r[UNIT_BASE[0] + 1];
+    float w = float((dims >> 16) & 0x7FF), h = float(dims & 0x7FF), most = 0;
+    for (int u = 1; u < 3; u++) {
+        if (!(on >> u & 1)) continue;
+        const float *uv = u == 1 || (r[TEXTURE_CONFIG] >> 13 & 1) ? v.uv1 : v.uv2;
+        most = std::max({most, std::abs(uv[0] - v.uv0[0]) * w, std::abs(uv[1] - v.uv0[1]) * h});
+    }
+    return most > 0.5f && most < 1.01f;
 }
 
 void Impl::gpu_unit(Pica &p, GpuDraw &d) {

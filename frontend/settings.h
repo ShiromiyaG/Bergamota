@@ -44,6 +44,9 @@ struct Settings {
         std::string resolution = "native";
         bool antialias = false; // FXAA over the screens
         float sharpen = 0;      // 0-1
+        // the outlines around the characters: "original", "thin" (a pixel
+        // at any resolution) or "none"
+        std::string outlines = "original";
     } video;
     struct {
         int volume = 100; // percent

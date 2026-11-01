@@ -470,8 +470,13 @@ void main() {
     if (on0 && type0 == 1u) tex[0] = cube_texel(vec3(v_uv0, v_w0));
     else if (on0 && (type0 == 2u || type0 == 4u)) tex[0] = shadow_texel(type0 == 4u);
     else tex[0] = texel(0, type0 == 3u ? v_uv0 / v_w0 : v_uv0);
-    tex[1] = texel(1, v_uv1);
-    tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
+    // an outline's edge filter (draw.cpp): its neighbors brought nearer
+    // texture 0's coordinates, by as much as depth.w says
+    float nearer = s.depth.w;
+    vec2 uv1 = nearer == 1.0 ? v_uv1 : v_uv0 + (v_uv1 - v_uv0) * nearer;
+    vec2 uv2 = nearer == 1.0 ? v_uv2 : v_uv0 + (v_uv2 - v_uv0) * nearer;
+    tex[1] = texel(1, uv1);
+    tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? uv1 : uv2);
     // the procedural one reads coordinate set 0, 1 or 2
     uint coordinates = min((reg(TEX_CONFIG) >> 8) & 3u, 2u);
     tex[3] = (reg(TEX_CONFIG) & (1u << 10)) != 0u ? procedural(coordinates == 0u ? v_uv0 : coordinates == 1u ? v_uv1 : v_uv2) : vec4(0.0);

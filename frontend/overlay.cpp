@@ -90,6 +90,11 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 moved = true;
             }
             moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
+            int outlines = s.video.outlines == "thin" ? 1 : s.video.outlines == "none" ? 2 : 0;
+            if (ImGui::Combo("Outlines", &outlines, "As the game draws them\0Thin\0None\0")) {
+                s.video.outlines = outlines == 1 ? "thin" : outlines == 2 ? "none" : "original";
+                moved = true;
+            }
             moved |= ImGui::SliderFloat("Sharpening", &s.video.sharpen, 0.0f, 1.0f, "%.2f");
             moved |= ImGui::Checkbox("Frame times in the corner", &s.stats);
             ImGui::EndTabItem();

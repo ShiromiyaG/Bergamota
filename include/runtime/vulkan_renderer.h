@@ -71,6 +71,11 @@ public:
     // set from any thread, taken at the next vertical blank (the buffers go
     // back to memory and come again at the new size)
     std::atomic<float> scale{1};
+    // the outlines games draw by filtering for edges (USUM's around its
+    // characters, a texel of its own wide, thick at a high resolution):
+    // 0 as drawn, 1 thin (a pixel of the host's at any resolution), 2 none.
+    // set from any thread
+    std::atomic<int> outlines{0};
     // the top screen shown this much wider than it is drawn (widescreen,
     // anamorphic: a port's override frames its 3D wider): what is drawn
     // flat on it (2D, every w 1) goes narrower by as much, centered, so it

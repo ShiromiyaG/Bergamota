@@ -156,14 +156,23 @@ std::vector<Vertex> Impl::sample_positions(const GpuDraw &d) {
             if (!mask) packed[r] = runner.output[r];
             else if (mask >> r & 1) packed[at++] = runner.output[r];
         }
-        Vec4 &p = out[s].position;
-        p = {0, 0, 0, 1};
+        // the position, and the texture coordinates (the outlines' edge filter, draw.cpp)
+        float values[24] = {};
+        values[3] = 1;
         for (uint32_t sl = 0; sl < total; sl++) {
             for (int c = 0; c < 4; c++) {
-                if (uint32_t semantic = d.unit.map[sl] >> (c * 8) & 0x1F; semantic < 4) p[semantic] = packed[sl][c];
+                if (uint32_t semantic = d.unit.map[sl] >> (c * 8) & 0x1F; semantic < 24) values[semantic] = packed[sl][c];
             }
         }
-        if (!total) p = packed[0];
+        if (!total) {
+            for (int c = 0; c < 4; c++) values[c] = packed[0][c];
+            values[12] = packed[3][0], values[13] = packed[3][1];
+        }
+        Vertex &sample = out[s];
+        sample.position = {values[0], values[1], values[2], values[3]};
+        sample.uv0[0] = values[12], sample.uv0[1] = values[13];
+        sample.uv1[0] = values[14], sample.uv1[1] = values[15];
+        sample.uv2[0] = values[22], sample.uv2[1] = values[23];
     }
     return out;
 }
