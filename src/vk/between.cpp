@@ -66,6 +66,17 @@ void Impl::keep_start(Surface &s) {
     barrier();
 }
 
+// texture 0 a shadow map or a projected texture: its coordinates are
+// where the vertex is, seen from a light. A frame between draws the shadow
+// map with things between, so they are looked up between too; with this
+// frame's, a character that moved fell into its own shadow, all of it
+// flat grey, for a frame
+bool Impl::projected_lookup(const uint32_t *regs) {
+    if (!(regs[TEXTURE_CONFIG] & 1)) return false;
+    uint32_t type = regs[UNIT_BASE[0] + 2] >> 28 & 7;
+    return type == 2 || type == 3 || type == 4;
+}
+
 uint32_t Impl::op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
 // a draw of the frame before the same as op could be: shaded on the GPU,
@@ -418,9 +429,14 @@ void Impl::draw_between(float t) {
                     else if (a[3] > 0 && std::max(std::abs(a[0] / a[3] - b[0] / b[3]), std::abs(a[1] / a[3] - b[1] / b[3])) > limit) keep = true;
                 }
                 if (keep) continue;
+                const bool projected = projected_lookup(op.regs.data());
                 for (size_t j = i; j < end; j++) {
-                    const Vec4 &a = before->vertices[j].position, &b = op.vertices[j].position;
-                    for (int k = 0; k < 4; k++) triangles[j].position[k] = a[k] + (b[k] - a[k]) * t;
+                    const Vertex &was = before->vertices[j], &now = op.vertices[j];
+                    for (int k = 0; k < 4; k++) triangles[j].position[k] = was.position[k] + (now.position[k] - was.position[k]) * t;
+                    if (projected && was.w0 * now.w0 > 0) {
+                        for (int k = 0; k < 2; k++) triangles[j].uv0[k] = was.uv0[k] + (now.uv0[k] - was.uv0[k]) * t;
+                        triangles[j].w0 = was.w0 + (now.w0 - was.w0) * t;
+                    }
                 }
             }
         }

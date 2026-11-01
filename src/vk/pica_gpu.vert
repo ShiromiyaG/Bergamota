@@ -44,6 +44,7 @@ layout(push_constant) uniform Push {
     uint now_out, before_out; // where in outputs (a draw between), in floats
     uint store;   // where this draw's go, or ~0 for nowhere
     float jump;   // a vertex between that moved more than this (-1 to 1) stays where it is now
+    uint projected; // texture 0 looked up from where the vertex is: mixed with it (between.cpp, projected_lookup)
 } pc;
 
 // a vertex between two frames: where it was and is, mixed, unless it
@@ -355,6 +356,14 @@ void mix_between(float was[24], float t) {
     for (int k = 0; k < 4; k++) {
         precise float at = was[k] * (1.0 - t) + values[k] * t;
         values[k] = at;
+    }
+    // a shadow map's coordinates (12, 13 and their w, 16), with the position
+    if (pc.projected != 0u && was[16] * values[16] > 0.0) {
+        for (int k = 12; k < 17; k++) {
+            if (k == 14 || k == 15) continue;
+            precise float at = was[k] * (1.0 - t) + values[k] * t;
+            values[k] = at;
+        }
     }
 }
 

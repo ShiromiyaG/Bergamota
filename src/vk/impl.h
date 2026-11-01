@@ -50,6 +50,7 @@ struct VertexPush {
     uint32_t between;
     uint32_t now_out, before_out, store;
     float jump; // a vertex that moved more (on the screen, -1 to 1) stays where it is now
+    uint32_t projected; // texture 0 looked up from where the vertex is (projected_lookup): mixed with it
 };
 // a draw for the GPU's vertex shader: its inputs, triangles as indices,
 // uniforms and program
@@ -399,6 +400,7 @@ struct VulkanRenderer::Impl {
     void drop_ops();
     uint64_t ops_epoch = 0; // counts the frames' ops let go of (drop_ops)
     void keep_start(Surface &s);
+    static bool projected_lookup(const uint32_t *regs);
 
     void let_go(const Image &i);
 
