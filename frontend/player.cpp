@@ -419,7 +419,8 @@ int main(int argc, char **argv) {
     if (!window || !renderer) return fail(std::string("SDL: ") + SDL_GetError());
     frontend::ui_init(window, renderer);
 
-    if ((setup || !settings.game_ready()) && !frontend::launcher(window, renderer, settings, config_file)) {
+    const bool asked = setup || !settings.game_ready();
+    if (asked && !frontend::launcher(window, renderer, settings, config_file)) {
         frontend::ui_shutdown();
         SDL_Quit();
         return 0;
@@ -457,6 +458,18 @@ int main(int argc, char **argv) {
     ImGui_ImplSDL3_Shutdown();
     SDL_DestroyRenderer(renderer);
     renderer = nullptr;
+    // after the setup screen drew in it, a window of its own for Vulkan:
+    // what the SDL renderer (Direct3D) showed in a window stays over
+    // Vulkan's pictures there
+    if (asked) {
+        int x = 0, y = 0, w = 0, h = 0;
+        SDL_GetWindowPosition(window, &x, &y);
+        SDL_GetWindowSize(window, &w, &h);
+        SDL_DestroyWindow(window);
+        window = SDL_CreateWindow(session.title.empty() ? "runtime" : session.title.c_str(), w, h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+        if (!window) return fail(std::string("SDL: ") + SDL_GetError());
+        SDL_SetWindowPosition(window, x, y);
+    }
     Uint32 extension_count = 0;
     const char *const *extension_names = SDL_Vulkan_GetInstanceExtensions(&extension_count);
     std::vector<std::string> extensions(extension_names, extension_names + extension_count);
