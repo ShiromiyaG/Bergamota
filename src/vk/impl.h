@@ -205,9 +205,20 @@ struct VulkanRenderer::Impl {
     VkDeviceSize program_offset = 0;
     uint64_t program_serial = ~0ull, program_sent = 0;
     VkShaderModule vert_gpu = VK_NULL_HANDLE;
-    // the GPU's own time: a timestamp at each command buffer's start and end
+    // the GPU's own time: a timestamp at each command buffer's start and end,
+    // and a pair around each part (gpu_open, gpu_close): the passes that
+    // draw, the frames between, their buffers' copies, the screens'
     VkQueryPool timestamps = VK_NULL_HANDLE;
     double timestamp_ns = 0; // nanoseconds a tick
+    static constexpr uint32_t QUERIES = 4096; // a slot's
+    std::vector<std::pair<int, uint32_t>> scopes[2];
+    uint32_t queries_used[2]{};
+    int pass_scope = -1;
+    // why passes end, for the counters: 0 another target, 1 a texture that
+    // is the target, 2 the rest (copies, uploads, submits)
+    int end_cause = 2;
+    int gpu_open(int part);
+    void gpu_close(int at);
 
     // the fragment lighting: what was last decoded, and where in the
     // uniform ring it and the tables went, for the submission they went with

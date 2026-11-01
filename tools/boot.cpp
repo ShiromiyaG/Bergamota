@@ -391,6 +391,11 @@ int main(int argc, char **argv) {
                     (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
         std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s; the host's GPU %.1f s\n", vulkan->time_vertices,
                     vulkan->time_render, vulkan->time_sync, vulkan->gpu_seconds);
+        std::printf("the host's GPU: passes %.1f s, frames between %.1f s (copies %.1f s), screens %.1f s\n", vulkan->gpu_parts[0],
+                    vulkan->gpu_parts[2], vulkan->gpu_parts[1], vulkan->gpu_parts[3]);
+        std::printf("passes %llu: ended for another target %llu, a texture that was the target %llu, the rest %llu\n",
+                    (unsigned long long)vulkan->passes, (unsigned long long)vulkan->pass_ends[0],
+                    (unsigned long long)vulkan->pass_ends[1], (unsigned long long)vulkan->pass_ends[2]);
         uint64_t compiled, loaded, failed;
         vulkan->translation_counts(compiled, loaded, failed);
         std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them\n",

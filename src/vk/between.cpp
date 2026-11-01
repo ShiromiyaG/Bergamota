@@ -144,6 +144,7 @@ void Impl::draw_between(float t) {
     for (auto &s : surfaces) {
         if (s->as_color.image) depth_views[s->as_color.view] = s.get();
     }
+    int whole = gpu_open(2), seeding = gpu_open(1);
     for (auto &s : surfaces) {
         kept.push_back({s->dirty, s->stale, s->version, s->converted});
         if (!s->between.image) s->between = image(s->width, s->height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
@@ -156,6 +157,7 @@ void Impl::draw_between(float t) {
         std::swap(s->image, s->between);
     }
     barrier();
+    gpu_close(seeding);
     auto regs = p.regs;
     auto tables = p.light_tables;
     uint64_t tables_version = p.tables_version;
@@ -220,6 +222,7 @@ void Impl::draw_between(float t) {
         if (std::find(depth_redone.begin(), depth_redone.end(), &s) != depth_redone.end()) s.converted = ~0ull;
     }
     barrier();
+    gpu_close(whole);
 }
 
 // a frame for the top screen ended in a transfer into output: drawn

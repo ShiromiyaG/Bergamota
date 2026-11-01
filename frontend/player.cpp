@@ -245,7 +245,7 @@ int main(int argc, char **argv) {
     int dump_left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
     auto second = std::chrono::steady_clock::now(), last_shown = second;
     frontend::Stats stats, counting;
-    double busy_before = 0, idle_before = 0;
+    double busy_before = 0, idle_before = 0, host_gpu_before = 0;
     std::deque<Frame> waiting;
     Frame showing;
     while (!quit) {
@@ -357,8 +357,9 @@ int main(int argc, char **argv) {
             counting.idle_ms = (system.idle - idle_before) * 1000;
             stats = counting;
             if (print_stats) {
-                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms\n", stats.shown, stats.worst_ms,
-                            stats.gpu_ms, stats.idle_ms);
+                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms\n", stats.shown,
+                            stats.worst_ms, stats.gpu_ms, stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000);
+                host_gpu_before = vulkan.gpu_seconds;
                 std::fflush(stdout);
             }
             counting = {};

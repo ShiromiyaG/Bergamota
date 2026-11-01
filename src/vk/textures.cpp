@@ -43,7 +43,7 @@ VkImageView Impl::texture(Pica &p, int unit) {
     for (auto &s : surfaces) {
         if (!s->depth && !s->linear && !s->stale && s->address == address && s->width == w && s->height == h && format <= 4 &&
             s->format == format) {
-            if (color_target == s.get()) end_rendering();
+            if (color_target == s.get()) end_cause = 1, end_rendering();
             return s->image.view;
         }
     }

@@ -33,6 +33,13 @@ public:
     double time_vertices = 0, time_render = 0, time_sync = 0;
     // the host GPU's own time running what was sent, in seconds
     double gpu_seconds = 0;
+    // of it: the passes that draw (the frames between's among them), the
+    // frames between's copies of the buffers, the frames between whole, the
+    // screens' copies
+    double gpu_parts[4]{};
+    // render passes, and why they ended: another target, a texture that was
+    // the target, the rest
+    uint64_t passes = 0, pass_ends[3]{};
     // draws with the game's vertex program translated, and the programs
     // translated, taken from the cache, and failed
     uint64_t translated_draws = 0;

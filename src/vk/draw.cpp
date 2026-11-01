@@ -128,7 +128,7 @@ void Impl::render(Pica &p) {
     if (!color) return;
     if (between && !replaying) note_draw(p, views);
     // a texture that is this pass's target cannot be read inside it
-    if (rendering && (color_target != color || depth_target != depth)) end_rendering();
+    if (rendering && (color_target != color || depth_target != depth)) end_cause = 0, end_rendering();
 
     VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
     VkDeviceSize in_size = 0, index_size = 0, before_size = 0;
@@ -215,6 +215,8 @@ void Impl::render(Pica &p) {
         ri.pDepthAttachment = depth ? &da : nullptr;
         ri.pStencilAttachment = depth ? &da : nullptr;
         vkCmdBeginRendering(cmd, &ri);
+        self.passes++;
+        pass_scope = gpu_open(0);
         rendering = true;
         color_target = color, depth_target = depth;
     }

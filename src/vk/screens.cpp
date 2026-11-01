@@ -55,6 +55,7 @@ bool Impl::vblank(Pica &p) {
     new_before = new_frame;
 
     end_rendering();
+    int screens_part = gpu_open(3);
     for (uint32_t screen = 0; screen < 2; screen++) {
         const Pica::Screen &at = p.screens[screen];
         uint32_t stride = at.stride ? at.stride : 240 * bytes_per_pixel(at.format);
@@ -74,6 +75,7 @@ bool Impl::vblank(Pica &p) {
         shown.size[screen][0] = fb->width, shown.size[screen][1] = fb->height;
     }
     barrier();
+    gpu_close(screens_part);
     shown.number = p.vblanks;
     shown.between = use_between;
     shown.pending = true;

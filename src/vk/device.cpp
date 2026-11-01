@@ -142,7 +142,7 @@ bool Impl::init() {
         if (props.limits.timestampPeriod > 0 && fams[family].timestampValidBits >= 32) {
             VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
             qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
-            qi.queryCount = 4;
+            qi.queryCount = QUERIES * 2;
             vkCreateQueryPool(device, &qi, nullptr, &timestamps);
             timestamp_ns = props.limits.timestampPeriod;
         }
@@ -341,9 +341,25 @@ void Impl::begin() {
     vkBeginCommandBuffer(cmd, &bi);
     recording = true;
     if (timestamps) {
-        vkCmdResetQueryPool(cmd, timestamps, uint32_t(current * 2), 2);
-        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, uint32_t(current * 2));
+        uint32_t base = uint32_t(current) * QUERIES;
+        vkCmdResetQueryPool(cmd, timestamps, base, QUERIES);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, base);
+        queries_used[current] = 2;
+        scopes[current].clear();
     }
+}
+
+int Impl::gpu_open(int part) {
+    if (!timestamps || queries_used[current] + 2 > QUERIES) return -1;
+    uint32_t at = uint32_t(current) * QUERIES + queries_used[current];
+    queries_used[current] += 2;
+    vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timestamps, at);
+    scopes[current].push_back({part, at});
+    return int(at);
+}
+
+void Impl::gpu_close(int at) {
+    if (at >= 0) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, timestamps, uint32_t(at) + 1);
 }
 
 // everything waits for everything before: between passes, copies and
@@ -360,7 +376,11 @@ void Impl::barrier() {
 
 void Impl::end_rendering() {
     if (!rendering) return;
+    self.pass_ends[end_cause]++;
+    end_cause = 2;
     vkCmdEndRendering(cmd);
+    gpu_close(pass_scope);
+    pass_scope = -1;
     rendering = false;
     color_target = depth_target = nullptr;
     barrier();
@@ -373,11 +393,16 @@ void Impl::retire(Slot &s) {
     vkWaitForFences(device, 1, &s.fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &s.fence);
     if (timestamps) {
-        uint64_t ticks[2] = {};
-        uint32_t at = uint32_t(&s - slots) * 2;
-        if (vkGetQueryPoolResults(device, timestamps, at, 2, sizeof ticks, ticks, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
-            ticks[1] > ticks[0]) {
-            self.gpu_seconds += double(ticks[1] - ticks[0]) * timestamp_ns * 1e-9;
+        size_t slot = size_t(&s - slots);
+        uint32_t base = uint32_t(slot) * QUERIES, used = queries_used[slot];
+        std::vector<uint64_t> ticks(used);
+        if (used && vkGetQueryPoolResults(device, timestamps, base, used, used * 8, ticks.data(), 8, VK_QUERY_RESULT_64_BIT) ==
+                        VK_SUCCESS) {
+            if (ticks[1] > ticks[0]) self.gpu_seconds += double(ticks[1] - ticks[0]) * timestamp_ns * 1e-9;
+            for (auto [part, at] : scopes[slot]) {
+                uint64_t a = ticks[at - base], b = ticks[at - base + 1];
+                if (b > a) self.gpu_parts[part] += double(b - a) * timestamp_ns * 1e-9;
+            }
         }
     }
     for (Buffer &b : s.staging) give_back(b);
@@ -392,7 +417,7 @@ void Impl::retire(Slot &s) {
 void Impl::submit(bool wait) {
     begin();
     end_rendering();
-    if (timestamps) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestamps, uint32_t(current * 2 + 1));
+    if (timestamps) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestamps, uint32_t(current) * QUERIES + 1);
     vkEndCommandBuffer(cmd);
     Slot &s = slots[current];
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
