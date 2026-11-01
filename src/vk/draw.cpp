@@ -132,11 +132,28 @@ void Impl::render(Pica &p) {
 
     VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
     VkDeviceSize in_size = 0, index_size = 0, before_size = 0;
+    // a frame between whose draws both kept their outputs takes them, and
+    // runs nothing; a draw of the game's with frames between keeps its own
+    const bool from_outputs = on_gpu && replaying && gpu_draw->outputs != ~0u && gpu_draw->output_turn == output_turn &&
+                              (!gpu_before || (gpu_before->outputs != ~0u && gpu_before->output_turn + 1 == output_turn));
+    uint32_t store = ~0u;
+    if (on_gpu && between && !replaying && store_outputs && gpu_draw->stride) {
+        VkDeviceSize need = VkDeviceSize(gpu_draw->inputs.size() / gpu_draw->stride) * 24 * sizeof(float);
+        if (output_at + need <= OUTPUT_HALF) {
+            store = uint32_t(((output_turn & 1) * OUTPUT_HALF + output_at) / sizeof(float));
+            output_at += need;
+        }
+        // the frame between's copy of this draw, made just before, learns where
+        if (!ops_now.empty() && ops_now.back().gpu && ops_now.back().kind == Op::Draw) {
+            ops_now.back().gpu->outputs = store;
+            ops_now.back().gpu->output_turn = output_turn;
+        }
+    }
     if (on_gpu) {
         vsize = 0;
-        in_size = gpu_draw->inputs.size() * sizeof(Vec4);
+        in_size = from_outputs ? 0 : gpu_draw->inputs.size() * sizeof(Vec4);
         index_size = gpu_draw->indices.size() * sizeof(uint32_t);
-        before_size = gpu_before ? gpu_before->inputs.size() * sizeof(Vec4) : 0;
+        before_size = gpu_before && !from_outputs ? gpu_before->inputs.size() * sizeof(Vec4) : 0;
     }
     if (vsize + in_size + index_size + before_size + 1024 > VERTEX_RING) return;
     State st{};
@@ -152,14 +169,14 @@ void Impl::render(Pica &p) {
     for (;;) {
         uint64_t serial = submitted;
         if (on_gpu) {
-            in_off = take(vertices, vertex_at, in_size, 256);
+            in_off = take(vertices, vertex_at, std::max<VkDeviceSize>(in_size, 16), 256);
             std::memcpy(vertices.mapped + in_off, gpu_draw->inputs.data(), in_size);
             index_off = take(vertices, vertex_at, index_size, 16);
             std::memcpy(vertices.mapped + index_off, gpu_draw->indices.data(), index_size);
             unit_off = take(uniforms, uniform_at, sizeof(UnitBlock), 256);
             std::memcpy(uniforms.mapped + unit_off, &gpu_draw->unit, sizeof(UnitBlock));
             before_off = in_off, before_unit_off = unit_off;
-            if (gpu_before) {
+            if (gpu_before && !from_outputs) {
                 before_off = take(vertices, vertex_at, before_size, 256);
                 std::memcpy(vertices.mapped + before_off, gpu_before->inputs.data(), before_size);
                 before_unit_off = take(uniforms, uniform_at, sizeof(UnitBlock), 256);
@@ -269,7 +286,7 @@ void Impl::render(Pica &p) {
     for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
     VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
-    VkWriteDescriptorSet writes[9]{};
+    VkWriteDescriptorSet writes[10]{};
     for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
@@ -293,24 +310,32 @@ void Impl::render(Pica &p) {
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.triangles += triangles.size() / 3;
     } else {
-        VkDescriptorBufferInfo gpu_info[5] = {
+        VkDescriptorBufferInfo gpu_info[6] = {
             {uniforms.buffer, program_offset, sizeof(ProgramBlock)},
             {uniforms.buffer, unit_off, sizeof(UnitBlock)},
             {vertices.buffer, in_off, std::max<VkDeviceSize>(in_size, 16)},
             {uniforms.buffer, before_unit_off, sizeof(UnitBlock)},
-            {vertices.buffer, before_off, std::max<VkDeviceSize>(gpu_before ? before_size : in_size, 16)},
+            {vertices.buffer, before_off, std::max<VkDeviceSize>(gpu_before && !from_outputs ? before_size : in_size, 16)},
+            {outputs, 0, VK_WHOLE_SIZE},
         };
-        static constexpr VkDescriptorType TYPES[5] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        static constexpr VkDescriptorType TYPES[6] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-        for (int k = 0; k < 5; k++) {
+                                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        for (int k = 0; k < 6; k++) {
             writes[4 + k].dstBinding = uint32_t(4 + k);
             writes[4 + k].descriptorCount = 1;
             writes[4 + k].descriptorType = TYPES[k];
             writes[4 + k].pBufferInfo = &gpu_info[k];
         }
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 9, writes);
-        VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u};
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 10, writes);
+        VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u,
+                        0, 0, store, 0};
+        if (from_outputs) {
+            push.between = 2;
+            push.now_out = gpu_draw->outputs;
+            push.before_out = gpu_before ? gpu_before->outputs : gpu_draw->outputs;
+            self.reused_draws++;
+        }
         vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, &push);
         vkCmdBindIndexBuffer(cmd, vertices.buffer, index_off, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, uint32_t(gpu_draw->indices.size()), 1, 0, 0, 0);

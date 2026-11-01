@@ -33,10 +33,17 @@ layout(std140, set = 0, binding = 7) uniform Before { Unit u; } before;
 layout(std430, set = 0, binding = 6) readonly buffer Inputs { vec4 v[]; } inputs_now;
 layout(std430, set = 0, binding = 8) readonly buffer InputsBefore { vec4 v[]; } inputs_before;
 
+// each vertex's outputs as a draw of the game's left them (24 values a
+// vertex), for its frame between to take instead of running it again
+layout(std430, set = 0, binding = 9) buffer Outputs { float v[]; } outputs;
+
 layout(push_constant) uniform Push {
     uint stride, before_stride;
     float t;      // where between the two: 0 the frame before, 1 this one
-    uint between; // 1: run the frame before's too
+    uint between; // 1: run the frame before's too; 2: take both from outputs
+    uint now_out, before_out; // where in outputs (a draw between), in floats
+    uint store;   // where this draw's go, or ~0 for nowhere
+    uint unused;
 } pc;
 
 layout(location = 0) out vec4 v_color;
@@ -322,6 +329,16 @@ void place() {
 
 void main() {
     vec4 earlier = vec4(0.0);
+    uint vertex = uint(gl_VertexIndex) * 24u;
+    if (pc.between == 2u) {
+        // both frames' as their draws left them: nothing to run
+        for (uint k = 0u; k < 24u; k++) values[k] = outputs.v[pc.now_out + vertex + k];
+        uint b = pc.before_out + vertex;
+        earlier = vec4(outputs.v[b], outputs.v[b + 1u], outputs.v[b + 2u], outputs.v[b + 3u]);
+        vec4 now = vec4(values[0], values[1], values[2], values[3]);
+        vec4 position = mix(earlier, now, pc.t);
+        values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
+    } else {
     if (pc.between != 0u) {
         from_before = true;
         run();
@@ -331,8 +348,15 @@ void main() {
     from_before = false;
     run();
     place();
+    if (pc.store != 0xFFFFFFFFu) {
+        for (uint k = 0u; k < 24u; k++) outputs.v[pc.store + vertex + k] = values[k];
+    }
+    if (pc.between != 0u) {
+        vec4 position = mix(earlier, vec4(values[0], values[1], values[2], values[3]), pc.t);
+        values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
+    }
+    }
     vec4 position = vec4(values[0], values[1], values[2], values[3]);
-    if (pc.between != 0u) position = mix(earlier, position, pc.t);
 
     // the PICA keeps z in [-w, 0] and its y up; Vulkan has z in [0, w] and
     // y down (the viewport sets rows the PICA's way)

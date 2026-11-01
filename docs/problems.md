@@ -111,7 +111,11 @@ own time (timestamps, `gpu_seconds`) over 5000 frames walking in the field:
 | interpreted on the GPU | 10.4 s | 29.5 s |
 | translated | 5.2 s | 13.5 s |
 
-With "60 FPS" the program runs twice a vertex. `boot`'s shots are the
+With "60 FPS" the program ran twice a vertex; since, each draw of the
+game's writes its vertices' outputs (pica_gpu.vert, outputs: two halves, a
+game frame each in turn) and its frame between takes them, running nothing:
+7.0 s with "60 FPS" where it was 13.5 s (the frames between 1.1 s where
+they were 8.3 s), the same checks passing. `boot`'s shots are the
 same as with the CPU's stage; no validation errors. With an empty cache,
 90% of the draws already use the translated shaders.
 

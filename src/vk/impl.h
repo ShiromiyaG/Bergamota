@@ -46,6 +46,7 @@ struct VertexPush {
     uint32_t stride, before_stride;
     float t;
     uint32_t between;
+    uint32_t now_out, before_out, store, unused;
 };
 // a draw for the GPU's vertex shader: its inputs, triangles as indices,
 // uniforms and program
@@ -57,6 +58,10 @@ struct GpuDraw {
     std::shared_ptr<const ProgramBlock> program;
     uint64_t program_hash = 0;
     uint64_t input_hash = 0; // the inputs, the indices and the stride: alike in a thing that only moves
+    // where its vertices' outputs went (pica_gpu.vert, outputs), in floats,
+    // and in which half's turn; none when out of room
+    uint32_t outputs = ~0u;
+    uint64_t output_turn = 0;
 };
 
 // the registers the shaders read, by slot (pica.frag)
@@ -195,7 +200,7 @@ struct VulkanRenderer::Impl {
     // the vertex shader on the GPU (RUNTIME_CPU_VERTICES=1: on the CPU, to
     // compare): the draw render takes, and with a frame between the frame
     // before's and where between them
-    const bool gpu_vertices = std::getenv("RUNTIME_CPU_VERTICES") == nullptr;
+    bool gpu_vertices = std::getenv("RUNTIME_CPU_VERTICES") == nullptr;
     VertexStage::Gathered gathered;
     GpuDraw live;
     const GpuDraw *gpu_draw = nullptr, *gpu_before = nullptr;
@@ -205,6 +210,14 @@ struct VulkanRenderer::Impl {
     VkDeviceSize program_offset = 0;
     uint64_t program_serial = ~0ull, program_sent = 0;
     VkShaderModule vert_gpu = VK_NULL_HANDLE;
+    // the outputs of the game's draws, for the frames between: two halves,
+    // a game frame each in turn (output_turn), so the frame before's stay
+    static constexpr VkDeviceSize OUTPUT_HALF = 64u << 20;
+    VkBuffer outputs = VK_NULL_HANDLE;
+    VkDeviceMemory outputs_memory = VK_NULL_HANDLE;
+    VkDeviceSize output_at = 0;
+    uint64_t output_turn = 1;
+    bool store_outputs = false; // the device lets vertex shaders write
     // the GPU's own time: a timestamp at each command buffer's start and end,
     // and a pair around each part (gpu_open, gpu_close): the passes that
     // draw, the frames between, their buffers' copies, the screens'
@@ -254,7 +267,7 @@ struct VulkanRenderer::Impl {
         Backend::Transfer transfer;
         uint64_t look = 0; // the textures and the combiners: two draws alike in them are the same thing
         uint64_t uvs = 0;  // where it samples its first texture: the same in a thing that only moves
-        std::shared_ptr<const GpuDraw> gpu; // shaded on the GPU: its inputs, not vertices
+        std::shared_ptr<GpuDraw> gpu; // shaded on the GPU: its inputs, not vertices
     };
     std::vector<Op> ops_now;
     std::map<uint32_t, std::vector<Op>> draws_before; // by target: the last frame's that drew it

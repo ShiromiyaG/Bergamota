@@ -240,6 +240,10 @@ void Impl::frame_end(uint32_t output) {
         between_ready = true;
         between_address = output;
     }
+    // the next frame's outputs go to the other half; this one's stay as
+    // the frame before's
+    output_turn++;
+    output_at = 0;
     // each target's draws, as the next frame to draw it matches them
     std::map<uint32_t, std::vector<Op>> drawn;
     for (Op &op : ops_now) {

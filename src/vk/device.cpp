@@ -85,6 +85,12 @@ bool Impl::init() {
     qci.queueFamilyIndex = family;
     qci.queueCount = 1;
     qci.pQueuePriorities = &priority;
+    // vertex shaders that write (the outputs kept for the frames between)
+    VkPhysicalDeviceFeatures has{};
+    vkGetPhysicalDeviceFeatures(physical, &has);
+    VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    features.features.vertexPipelineStoresAndAtomics = has.vertexPipelineStoresAndAtomics;
+    store_outputs = has.vertexPipelineStoresAndAtomics;
     VkPhysicalDeviceVulkan13Features v13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
@@ -92,8 +98,9 @@ bool Impl::init() {
     eds.extendedDynamicState = VK_TRUE;
     v13.pNext = &eds;
     const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
+    features.pNext = &v13;
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    dci.pNext = &v13;
+    dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = 2;
@@ -152,7 +159,7 @@ bool Impl::init() {
     // its tables; for the vertex shader on the GPU, the program, the
     // uniforms and the inputs, this frame's and the frame before's
     constexpr VkShaderStageFlags V = VK_SHADER_STAGE_VERTEX_BIT;
-    VkDescriptorSetLayoutBinding bindings[9] = {
+    VkDescriptorSetLayoutBinding bindings[10] = {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -162,10 +169,11 @@ bool Impl::init() {
         {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
         {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V, nullptr},
         {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
+        {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sli.bindingCount = 9;
+    sli.bindingCount = 10;
     sli.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
     VkPushConstantRange push{V, 0, sizeof(VertexPush)};
@@ -184,6 +192,28 @@ bool Impl::init() {
     smi.codeSize = sizeof VERT_GPU_SPV;
     smi.pCode = VERT_GPU_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &vert_gpu);
+    if (store_outputs) {
+        // the outputs: on the GPU only, written and read by shaders
+        VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bi.size = OUTPUT_HALF * 2;
+        bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        vkCreateBuffer(device, &bi, nullptr, &outputs);
+        VkMemoryRequirements req;
+        vkGetBufferMemoryRequirements(device, outputs, &req);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        if (vkAllocateMemory(device, &ai, nullptr, &outputs_memory) == VK_SUCCESS) {
+            vkBindBufferMemory(device, outputs, outputs_memory, 0);
+        } else {
+            vkDestroyBuffer(device, outputs, nullptr);
+            outputs = VK_NULL_HANDLE;
+            store_outputs = false;
+        }
+    }
+    // a vertex shader that writes needs the device's leave: the CPU's stage
+    // without it
+    if (!store_outputs) gpu_vertices = false;
     VkPipelineCacheCreateInfo pci_cache{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     vkCreatePipelineCache(device, &pci_cache, nullptr, &pipeline_cache);
     smi.codeSize = sizeof FRAG_SPV;
@@ -490,6 +520,7 @@ void Impl::shutdown() {
     }
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, vert_gpu, nullptr);
+    if (outputs) vkDestroyBuffer(device, outputs, nullptr), vkFreeMemory(device, outputs_memory, nullptr);
     if (timestamps) vkDestroyQueryPool(device, timestamps, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
     vkDestroyShaderModule(device, depth_module, nullptr);
