@@ -84,6 +84,9 @@ bool parse_decomp(const std::string &text, Decomp &out, std::string &error) {
         } else if (kind == "symbol") {
             std::string name = word(1);
             out.symbols[name] = number(2);
+        } else if (kind == "patch") {
+            uint32_t at = number(1), value = number(2);
+            out.patches.emplace_back(at, value);
         }
         // entry lines are for 3dsrecomp, anything else for a newer host
         if (!ok) return false;

@@ -54,9 +54,13 @@ struct Decomp {
     std::vector<ModuleImport> module_imports;
     // variables of the decomp's the host reads or writes, by name
     std::map<std::string, uint32_t> symbols;
+    // words of the executable's changed as it loads (a vtable's entry
+    // pointed at a port's wrapper): address, value
+    std::vector<std::pair<uint32_t, uint32_t>> patches;
 };
 
-// decomp.txt's lines: base, entry, hook, module_hook, module_import, symbol
+// decomp.txt's lines: base, entry, hook, module_hook, module_import, symbol,
+// patch
 bool parse_decomp(const std::string &text, Decomp &out, std::string &error);
 // dir/decomp.bin and dir/decomp.txt, dir in UTF-8
 bool read_decomp(const std::string &dir, Decomp &out, std::string &error);

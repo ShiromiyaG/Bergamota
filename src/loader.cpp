@@ -303,6 +303,26 @@ void load(System &system, const ExHeader &exheader, const std::vector<uint8_t> &
         std::vector<uint8_t> text_bytes(patched.begin(), patched.begin() + text);
         patch_text(*decomp, exheader.text.address, text_bytes);
         std::copy(text_bytes.begin(), text_bytes.end(), patched.begin());
+        // the words it changes, in whichever segment (laid out one after
+        // another in the file, a page apart)
+        for (const auto &[at, value] : decomp->patches) {
+            size_t offset = 0;
+            bool found = false;
+            for (const Segment *s : {&exheader.text, &exheader.rodata, &exheader.data}) {
+                uint32_t size = s->pages * map::PAGE_SIZE;
+                if (at >= s->address && at - s->address + 4 <= size) {
+                    offset += at - s->address;
+                    found = true;
+                    break;
+                }
+                offset += size;
+            }
+            if (!found || offset + 4 > patched.size()) {
+                std::fprintf(stderr, "decomp: 0x%08X is not in the program, left alone\n", at);
+                continue;
+            }
+            std::memcpy(patched.data() + offset, &value, 4);
+        }
     }
     const std::vector<uint8_t> &code = decomp ? patched : code_bin;
     Memory &memory = system.memory;
