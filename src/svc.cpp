@@ -163,6 +163,7 @@ void Kernel::create_thread(Thread &self) {
     ThreadId id = start(entry, stack, priority);
     Thread &t = *threads_[id];
     t.context.r[0] = argument;
+    t.core = int32_t(c.r[4]);
     c.r[0] = result::SUCCESS;
     c.r[1] = create_handle(insert(ThreadObject{id}));
 }

@@ -264,7 +264,9 @@ bool System::run(const std::function<bool()> &stop) {
                 c.exit = EXIT_NONE;
                 c.depth = 0;
             }
-            profile.code += seconds(before_code);
+            double spent = seconds(before_code);
+            profile.code += spent;
+            profile.by_thread[t.id] += spent;
         } else {
             bool went_on = interpret(c);
             profile.interpreter += seconds(before_code);

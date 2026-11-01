@@ -13,6 +13,9 @@
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
+//   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
+//                           it was found in most, sampled every millisecond
+//   RUNTIME_SAMPLE_FROM=s   sampled from s seconds in (on the host's clock)
 //   RUNTIME_TRAIL=n         after each shot, the next n frames shown; on the host's
 //                           clock, the first n from frame RUNTIME_TRAIL_FROM
 //                           (RUNTIME_NO_INPUT=1: no A presses; RUNTIME_REPLAY: its input)
@@ -28,6 +31,7 @@
 #include "runtime/vulkan_renderer.h"
 #endif
 #include "runtime/loader.h"
+#include "runtime/sampler.h"
 #include "runtime/services.h"
 #include "runtime/system.h"
 
@@ -273,11 +277,21 @@ int main(int argc, char **argv) {
     };
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    Sampler sampler;
+    const size_t sample_count = env("RUNTIME_SAMPLE") ? std::stoul(env("RUNTIME_SAMPLE")) : 0;
+    auto sample_from = std::chrono::steady_clock::now() +
+                       std::chrono::duration<double>(env("RUNTIME_SAMPLE_FROM") ? std::atof(env("RUNTIME_SAMPLE_FROM")) : 0);
+    bool sampling = false;
+    const bool no_input = env("RUNTIME_NO_INPUT") != nullptr;
     auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     int shots = 0;
     uint64_t sketch_frame = 0;
     bool went_on = system.run([&] {
         auto now = std::chrono::steady_clock::now();
+        if (sample_count && !sampling && now >= sample_from) {
+            sampling = true;
+            sampler.start_here();
+        }
         if (frames) {
             // a frame at a time: the recording's input for it, the screens
             auto &in = replay.at(handlers.vblanks);
@@ -300,7 +314,7 @@ int main(int argc, char **argv) {
         // A pressed for a tenth of each second, to get past the title as the bots
         // do; RUNTIME_NO_INPUT=1 leaves the game alone
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        handlers.input.buttons = ms % 1000 < 100 && !env("RUNTIME_NO_INPUT") ? 1 : 0;
+        handlers.input.buttons = ms % 1000 < 100 && !no_input ? 1 : 0;
         if (replay_path) {
             // a recording on the host's clock: as the player would get it
             auto &in = replay.at(handlers.vblanks);
@@ -327,6 +341,11 @@ int main(int argc, char **argv) {
     // the frames still on their way
     if (async) async->locked([] {});
     take_frames();
+    if (sampling) {
+        sampler.stop();
+        std::printf("the game's thread, %llu samples:\n", (unsigned long long)sampler.samples());
+        for (const std::string &line : sampler.report(library, sample_count)) std::printf("  %s\n", line.c_str());
+    }
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
     if (async) std::printf("the game waited %.1f s for the GPU's thread\n", async->waited);
@@ -341,6 +360,17 @@ int main(int argc, char **argv) {
                 system.profile.outside, (unsigned long long)system.profile.slices, (unsigned long long)system.profile.svcs);
     for (int n = 0; n < 256; n++) {
         if (system.profile.by_svc[n] > 0.2) std::printf("  svc 0x%02X %.1f s\n", n, system.profile.by_svc[n]);
+    }
+    {
+        // the threads whose code took the most
+        std::vector<std::pair<double, uint32_t>> threads;
+        for (auto [id, spent] : system.profile.by_thread) threads.push_back({spent, id});
+        std::sort(threads.rbegin(), threads.rend());
+        for (size_t i = 0; i < threads.size() && i < 8 && threads[i].first > 0.1; i++) {
+            Thread &t = system.kernel.thread(threads[i].second);
+            std::printf("  thread %u: code %.1f s, priority 0x%02X, core %d, entry 0x%08X\n", t.id, threads[i].first, t.priority,
+                        t.core, t.entry);
+        }
     }
     for (auto &[key, spent] : handlers.time_spent) {
         if (spent > 0.2) std::printf("  %s 0x%04X %.1f s\n", key.first.c_str(), key.second, spent);

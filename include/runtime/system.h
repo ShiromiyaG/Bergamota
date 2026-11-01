@@ -83,6 +83,7 @@ public:
         double code = 0, interpreter = 0, syscalls = 0, schedule = 0, outside = 0;
         uint64_t slices = 0, svcs = 0;
         double by_svc[256]{};
+        std::map<uint32_t, double> by_thread; // the code's time, by thread
     } profile;
     // where it ran, by the address it entered at
     std::map<uint32_t, uint64_t> interpreted_at;

@@ -19,6 +19,7 @@ ThreadId Kernel::start(uint32_t entry, uint32_t stack_top, uint32_t priority) {
     ThreadId id = static_cast<ThreadId>(threads_.size());
     thread->id = id;
     thread->priority = priority;
+    thread->entry = entry;
     thread->tls = hooks_.allocate_tls();
     Context &c = thread->context;
     c.r[13] = stack_top;

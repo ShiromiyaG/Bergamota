@@ -107,6 +107,8 @@ enum class WaitSyscall { None, WaitSynchronization1, WaitSynchronizationN, Arbit
 struct Thread {
     ThreadId id;
     uint32_t priority; // 0 is the highest, 0x3F the lowest
+    uint32_t entry = 0;
+    int32_t core = -2; // the core it asked for: -2 the process's default, 0 the app's, 1 the system's
     ThreadStatus status = ThreadStatus::Ready;
     uint32_t tls;
     // the guest's registers; vfp and fpscr live here, the Context points at

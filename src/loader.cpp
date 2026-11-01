@@ -116,6 +116,7 @@ bool Library::open(const std::string &path, std::string &error) {
     // but tests
     auto *generation = static_cast<const uint32_t *>(symbol(library, "recomp_generation"));
     origins_ = generation && *generation >= 3 ? static_cast<const Origins *>(symbol(library, "recomp_origins")) : nullptr;
+    forget();
     return true;
 }
 
@@ -127,6 +128,7 @@ void Library::linked(const Entry *entries, size_t count, const Module *modules, 
     module_count_ = module_count;
     origins_ = origins;
     placed_.clear();
+    forget();
 }
 
 bool Library::stale(size_t unit, size_t entry) const {
@@ -137,7 +139,28 @@ bool Library::stale(size_t unit, size_t entry) const {
     return owner != NO_ORIGIN && o.stale[owner] != 0;
 }
 
+void Library::functions(std::vector<std::pair<uintptr_t, std::string>> &out) const {
+    char name[128];
+    for (size_t i = 0; i < count_; i++) {
+        std::snprintf(name, sizeof name, "0x%08X", entries_[i].address);
+        out.push_back({reinterpret_cast<uintptr_t>(entries_[i].code), name});
+    }
+    for (size_t m = 0; m < module_count_; m++) {
+        for (uint32_t i = 0; i < modules_[m].count; i++) {
+            std::snprintf(name, sizeof name, "%s+0x%X", modules_[m].name, modules_[m].entries[i].address);
+            out.push_back({reinterpret_cast<uintptr_t>(modules_[m].entries[i].code), name});
+        }
+    }
+}
+
 Code Library::lookup(uint32_t address) const {
+    if (cache_.empty()) forget();
+    Cached &slot = cache_[(address ^ (address >> 16)) & (CACHE_SIZE - 1)];
+    if (slot.address != address) slot = {address, search(address)};
+    return slot.code;
+}
+
+Code Library::search(uint32_t address) const {
     auto find = [&](const Entry *entries, size_t count, size_t unit, uint32_t address) -> Code {
         const Entry *end = entries + count;
         const Entry *it = std::lower_bound(entries, end, address,
@@ -163,6 +186,7 @@ uint32_t Library::redirect(uint32_t address) const {
 }
 
 bool Library::place(const std::string &name, uint32_t base, Memory *memory) {
+    forget();
     for (size_t i = 0; i < module_count_; i++) {
         if (name != modules_[i].name) continue;
         *modules_[i].base = base; // the code reads it on entry
@@ -187,6 +211,7 @@ bool Library::place(const std::string &name, uint32_t base, Memory *memory) {
 }
 
 size_t Library::check(size_t unit, uint32_t base, Memory &memory) {
+    forget();
     if (!origins_ || unit > module_count_) return 0;
     const Origins &o = origins_[unit];
     if (!o.piece_count || !o.count) return 0;

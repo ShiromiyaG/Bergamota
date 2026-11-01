@@ -79,6 +79,9 @@ public:
     bool has_origins() const { return origins_ != nullptr; }
     uint64_t program_id() const { return program_id_; }
     size_t entry_count() const { return count_; }
+    // every function's host code and its name (0x00123456, or a module's
+    // Battle.cro+0x1234), for the sampler
+    void functions(std::vector<std::pair<uintptr_t, std::string>> &out) const;
     size_t module_count() const { return module_count_; }
 
 private:
@@ -96,6 +99,17 @@ private:
     const Origins *origins_ = nullptr;
     std::vector<Placed> placed_;
     std::unordered_map<uint32_t, uint32_t> aliases_;
+    // the last answers of lookup, by address: the game jumps through it on
+    // every indirect call and return, and the search was a third of its time
+    // in the intro's movie. emptied whenever an answer can change
+    struct Cached {
+        uint32_t address = ~0u;
+        Code code = nullptr;
+    };
+    static constexpr size_t CACHE_SIZE = 1 << 16;
+    mutable std::vector<Cached> cache_;
+    void forget() const { cache_.assign(CACHE_SIZE, Cached{}); }
+    Code search(uint32_t address) const;
 };
 
 struct Decomp;

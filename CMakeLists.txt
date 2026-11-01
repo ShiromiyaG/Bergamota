@@ -33,6 +33,7 @@ add_library(recomp_runtime STATIC
     src/pica/lighting.cpp
     src/pica/sketch.cpp
     src/services.cpp
+    src/sampler.cpp
 )
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
 # shaders compiled to SPIR-V here, never while a game runs
@@ -63,7 +64,7 @@ endif()
 # third_party/recomp.h: 3dsrecomp's interface to the code it generates (MIT)
 target_include_directories(recomp_runtime PUBLIC include third_party)
 if(WIN32)
-    target_link_libraries(recomp_runtime PUBLIC winmm)
+    target_link_libraries(recomp_runtime PUBLIC winmm dbghelp)
 endif()
 
 # Zakuro's renderer, a Rust static library (bridge/zakuro-gpu-c, built with
