@@ -40,6 +40,28 @@ idle 90% of the time.
   `RUNTIME_VK_DEBUG` read once, the per-draw timers and the shape counter
   gone.
 
+Found after, by looking at what the player showed (2026-11-01):
+
+- The intro's movie went back and forth between a new picture and one
+  frames old, "60 FPS" on or off. The game is CPU-bound there (the game's
+  thread never idle), and when it falls behind it skips drawing a frame but
+  still flips to its other buffer. `VulkanRenderer::vblank` keeps the
+  newest picture when a screen flips to a buffer whose last transfer or
+  write is older than the one shown (`picture_in`).
+- Black cracks between pieces of the ground in frames between, when moving.
+  Repeated pieces (a curb's, a row of tiles) sample the same part of their
+  texture, and the first one alike was often the neighbor's; and the jump
+  test counted vertices near or behind the eye and far off the screen,
+  where a small move projects to a huge one, so a piece was drawn where it
+  is now while its neighbors moved halfway. A draw now pairs with the one
+  alike in its first texture coordinates that moved the least (`match`),
+  and moves are measured on the vertices in front of the eye and on or
+  near the screen (`moved`).
+
+To look at what the player shows: `RUNTIME_DUMP=<folder>` in the player;
+`boot` with `RUNTIME_REPLAY`, `RUNTIME_TRAIL` and `RUNTIME_TRAIL_FROM` on the
+host's clock, as the player runs.
+
 Left: performance 3 (presenting through the renderer's own Vulkan device)
 and 4 (the vertex stage on the GPU). Both are now off the game's thread:
 3 costs a frame of latency and a little CPU on the main thread, 4 keeps
