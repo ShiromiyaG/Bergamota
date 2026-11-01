@@ -368,8 +368,9 @@ struct VulkanRenderer::Impl {
     // is, among those to the same target made of the same (vertex count or
     // inputs, textures, combiners): the frame's pairs as a whole, the
     // likeliest first (between.cpp). A port can tell what a draw is: tagged
-    // in a PICA register nothing uses (Solstice's native/draw_tags.c, a
-    // model's mesh), two meshes never pair
+    // in a PICA register nothing uses (DRAW_TAG, a model's mesh), two meshes
+    // never pair. Written into the game's command list it broke a scene
+    // (Solstice's Poké Pelago drew nothing), so no port tags now
     std::vector<const Op *> pairs; // by place in ops_now, null for none or a jump
     std::vector<float> limits;     // by place: how far a vertex of the pair may move (jump_limit)
     void pair_frame();
