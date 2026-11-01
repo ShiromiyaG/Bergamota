@@ -431,10 +431,26 @@ bool Impl::keep_between(uint32_t output, int slot) {
     return true;
 }
 
+// how much nearer or farther a draw got (its vertices' w, the distance from
+// the eye, summed): |log| of the ratio, 0 for none (one shaded on the GPU
+// by its samples, when it moved)
+static float scale_change(const std::vector<Vertex> &before, const std::vector<Vertex> &now) {
+    double a = 0, b = 0;
+    for (size_t i = 0; i < now.size() && i < before.size(); i++) {
+        if (before[i].position[3] > 0 && now[i].position[3] > 0) a += before[i].position[3], b += now[i].position[3];
+    }
+    return a > 0 && b > 0 ? float(std::abs(std::log(b / a))) : 0.0f;
+}
+
 // what the frame's pairs did, before any is drawn between: scene_motion,
 // the median of how far those that moved went (the camera's sweep, for
 // jumps), and whether it is a cut (a cutscene's camera to another shot):
-// more than a quarter of them past a quarter of the screen. Each draw tells
+// more than a quarter of them past a quarter of the screen, or most of them
+// a quarter nearer or farther from the eye at once (a cut to a closer or a
+// wider shot of the same place moves things little on the screen, and
+// mixed it makes a camera that never was, the set and the characters
+// warped for a frame; a camera moving, however fast, changes their
+// distance little from one frame to the next). Each draw tells
 // a jump of its own, but across a cut a few things land near where
 // something like them was (a big piece of the set, a character on the same
 // side) and would be drawn halfway between two shots while the rest is in
@@ -442,7 +458,7 @@ bool Impl::keep_between(uint32_t output, int slot) {
 // between at all
 bool Impl::survey() {
     std::map<uint32_t, Matching> matched;
-    std::vector<float> moves;
+    std::vector<float> moves, scales;
     size_t far = 0;
     for (const Op &op : ops_now) {
         if (op.kind != Op::Draw) continue;
@@ -454,13 +470,21 @@ bool Impl::survey() {
         if (d < 0.002f) continue;
         moves.push_back(d);
         if (d > 0.5f) far++;
+        if (!op.gpu) scales.push_back(scale_change(before->vertices, op.vertices));
+        else if (!before->gpu->samples.empty() && !op.gpu->samples.empty()) scales.push_back(scale_change(before->gpu->samples, op.gpu->samples));
     }
     scene_motion = 0;
     if (!moves.empty()) {
         std::nth_element(moves.begin(), moves.begin() + moves.size() / 2, moves.end());
         scene_motion = moves[moves.size() / 2];
     }
-    return moves.size() >= 4 && far * 4 > moves.size();
+    if (moves.size() < 4) return false;
+    if (far * 4 > moves.size()) return true;
+    if (scales.size() >= 4) {
+        std::nth_element(scales.begin(), scales.begin() + scales.size() / 2, scales.end());
+        if (scales[scales.size() / 2] > 0.223f) return true; // a quarter: log(1.25)
+    }
+    return false;
 }
 
 // a frame for the top screen ended in a transfer into output: drawn
