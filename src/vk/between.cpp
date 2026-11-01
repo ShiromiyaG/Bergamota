@@ -352,14 +352,17 @@ void Impl::draw_between(float t) {
                            ? jump_limit(gpu_before->samples, op.gpu->samples) : 1e9f;
         } else if (before && !jumps(*before, op, scene_motion)) {
             // a triangle with a vertex far past the rest's moves (another
-            // thing's, a batch reordered) is left where it is, whole
+            // thing's, a batch reordered), or one that crossed the eye's
+            // plane (mixed, it would pass through infinity), is left where
+            // it is, whole
             const float limit = jump_limit(before->vertices, op.vertices);
             for (size_t i = 0; i < triangles.size(); i += 3) {
                 size_t end = std::min(i + 3, triangles.size());
                 bool keep = false;
                 for (size_t j = i; j < end; j++) {
                     const Vec4 &a = before->vertices[j].position, &b = op.vertices[j].position;
-                    if (a[3] > 0 && b[3] > 0 && std::max(std::abs(a[0] / a[3] - b[0] / b[3]), std::abs(a[1] / a[3] - b[1] / b[3])) > limit) keep = true;
+                    if (a[3] * b[3] <= 0) keep = true;
+                    else if (a[3] > 0 && std::max(std::abs(a[0] / a[3] - b[0] / b[3]), std::abs(a[1] / a[3] - b[1] / b[3])) > limit) keep = true;
                 }
                 if (keep) continue;
                 for (size_t j = i; j < end; j++) {

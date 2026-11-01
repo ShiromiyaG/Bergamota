@@ -46,10 +46,15 @@ layout(push_constant) uniform Push {
     float jump;   // a vertex between that moved more than this (-1 to 1) stays where it is now
 } pc;
 
-// a vertex between two frames: where it was and is, mixed, unless it moved
-// far more than the rest of its draw did (between.cpp, jump_limit): not the
-// same point, as when a batch of NPCs' shadows comes in another order
+// a vertex between two frames: where it was and is, mixed, unless it
+// crossed the eye's plane (behind the camera in one, in front in the other:
+// mixed, its w passes through 0 and it lands at infinity, its triangles
+// stretched across the screen as the camera swings or a character comes
+// in), or moved far more than the rest of its draw did (between.cpp,
+// jump_limit: not the same point, as when a batch of NPCs' shadows comes in
+// another order)
 vec4 between_frames(vec4 earlier, vec4 now) {
+    if (earlier.w * now.w <= 0.0) return now;
     if (earlier.w > 0.0 && now.w > 0.0) {
         vec2 d = abs(earlier.xy / earlier.w - now.xy / now.w);
         if (max(d.x, d.y) > pc.jump) return now;
