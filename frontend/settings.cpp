@@ -77,6 +77,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "game", "user", s.game.user);
     get(t, "game", "decomp", s.game.decomp);
     get(t, "game", "layouts", s.game.layouts);
+    get(t, "game", "record", s.game.record);
     int64_t number;
     get(t, "video", "fullscreen", s.video.fullscreen);
     get(t, "video", "vsync", s.video.vsync);
@@ -119,7 +120,8 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                              {"update", s.game.update},
                              {"user", s.game.user},
                              {"decomp", s.game.decomp},
-                             {"layouts", s.game.layouts}}},
+                             {"layouts", s.game.layouts},
+                             {"record", s.game.record}}},
         {"video", toml::table{{"fullscreen", s.video.fullscreen},
                               {"vsync", s.video.vsync},
                               {"smooth", s.video.smooth},

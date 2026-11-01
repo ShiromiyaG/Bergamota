@@ -106,9 +106,14 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             }
             moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
             moved |= ImGui::Checkbox("No bloom ghosting (the trail behind what moves outside)", &s.video.no_ghosting);
-            int outlines = s.video.outlines == "thin" ? 1 : s.video.outlines == "none" ? 2 : 0;
-            if (ImGui::Combo("Outlines", &outlines, "As the game draws them\0Thin\0None\0")) {
-                s.video.outlines = outlines == 1 ? "thin" : outlines == 2 ? "none" : "original";
+            static const char *OUTLINES[] = {"auto", "original", "thin", "none"};
+            int outlines = 0;
+            for (int i = 0; i < 4; i++) {
+                if (s.video.outlines == OUTLINES[i]) outlines = i;
+            }
+            if (ImGui::Combo("Outlines", &outlines,
+                             "Auto (thin above the console's resolution)\0As the game draws them\0Thin\0None\0")) {
+                s.video.outlines = OUTLINES[outlines];
                 moved = true;
             }
             moved |= ImGui::SliderFloat("Sharpening", &s.video.sharpen, 0.0f, 1.0f, "%.2f");
@@ -144,6 +149,13 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 }
                 ImGui::EndTable();
             }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Testing")) {
+            // saved with the rest; the recording starts with the game
+            dirty_ |= ImGui::Checkbox("Record the input from the next start", &s.game.record);
+            ImGui::TextDisabled("With a copy of the saves as they were, into the recordings\n"
+                                "folder beside the settings, for boot to play back.");
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();

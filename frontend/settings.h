@@ -30,6 +30,9 @@ struct Settings {
     // the player
     struct {
         std::string exheader, code, library, game, update, user, decomp, layouts;
+        // the input recorded from the start, with a copy of the saves as they
+        // were, into recordings/ beside the settings (for boot to play back)
+        bool record = false;
     } game;
     struct {
         bool fullscreen = false;
@@ -58,9 +61,10 @@ struct Settings {
         std::string resolution = "native";
         bool antialias = false; // FXAA over the screens
         float sharpen = 0;      // 0-1
-        // the outlines around the characters: "original", "thin" (a pixel
+        // the outlines around the characters: "auto" (the game's at the
+        // console's resolution, thin above it), "original", "thin" (a pixel
         // at any resolution) or "none"
-        std::string outlines = "original";
+        std::string outlines = "auto";
     } video;
     struct {
         int volume = 100; // percent

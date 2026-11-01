@@ -301,6 +301,57 @@ Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *win
     return now;
 }
 
+// game.record (the launcher's "Record the input", or RUNTIME_RECORD=1): the
+// input as the game takes it, a line each time it changes, in the format of
+// Zakuro's recordings that boot plays back (RUNTIME_REPLAY): "clock <ms>",
+// then "<vertical blank> <buttons, hex> <circle x> <circle y> <touch x>
+// <touch y> 0 0 0 0" (-1 for no touch). Kept in recordings/<date>/ beside
+// the settings, input.rec with user/, the saves as they were at the start
+struct Recorder {
+    std::ofstream out;
+    bool started = false;
+    uint32_t buttons = ~0u;
+    float x = 2, y = 2;
+    int tx = -2, ty = -2;
+
+    // the saves copied, the file opened; false with why
+    bool start(const std::filesystem::path &settings_file, const std::string &user, uint64_t clock, std::string &error) {
+        namespace fs = std::filesystem;
+        char stamp[32];
+        std::time_t now = std::time(nullptr);
+        std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", std::localtime(&now));
+        fs::path folder = settings_file.parent_path() / "recordings" / stamp;
+        std::error_code ec;
+        fs::create_directories(folder, ec);
+        fs::copy(frontend::path_of(user), folder / "user", fs::copy_options::recursive, ec);
+        if (ec) {
+            error = "recording: the saves not copied: " + ec.message();
+            return false;
+        }
+        out.open(folder / "input.rec");
+        if (!out) {
+            error = "recording: " + frontend::utf8(folder / "input.rec") + " not made";
+            return false;
+        }
+        out << "clock " << clock << "\n";
+        out.flush();
+        std::fprintf(stderr, "recording into %s\n", frontend::utf8(folder).c_str());
+        started = true;
+        return true;
+    }
+
+    void take(uint64_t vblank, const Input &in) {
+        if (!started) return;
+        int nx = in.touch ? int(in.touch->first) : -1, ny = in.touch ? int(in.touch->second) : -1;
+        if (in.buttons == buttons && in.circle_x == x && in.circle_y == y && nx == tx && ny == ty) return;
+        buttons = in.buttons, x = in.circle_x, y = in.circle_y, tx = nx, ty = ny;
+        char line[128];
+        std::snprintf(line, sizeof line, "%llu %x %.4f %.4f %d %d 0.0 0.0 0.0 0.0\n", (unsigned long long)vblank, buttons, x, y, tx, ty);
+        out << line;
+        out.flush();
+    }
+};
+
 // RUNTIME_DUMP=folder: the first RUNTIME_DUMP_COUNT (600) top screens shown,
 // as <frame>-<part>-<game|between>.ppm, to look at what the player showed
 struct Dump {
@@ -414,7 +465,13 @@ int main(int argc, char **argv) {
         if (base) modules.insert(name);
         else modules.erase(name);
     };
-    if (!session.open({g.exheader, g.code, g.library, g.game, g.update, g.user, g.decomp}, Config{}, error, on_module)) return fail(error);
+    // recording: the saves copied before the game reads them
+    Recorder recorder;
+    const Config config{};
+    if ((g.record || SDL_getenv("RUNTIME_RECORD")) && !recorder.start(config_file, g.user, config.boot_clock_ms, error)) {
+        std::fprintf(stderr, "%s\n", error.c_str());
+    }
+    if (!session.open({g.exheader, g.code, g.library, g.game, g.update, g.user, g.decomp}, config, error, on_module)) return fail(error);
     // the scenes, from the port's file
     frontend::Scenes scenes;
     {
@@ -485,7 +542,6 @@ int main(int argc, char **argv) {
         SDL_SetWindowFullscreen(window, settings.video.fullscreen);
         both = settings.video.layout == "both";
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
-        vulkan.outlines = settings.video.outlines == "thin" ? 1 : settings.video.outlines == "none" ? 2 : 0;
         vulkan.between_still = settings.video.between_still;
     };
     apply();
@@ -515,6 +571,7 @@ int main(int argc, char **argv) {
                 std::lock_guard g(input_lock);
                 handlers.input = input;
             }
+            recorder.take(handlers.vblanks, handlers.input);
             if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
             if (no_ghosting_at) system.memory.write32(no_ghosting_at, no_ghosting.load());
             handlers.tick(system);
@@ -674,6 +731,13 @@ int main(int argc, char **argv) {
             scale_since = std::chrono::steady_clock::now();
         } else if (std::chrono::steady_clock::now() - scale_since > std::chrono::milliseconds(500)) {
             vulkan.scale = scale_wanted;
+        }
+        // the outlines: "auto" thin once drawn larger than the console's
+        // (the game's grow with the resolution, thick)
+        {
+            const std::string &o = settings.video.outlines;
+            const bool thin = o == "thin" || (o == "auto" && vulkan.scale.load() > 1.01f);
+            vulkan.outlines = o == "none" ? 2 : thin ? 1 : 0;
         }
         presenter.present(fresh ? &showing : nullptr, view,
                           [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });

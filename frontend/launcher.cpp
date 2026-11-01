@@ -112,6 +112,10 @@ bool launcher(SDL_Window *window, SDL_Renderer *renderer, Settings &s, const std
 
         ImGui::SeparatorText("Video");
         ImGui::Checkbox("Fullscreen", &s.video.fullscreen);
+
+        ImGui::SeparatorText("Testing");
+        ImGui::Checkbox("Record the input from the start (with a copy of the saves)", &s.game.record);
+        if (s.game.record) ImGui::TextDisabled("Into the recordings folder beside the settings, for boot to play back.");
         ImGui::TextDisabled("The rest (filter, layout, volume, controls) is in the overlay: F1 in the game.");
 
         ImGui::Separator();

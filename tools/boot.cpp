@@ -7,7 +7,9 @@
 // For comparing with Zakuro (tools/compare.py), on the virtual clock:
 //   RUNTIME_FRAMES=n        run n frames instead of seconds (seconds, when given, still
 //                           cap the run on the host's clock)
-//   RUNTIME_REPLAY=file     the input a Zakuro recording holds, frame by frame
+//   RUNTIME_REPLAY=file     the input a Zakuro recording holds, frame by frame, or a
+//                           player's recording folder (its input.rec; give a copy of
+//                           its user/ as the user folder)
 //   RUNTIME_SHOTS=folder    both screens every RUNTIME_SHOT_EVERY frames (100)
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
 //   RUNTIME_PORT=name=n,... words of the decomp's port_ variables set once it loads
@@ -130,7 +132,11 @@ int main(int argc, char **argv) {
     double seconds = argc > 4 ? std::atof(argv[4]) : 10;
     Replay replay;
     const char *replay_path = env("RUNTIME_REPLAY"), *shots_dir = env("RUNTIME_SHOTS");
-    if (replay_path && !replay.open(replay_path)) {
+    // a player's recording folder (game.record): its input.rec; its user/
+    // copied for the run is the user folder to give
+    std::string replay_file = replay_path ? replay_path : "";
+    if (replay_path && std::filesystem::is_directory(replay_path)) replay_file = (std::filesystem::path(replay_path) / "input.rec").string();
+    if (replay_path && !replay.open(replay_file.c_str())) {
         std::fprintf(stderr, "bad recording %s\n", replay_path);
         return 1;
     }
