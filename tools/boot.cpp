@@ -212,6 +212,8 @@ int main(int argc, char **argv) {
             // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's;
             // the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
+            // RUNTIME_SHADER_CACHE=folder: the translated vertex programs kept across runs
+            if (env("RUNTIME_SHADER_CACHE")) vulkan->cache_in(env("RUNTIME_SHADER_CACHE"));
         }
 #endif
         std::printf("drawing with the runtime's renderer\n");
@@ -387,7 +389,13 @@ int main(int argc, char **argv) {
         std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
                     (unsigned long long)vulkan->draws, (unsigned long long)vulkan->triangles, (unsigned long long)vulkan->uploads,
                     (unsigned long long)vulkan->write_backs, (unsigned long long)vulkan->submits);
-        std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s\n", vulkan->time_vertices, vulkan->time_render, vulkan->time_sync);
+        std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s; the host's GPU %.1f s\n", vulkan->time_vertices,
+                    vulkan->time_render, vulkan->time_sync, vulkan->gpu_seconds);
+        uint64_t compiled, loaded, failed;
+        vulkan->translation_counts(compiled, loaded, failed);
+        std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them\n",
+                    (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
+                    (unsigned long long)vulkan->translated_draws);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],
                     (unsigned long long)vulkan->write_back_causes[1], (unsigned long long)vulkan->write_back_causes[2],
                     (unsigned long long)vulkan->write_back_causes[3]);

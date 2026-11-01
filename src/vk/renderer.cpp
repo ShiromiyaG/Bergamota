@@ -25,6 +25,34 @@ VulkanRenderer::~VulkanRenderer() {
 
 bool VulkanRenderer::ready() const { return impl_->device != VK_NULL_HANDLE; }
 
+void VulkanRenderer::translation_counts(uint64_t &compiled, uint64_t &loaded, uint64_t &failed) const {
+    compiled = loaded = failed = 0;
+    if (!impl_->translator) return;
+    compiled = impl_->translator->compiled, loaded = impl_->translator->loaded, failed = impl_->translator->failed;
+}
+
+void VulkanRenderer::cache_in(const std::string &folder) {
+    if (!ready()) return;
+    Impl &d = *impl_;
+    d.cache_folder = std::filesystem::u8path(folder);
+    if (d.translator) d.translator->cache_in(d.cache_folder);
+    // the driver's pipelines from the last run, merged into the cache
+    if (FILE *f = _wfopen((d.cache_folder / "pipelines.bin").c_str(), L"rb")) {
+        std::vector<uint8_t> data;
+        uint8_t chunk[65536];
+        for (size_t n; (n = std::fread(chunk, 1, sizeof chunk, f)) > 0;) data.insert(data.end(), chunk, chunk + n);
+        std::fclose(f);
+        VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+        ci.initialDataSize = data.size();
+        ci.pInitialData = data.data();
+        VkPipelineCache old = VK_NULL_HANDLE;
+        if (vkCreatePipelineCache(d.device, &ci, nullptr, &old) == VK_SUCCESS) {
+            vkMergePipelineCaches(d.device, d.pipeline_cache, 1, &old);
+            vkDestroyPipelineCache(d.device, old, nullptr);
+        }
+    }
+}
+
 namespace {
 using clock = std::chrono::steady_clock;
 double since(clock::time_point t) { return std::chrono::duration<double>(clock::now() - t).count(); }

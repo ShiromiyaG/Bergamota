@@ -131,6 +131,22 @@ bool Impl::init() {
     cmd = slots[0].cmd;
     vertices = slots[0].vertices;
     uniforms = slots[0].uniforms;
+    {
+        // timestamps, where the queue keeps them
+        VkPhysicalDeviceProperties props;
+        vkGetPhysicalDeviceProperties(physical, &props);
+        uint32_t families = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
+        std::vector<VkQueueFamilyProperties> fams(families);
+        vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, fams.data());
+        if (props.limits.timestampPeriod > 0 && fams[family].timestampValidBits >= 32) {
+            VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+            qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            qi.queryCount = 4;
+            vkCreateQueryPool(device, &qi, nullptr, &timestamps);
+            timestamp_ns = props.limits.timestampPeriod;
+        }
+    }
 
     // the one layout: the state, the three textures, the lighting and
     // its tables; for the vertex shader on the GPU, the program, the
@@ -168,6 +184,8 @@ bool Impl::init() {
     smi.codeSize = sizeof VERT_GPU_SPV;
     smi.pCode = VERT_GPU_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &vert_gpu);
+    VkPipelineCacheCreateInfo pci_cache{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+    vkCreatePipelineCache(device, &pci_cache, nullptr, &pipeline_cache);
     smi.codeSize = sizeof FRAG_SPV;
     smi.pCode = FRAG_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &frag);
@@ -193,6 +211,11 @@ bool Impl::init() {
     VkSamplerCreateInfo nsi{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     vkCreateSampler(device, &nsi, nullptr, &nearest);
 
+    if (!std::getenv("RUNTIME_NO_TRANSLATE")) {
+        translator = std::make_unique<Translator>(device, [this](uint64_t key, bool has_depth, VkShaderModule vertex) {
+            return make_pipeline(key, has_depth, vertex);
+        });
+    }
     begin();
     blank = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false);
     uint8_t zero[4] = {};
@@ -317,6 +340,10 @@ void Impl::begin() {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
     recording = true;
+    if (timestamps) {
+        vkCmdResetQueryPool(cmd, timestamps, uint32_t(current * 2), 2);
+        vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT, timestamps, uint32_t(current * 2));
+    }
 }
 
 // everything waits for everything before: between passes, copies and
@@ -345,6 +372,14 @@ void Impl::retire(Slot &s) {
     if (!s.pending) return;
     vkWaitForFences(device, 1, &s.fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &s.fence);
+    if (timestamps) {
+        uint64_t ticks[2] = {};
+        uint32_t at = uint32_t(&s - slots) * 2;
+        if (vkGetQueryPoolResults(device, timestamps, at, 2, sizeof ticks, ticks, 8, VK_QUERY_RESULT_64_BIT) == VK_SUCCESS &&
+            ticks[1] > ticks[0]) {
+            self.gpu_seconds += double(ticks[1] - ticks[0]) * timestamp_ns * 1e-9;
+        }
+    }
     for (Buffer &b : s.staging) give_back(b);
     s.staging.clear();
     for (Image &i : s.dead) destroy(i);
@@ -357,6 +392,7 @@ void Impl::retire(Slot &s) {
 void Impl::submit(bool wait) {
     begin();
     end_rendering();
+    if (timestamps) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestamps, uint32_t(current * 2 + 1));
     vkEndCommandBuffer(cmd);
     Slot &s = slots[current];
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -396,6 +432,17 @@ VkDeviceSize Impl::take(Buffer &ring, VkDeviceSize &at, VkDeviceSize size, VkDev
 void Impl::shutdown() {
     if (!device) return;
     vkDeviceWaitIdle(device);
+    translator.reset();
+    if (pipeline_cache) {
+        // what the driver made of the pipelines, for the next run
+        size_t size = 0;
+        vkGetPipelineCacheData(device, pipeline_cache, &size, nullptr);
+        std::vector<uint8_t> data(size);
+        if (size && !cache_folder.empty() && vkGetPipelineCacheData(device, pipeline_cache, &size, data.data()) == VK_SUCCESS) {
+            if (FILE *f = _wfopen((cache_folder / "pipelines.bin").c_str(), L"wb")) std::fwrite(data.data(), 1, size, f), std::fclose(f);
+        }
+        vkDestroyPipelineCache(device, pipeline_cache, nullptr);
+    }
     for (auto &s : surfaces) destroy(s->image), destroy(s->as_color), destroy(s->between);
     for (Image &i : dead_held) destroy(i);
     for (Image &i : dead) destroy(i);
@@ -418,6 +465,7 @@ void Impl::shutdown() {
     }
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, vert_gpu, nullptr);
+    if (timestamps) vkDestroyQueryPool(device, timestamps, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
     vkDestroyShaderModule(device, depth_module, nullptr);
     vkDestroyPipeline(device, depth_pipeline, nullptr);

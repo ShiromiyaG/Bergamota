@@ -37,7 +37,7 @@ add_library(recomp_runtime STATIC
 )
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
 # shaders compiled to SPIR-V here, never while a game runs
-find_package(Vulkan COMPONENTS glslc)
+find_package(Vulkan COMPONENTS glslc shaderc_combined)
 option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${Vulkan_FOUND})
 if(RUNTIME_VULKAN)
     set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
@@ -49,16 +49,26 @@ if(RUNTIME_VULKAN)
             DEPENDS src/vk/${shader}
             VERBATIM)
     endforeach()
+    # the vertex shader's text as well: the frame each translated program
+    # goes in (src/vk/translate.cpp)
+    add_custom_command(
+        OUTPUT ${SHADER_OUT}/pica_gpu.vert.txt
+        COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica_gpu.vert -DOUT=${SHADER_OUT}/pica_gpu.vert.txt
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed.cmake
+        DEPENDS src/vk/pica_gpu.vert cmake/embed.cmake
+        VERBATIM)
     add_custom_command(
         OUTPUT ${SHADER_OUT}/depth.comp.inc
         COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/depth.comp.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/depth.comp
         DEPENDS src/vk/depth.comp
         VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
-        src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/pica/texture.cpp
-        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
+        src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/vk/translate.cpp src/pica/texture.cpp
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica_gpu.vert.txt ${SHADER_OUT}/pica.frag.inc
+        ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
-    target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
+    # the game's vertex programs compiled while it runs (shaderc, from the SDK, linked in)
+    target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan Vulkan::shaderc_combined)
     target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)
 endif()
 

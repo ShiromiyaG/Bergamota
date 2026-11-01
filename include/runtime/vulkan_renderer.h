@@ -31,6 +31,15 @@ public:
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
     // where the time went, in seconds: the vertex stage, recording draws, syncs
     double time_vertices = 0, time_render = 0, time_sync = 0;
+    // the host GPU's own time running what was sent, in seconds
+    double gpu_seconds = 0;
+    // draws with the game's vertex program translated, and the programs
+    // translated, taken from the cache, and failed
+    uint64_t translated_draws = 0;
+    void translation_counts(uint64_t &compiled, uint64_t &loaded, uint64_t &failed) const;
+    // the translated shaders and the driver's pipelines kept in folder
+    // across runs; before the game starts
+    void cache_in(const std::string &folder);
     // write-backs by cause: the CPU (guards), the front end, a fill, a texture
     uint64_t write_back_causes[4]{};
     // frames drawn between two of the game's, its logic untouched: each

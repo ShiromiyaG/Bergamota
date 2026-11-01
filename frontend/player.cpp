@@ -172,6 +172,8 @@ int main(int argc, char **argv) {
         return fail("the game needs Vulkan, which this computer's GPU or driver does not give (" + vulkan.error + ")");
     }
     pica_gpu.backend = &vulkan;
+    // the game's vertex programs as shaders, made once and kept beside the settings
+    vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
     // RUNTIME_SYNC_GPU=1 keeps it on the game's, to compare
     std::unique_ptr<AsyncGpu> async; // declared after what it drives: it goes first

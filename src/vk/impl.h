@@ -10,6 +10,7 @@
 #include "runtime/memory.h"
 #include "runtime/pica_lighting.h"
 #include "../pica/texture.h"
+#include "translate.h"
 #include "../pica/vertex.h"
 #include <vulkan/vulkan.h>
 #include <algorithm>
@@ -170,6 +171,10 @@ struct VulkanRenderer::Impl {
     VkPipeline depth_pipeline = VK_NULL_HANDLE;
     VkSampler nearest = VK_NULL_HANDLE;
     std::unordered_map<uint64_t, VkPipeline> pipelines;
+    VkPipelineCache pipeline_cache = VK_NULL_HANDLE; // kept on disk with the translated shaders
+    // the game's vertex programs as shaders of their own (translate.h);
+    // RUNTIME_NO_TRANSLATE=1 keeps the interpreter
+    std::unique_ptr<Translator> translator;
     std::unordered_map<uint32_t, VkSampler> samplers;
 
     Buffer vertices, uniforms;
@@ -200,6 +205,9 @@ struct VulkanRenderer::Impl {
     VkDeviceSize program_offset = 0;
     uint64_t program_serial = ~0ull, program_sent = 0;
     VkShaderModule vert_gpu = VK_NULL_HANDLE;
+    // the GPU's own time: a timestamp at each command buffer's start and end
+    VkQueryPool timestamps = VK_NULL_HANDLE;
+    double timestamp_ns = 0; // nanoseconds a tick
 
     // the fragment lighting: what was last decoded, and where in the
     // uniform ring it and the tables went, for the submission they went with
@@ -375,6 +383,7 @@ struct VulkanRenderer::Impl {
     // -- pipelines ---------------------------------------------------------------
 
     VkPipeline pipeline(uint64_t key, bool has_depth);
+    VkPipeline make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const;
 
     // -- drawing -----------------------------------------------------------------
 
@@ -384,6 +393,7 @@ struct VulkanRenderer::Impl {
     void guard(Surface &s);
 
     void shutdown();
+    std::filesystem::path cache_folder;
 };
 
 } // namespace runtime

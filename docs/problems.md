@@ -93,6 +93,28 @@ There is no jump test on that path (the positions are not on the CPU): a
 camera cut can show one frame halfway. Immediate-mode draws and the
 geometry stage stay on the CPU.
 
+Each vertex program translated to a shader of its own (2026-11-01,
+`src/vk/translate.cpp`): an interpreter on the GPU cost more of the GPU's
+time than the CPU's stage did. Each instruction is decoded once and
+written into GLSL with its operands, swizzles and mask; the flow keeps the
+interpreter's blocks, a switch on the program counter with a case only
+where the flow can land. shaderc (from the Vulkan SDK, linked in) compiles
+it on a few threads of their own, which make the pipelines too; until
+then the interpreter draws. The SPIR-V and the driver's pipeline cache are
+kept in a folder (the player's: `shaders` beside its settings; `boot`:
+`RUNTIME_SHADER_CACHE`), so a program is translated once. The host GPU's
+own time (timestamps, `gpu_seconds`) over 5000 frames walking in the field:
+
+| | without "60 FPS" | with |
+| --- | --- | --- |
+| vertex stage on the CPU | 6.2 s | 11.8 s |
+| interpreted on the GPU | 10.4 s | 29.5 s |
+| translated | 5.2 s | 13.5 s |
+
+With "60 FPS" the program runs twice a vertex. `boot`'s shots are the
+same as with the CPU's stage; no validation errors. With an empty cache,
+90% of the draws already use the translated shaders.
+
 Left: performance 3 (presenting through the renderer's own Vulkan device)
 (off the game's thread: a frame of latency and a little CPU on the main
 thread).

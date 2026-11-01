@@ -4,7 +4,8 @@
 // on the CPU, its outputs placed by the output map as vertex.cpp places
 // them. A frame drawn between the game's runs it twice, with the frame
 // before's inputs and uniforms and with this one's, and puts the vertex
-// between the two.
+// between the two. The same text is the frame of each program translated
+// to GLSL (translate.cpp): run() is swapped for the program's own.
 
 // the registers the stages read (see impl.h, State)
 layout(std140, set = 0, binding = 0) uniform State {
@@ -70,8 +71,17 @@ vec4 mul4(vec4 a, vec4 b) { return vec4(mul1(a.x, b.x), mul1(a.y, b.y), mul1(a.z
 
 vec4 o[16];
 vec4 temp[16];
+vec4 vin[16]; // the inputs, for a translated program
 ivec3 address; // a0.x, a0.y, aL
 bvec2 cond;
+uint pc_;
+
+// what a translated program calls
+vec4 uniform_i(int k) { return k >= 0 && k < 96 ? uniform_at(k) : vec4(0.0); }
+vec4 pmax(vec4 a, vec4 b) { return vec4(a.x > b.x ? a.x : b.x, a.y > b.y ? a.y : b.y, a.z > b.z ? a.z : b.z, a.w > b.w ? a.w : b.w); }
+vec4 pmin(vec4 a, vec4 b) { return vec4(a.x < b.x ? a.x : b.x, a.y < b.y ? a.y : b.y, a.z < b.z ? a.z : b.z, a.w < b.w ? a.w : b.w); }
+float dp3(vec4 a, vec4 b) { return mul1(a.x, b.x) + mul1(a.y, b.y) + mul1(a.z, b.z); }
+float dp4(vec4 a, vec4 b) { return dp3(a, b) + mul1(a.w, b.w); }
 
 vec4 read(uint reg, uint index, uint pattern, bool negate) {
     vec4 v = vec4(0.0);
@@ -130,26 +140,35 @@ void enter(uint start, uint count, uint back) {
     depth++;
 }
 
-void run() {
-    for (int r = 0; r < 16; r++) o[r] = vec4(0.0), temp[r] = vec4(0.0, 0.0, 0.0, 1.0);
+// the innermost block ended: a loop goes round again, the rest return
+void end_block() {
+    int top = depth - 1;
+    address.z += b_step[top];
+    if (b_repeat[top] == 0u) {
+        pc_ = b_back[top];
+        depth--;
+    } else {
+        b_repeat[top]--;
+        pc_ = b_start[top];
+    }
+}
+
+void begin_run() {
+    for (int r = 0; r < 16; r++) o[r] = vec4(0.0), temp[r] = vec4(0.0, 0.0, 0.0, 1.0), vin[r] = input_at(uint(r));
     address = ivec3(0);
     cond = bvec2(false);
     depth = 0;
+    pc_ = misc().y;
+}
+
+// -- run: the interpreter; a translated program's goes here instead
+
+void run() {
+    begin_run();
     uint bools = misc().x;
-    uint pc_ = misc().y;
     for (uint budget = 0u; budget < 0x10000u; budget++) {
         // blocks ending here: loops go round again, the rest return
-        while (depth > 0 && pc_ == b_end[depth - 1]) {
-            int top = depth - 1;
-            address.z += b_step[top];
-            if (b_repeat[top] == 0u) {
-                pc_ = b_back[top];
-                depth--;
-            } else {
-                b_repeat[top]--;
-                pc_ = b_start[top];
-            }
-        }
+        while (depth > 0 && pc_ == b_end[depth - 1]) end_block();
         if (pc_ >= 4096u) return;
         uint w = prog.code[pc_];
         uint raw = w >> 26;
@@ -272,6 +291,7 @@ void run() {
         pc_ = next;
     }
 }
+// -- end run
 
 // the outputs to the rasterizer's values: the enabled output registers in
 // order, each component named by the output map

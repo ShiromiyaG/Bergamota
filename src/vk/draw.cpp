@@ -9,9 +9,18 @@ using Impl = VulkanRenderer::Impl;
 VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
     auto it = pipelines.find(key);
     if (it != pipelines.end()) return it->second;
+    VkPipeline pipe = make_pipeline(key, has_depth, (key >> 41) & 1 ? vert_gpu : vert);
+    pipelines[key] = pipe;
+    return pipe;
+}
+
+// a pipeline with a vertex shader: the CPU's vertices as attributes, or none
+// for the GPU's shader (key bit 41). touches nothing of the renderer's, so
+// the translator's thread makes them too
+VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const {
     bool on_gpu = (key >> 41) & 1;
     VkPipelineShaderStageCreateInfo stages[2] = {
-        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, on_gpu ? vert_gpu : vert, "main", nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr},
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
     };
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
@@ -93,8 +102,7 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
     gi.pDynamicState = &dyn;
     gi.layout = layout;
     VkPipeline pipe = VK_NULL_HANDLE;
-    vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gi, nullptr, &pipe);
-    pipelines[key] = pipe;
+    vkCreateGraphicsPipelines(device, pipeline_cache, 1, &gi, nullptr, &pipe);
     return pipe;
 }
 
@@ -216,7 +224,13 @@ void Impl::render(Pica &p) {
     uint32_t color_mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
     uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
                    uint64_t(depth != nullptr) << 40 | uint64_t(on_gpu) << 41;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(key, depth != nullptr));
+    // the program's own shader once it is made, the interpreter until then
+    VkPipeline pipe = VK_NULL_HANDLE;
+    if (on_gpu && translator) {
+        pipe = translator->pipeline(gpu_draw->program, gpu_draw->program_hash, gpu_draw->unit.misc[1], key, depth != nullptr);
+    }
+    if (on_gpu && pipe) self.translated_draws++;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe ? pipe : pipeline(key, depth != nullptr));
 
     // the viewport, rows the PICA's way up
     float vw = f24(r[VIEWPORT_WIDTH]) * 2, vh = f24(r[VIEWPORT_HEIGHT]) * 2;
