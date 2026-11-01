@@ -359,8 +359,14 @@ void Impl::draw_between(float t) {
                 }
                 if (keep) continue;
                 for (size_t j = i; j < end; j++) {
-                    const Vec4 &a = before->vertices[j].position, &b = op.vertices[j].position;
-                    for (int k = 0; k < 4; k++) triangles[j].position[k] = a[k] + (b[k] - a[k]) * t;
+                    const Vertex &was = before->vertices[j], &now = op.vertices[j];
+                    for (int k = 0; k < 4; k++) triangles[j].position[k] = was.position[k] + (now.position[k] - was.position[k]) * t;
+                    // texture 0's coordinates with it (a shadow map drawn
+                    // between is looked up there; pica_gpu.vert, mix_between)
+                    if (std::abs(was.uv0[0] - now.uv0[0]) < 0.5f && std::abs(was.uv0[1] - now.uv0[1]) < 0.5f && was.w0 * now.w0 > 0) {
+                        for (int k = 0; k < 2; k++) triangles[j].uv0[k] = was.uv0[k] + (now.uv0[k] - was.uv0[k]) * t;
+                        triangles[j].w0 = was.w0 + (now.w0 - was.w0) * t;
+                    }
                 }
             }
         }

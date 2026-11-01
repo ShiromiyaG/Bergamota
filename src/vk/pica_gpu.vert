@@ -53,14 +53,16 @@ layout(push_constant) uniform Push {
 // in), or moved far more than the rest of its draw did (between.cpp,
 // jump_limit: not the same point, as when a batch of NPCs' shadows comes in
 // another order)
-vec4 between_frames(vec4 earlier, vec4 now) {
-    if (earlier.w * now.w <= 0.0) return now;
+float between_t(vec4 earlier, vec4 now) {
+    if (earlier.w * now.w <= 0.0) return 1.0;
     if (earlier.w > 0.0 && now.w > 0.0) {
         vec2 d = abs(earlier.xy / earlier.w - now.xy / now.w);
-        if (max(d.x, d.y) > pc.jump) return now;
+        if (max(d.x, d.y) > pc.jump) return 1.0;
     }
-    return mix(earlier, now, pc.t);
+    return pc.t;
 }
+
+
 
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec2 v_uv0;
@@ -343,23 +345,34 @@ void place() {
     }
 }
 
+// a vertex between two frames: its position, and texture 0's coordinates
+// with it (values 12, 13 and its w, 16), from the frame before's (was) at
+// t (between_t). A shadow map is drawn between too, where things are
+// halfway: looked up with this frame's coordinates, a character fell into
+// its own shadow, dark, for a frame. Coordinates that moved half a texture
+// or more scrolled round (water): those stay this frame's
+void mix_between(float was[24], float t) {
+    for (int k = 0; k < 4; k++) values[k] = mix(was[k], values[k], t);
+    vec3 a = vec3(was[12], was[13], was[16]), b = vec3(values[12], values[13], values[16]);
+    if (abs(a.x - b.x) < 0.5 && abs(a.y - b.y) < 0.5 && a.z * b.z > 0.0) {
+        values[12] = mix(a.x, b.x, t), values[13] = mix(a.y, b.y, t), values[16] = mix(a.z, b.z, t);
+    }
+}
+
 void main() {
-    vec4 earlier = vec4(0.0);
+    float was[24];
     uint vertex = uint(gl_VertexIndex) * 24u;
     if (pc.between == 2u) {
         // both frames' as their draws left them: nothing to run
         for (uint k = 0u; k < 24u; k++) values[k] = outputs.v[pc.now_out + vertex + k];
-        uint b = pc.before_out + vertex;
-        earlier = vec4(outputs.v[b], outputs.v[b + 1u], outputs.v[b + 2u], outputs.v[b + 3u]);
-        vec4 now = vec4(values[0], values[1], values[2], values[3]);
-        vec4 position = between_frames(earlier, now);
-        values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
+        for (uint k = 0u; k < 24u; k++) was[k] = outputs.v[pc.before_out + vertex + k];
+        mix_between(was, between_t(vec4(was[0], was[1], was[2], was[3]), vec4(values[0], values[1], values[2], values[3])));
     } else {
     if (pc.between != 0u) {
         from_before = true;
         run();
         place();
-        earlier = vec4(values[0], values[1], values[2], values[3]);
+        for (int k = 0; k < 24; k++) was[k] = values[k];
     }
     from_before = false;
     run();
@@ -367,10 +380,7 @@ void main() {
     if (pc.store != 0xFFFFFFFFu) {
         for (uint k = 0u; k < 24u; k++) outputs.v[pc.store + vertex + k] = values[k];
     }
-    if (pc.between != 0u) {
-        vec4 position = between_frames(earlier, vec4(values[0], values[1], values[2], values[3]));
-        values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
-    }
+    if (pc.between != 0u) mix_between(was, between_t(vec4(was[0], was[1], was[2], was[3]), vec4(values[0], values[1], values[2], values[3])));
     }
     vec4 position = vec4(values[0], values[1], values[2], values[3]);
 
