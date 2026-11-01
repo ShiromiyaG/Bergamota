@@ -38,6 +38,7 @@ struct Settings {
         bool between = false;    // a frame drawn between each two of the game's (30 Hz scenes shown at 60)
         // and as many more as the display's refresh rate shows (120, 144 Hz...)
         bool between_display = false;
+        bool between_still = false; // debugging: the frames between with no motion
         // both screens stacked, "top" alone, or "single": the top one with
         // the bottom one as a panel on a button
         std::string layout = "both";

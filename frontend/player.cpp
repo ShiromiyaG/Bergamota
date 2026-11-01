@@ -513,6 +513,7 @@ int main(int argc, char **argv) {
         both = settings.video.layout == "both";
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
         vulkan.outlines = settings.video.outlines == "thin" ? 1 : settings.video.outlines == "none" ? 2 : 0;
+        vulkan.between_still = settings.video.between_still;
     };
     apply();
     frontend::Overlay overlay;

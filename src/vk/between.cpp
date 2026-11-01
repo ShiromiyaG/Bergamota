@@ -477,7 +477,7 @@ void Impl::frame_end(uint32_t output) {
         bool kept = true;
         between_list ^= 1;
         for (int k = 1; k < pictures; k++) {
-            draw_between(float(k) / float(pictures));
+            draw_between(self.between_still.load() ? 1.0f : float(k) / float(pictures));
             kept = keep_between(output, k - 1) && kept;
         }
         between_ready = kept;

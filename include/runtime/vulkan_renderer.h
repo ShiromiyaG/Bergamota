@@ -72,6 +72,10 @@ public:
     // scene at 30 shown at 60), 2 (at 120, a scene at 60 too), up to 4. set
     // from any thread, taken at the next vertical blank
     std::atomic<int> between{0};
+    // debugging the frames between: drawn again as they are, every vertex
+    // where the game's own frame has it (no motion), to tell a glitch of the
+    // drawing again from one of the motion. set from any thread
+    std::atomic<bool> between_still{false};
     // the resolution: how many of the host's pixels each of the PICA's is,
     // each way (fractions too: 4.5 makes the top screen 1080 rows tall). its
     // buffers are drawn that large; memory keeps them as the console does.
