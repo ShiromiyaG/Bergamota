@@ -177,6 +177,7 @@ Surface *Impl::surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format
             let_go(s.image);
             if (s.as_color.image) let_go(s.as_color);
             if (s.between.image) let_go(s.between);
+            if (s.start.image) let_go(s.start);
         }
         surfaces.erase(surfaces.begin() + i);
     }
@@ -204,6 +205,8 @@ void Impl::rescale(float to) {
     for (auto &s : surfaces) {
         if (s->as_color.image) let_go(s->as_color), s->as_color = {}, s->converted = ~0ull;
         if (s->between.image) let_go(s->between), s->between = {};
+        if (s->start.image) let_go(s->start), s->start = {};
+        s->start_ops = ~0ull;
         Image fresh = image(scaled(s->width), scaled(s->height), s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
         if (s->depth && !depth_blits) {
             if (s->dirty) write_back(*s);
