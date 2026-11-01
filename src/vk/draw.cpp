@@ -455,7 +455,7 @@ void Impl::render(Pica &p) {
         if (shadow) shadow_write(writes[11]);
         push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 11 + shadow, writes);
         VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u,
-                        0, 0, store, gpu_jump, uint32_t(gpu_before && projected_lookup(r.data()))};
+                        0, 0, store, gpu_jump};
         if (from_outputs) {
             push.between = 2;
             push.now_out = gpu_draw->outputs;
