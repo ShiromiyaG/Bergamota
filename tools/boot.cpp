@@ -37,7 +37,8 @@
 //                           picks it, from RUNTIME_LAYOUTS=file, a port's
 //                           single-screen.toml); RUNTIME_PANEL=1 the panel out,
 //                           RUNTIME_PANEL_SIZE=n (0.35), RUNTIME_PANEL_CORNER=c
-//                           (bottom-right). Scene changes printed as the player does
+//                           (bottom-right), RUNTIME_SWAP=1 the screens swapped (L2).
+//                           Scene changes printed as the player does
 
 #include "runtime/decomp.h"
 #include "runtime/fs.h"
@@ -272,6 +273,7 @@ int main(int argc, char **argv) {
         frontend::place(view, layout, env("RUNTIME_PANEL") ? 1.0f : 0.0f,
                         env("RUNTIME_PANEL_SIZE") ? float(std::atof(env("RUNTIME_PANEL_SIZE"))) : 0.35f,
                         env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right");
+        if (env("RUNTIME_SWAP")) frontend::swap_screens(view);
         save(name, frontend::compose(view, top, bottom));
     };
 #else

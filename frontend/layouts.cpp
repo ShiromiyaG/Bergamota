@@ -52,6 +52,19 @@ void place(VulkanPresenter::View &view, const std::string &layout, float shown, 
     else place_single(view, layout == "top" ? 0.0f : shown, size, corner);
 }
 
+void swap_screens(VulkanPresenter::View &view) {
+    VulkanPresenter::place_screens(view);
+    const float widths[2] = {view.top, 320};
+    for (Placement &p : view.placements) {
+        const float scale = widths[p.screen ? 0 : 1] / widths[p.screen ? 1 : 0];
+        const float w = p.to[2] - p.to[0], grown = w * scale, middle = (p.to[0] + p.to[2]) / 2;
+        if (w >= view.canvas[0] * 0.9f || std::abs(middle - view.canvas[0] / 2) < 1) p.to[0] = middle - grown / 2;
+        else if (middle > view.canvas[0] / 2) p.to[0] = p.to[2] - grown;
+        p.to[2] = p.to[0] + grown;
+        p.screen ^= 1;
+    }
+}
+
 void in_window(VulkanPresenter::View &view) {
     VulkanPresenter::place_screens(view);
     float scale, x0, y0;

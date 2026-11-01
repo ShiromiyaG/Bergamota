@@ -30,6 +30,12 @@ void place_stacked(runtime::VulkanPresenter::View &view);
 // much as shown)
 void place(runtime::VulkanPresenter::View &view, const std::string &layout, float shown, float size, const std::string &corner);
 
+// the screens swapped (the player's L2): each placement shows the other
+// screen, as tall as it was and as wide as that screen's shape asks, kept
+// at its side of the canvas (a corner's panel) or centered (one as wide as
+// the canvas, the bars at its sides)
+void swap_screens(runtime::VulkanPresenter::View &view);
+
 // the placements in the window's own pixels (the canvas fitted), so two
 // layouts with canvases of their own can be mixed
 void in_window(runtime::VulkanPresenter::View &view);

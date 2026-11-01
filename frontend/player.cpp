@@ -239,7 +239,7 @@ void feed_sound(SDL_AudioStream *sound, std::vector<int16_t> &out, std::atomic<u
 
 // the right stick as a pointer on the bottom screen, for the single screen
 // (no touch screen): the stick moves it (slowly near the middle, a screen's
-// width a second at the edge), its click (R3) held touches there. Drawn
+// width a second at the edge), its click (R3) or R2 held touches there. Drawn
 // while it moves or touches, gone three seconds after
 struct Pointer {
     float x = 160, y = 120;
@@ -248,7 +248,9 @@ struct Pointer {
 
     void update(SDL_Gamepad *pad, float seconds) {
         moved = false;
-        touching = pad && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        // R3 or R2 (the right trigger, half pressed)
+        touching = pad && (SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK) ||
+                           SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000);
         if (pad) {
             float sx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0f;
             float sy = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f;
@@ -597,6 +599,9 @@ int main(int argc, char **argv) {
     auto shown_at = std::chrono::steady_clock::now();
     Pointer pointer;
     auto pointer_at = std::chrono::steady_clock::now();
+    // L2 (the left trigger) swaps the screens, the bottom one where the top
+    // one was and the other way round; pressed again, back
+    bool swapped = false, l2_held = false;
     while (!quit) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -631,6 +636,10 @@ int main(int argc, char **argv) {
             pointer_at = at;
             // pointing wants the bottom screen: the panel comes out
             if (pointer.moved && settings.video.layout == "single") panel_wanted = true;
+            // half pressed swaps, let go below a quarter before the next
+            const int l2 = gamepad && !overlay.open ? SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) : 0;
+            if (!l2_held && l2 > 16000) swapped = !swapped, l2_held = true;
+            else if (l2 < 8000) l2_held = false;
         }
         // none while the overlay is open
         Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer);
@@ -720,9 +729,11 @@ int main(int argc, char **argv) {
             }
             frontend::place(view, layout, panel, settings.video.panel_size, settings.video.panel_corner);
         }
-        // in the window's pixels, eased from the layout before
+        if (swapped) frontend::swap_screens(view);
+        // in the window's pixels, eased from the layout before (a swap too:
+        // each screen moves to the other's place)
         frontend::in_window(view);
-        transition.apply(view, layout);
+        transition.apply(view, swapped ? layout + " swapped" : layout);
         shown_view = view;
         // the resolution, once it held a moment (a window being resized
         // would make the buffers again at every step)
