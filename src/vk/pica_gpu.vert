@@ -43,8 +43,19 @@ layout(push_constant) uniform Push {
     uint between; // 1: run the frame before's too; 2: take both from outputs
     uint now_out, before_out; // where in outputs (a draw between), in floats
     uint store;   // where this draw's go, or ~0 for nowhere
-    uint unused;
+    float jump;   // a vertex between that moved more than this (-1 to 1) stays where it is now
 } pc;
+
+// a vertex between two frames: where it was and is, mixed, unless it moved
+// far more than the rest of its draw did (between.cpp, jump_limit): not the
+// same point, as when a batch of NPCs' shadows comes in another order
+vec4 between_frames(vec4 earlier, vec4 now) {
+    if (earlier.w > 0.0 && now.w > 0.0) {
+        vec2 d = abs(earlier.xy / earlier.w - now.xy / now.w);
+        if (max(d.x, d.y) > pc.jump) return now;
+    }
+    return mix(earlier, now, pc.t);
+}
 
 layout(location = 0) out vec4 v_color;
 layout(location = 1) out vec2 v_uv0;
@@ -336,7 +347,7 @@ void main() {
         uint b = pc.before_out + vertex;
         earlier = vec4(outputs.v[b], outputs.v[b + 1u], outputs.v[b + 2u], outputs.v[b + 3u]);
         vec4 now = vec4(values[0], values[1], values[2], values[3]);
-        vec4 position = mix(earlier, now, pc.t);
+        vec4 position = between_frames(earlier, now);
         values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
     } else {
     if (pc.between != 0u) {
@@ -352,7 +363,7 @@ void main() {
         for (uint k = 0u; k < 24u; k++) outputs.v[pc.store + vertex + k] = values[k];
     }
     if (pc.between != 0u) {
-        vec4 position = mix(earlier, vec4(values[0], values[1], values[2], values[3]), pc.t);
+        vec4 position = between_frames(earlier, vec4(values[0], values[1], values[2], values[3]));
         values[0] = position.x, values[1] = position.y, values[2] = position.z, values[3] = position.w;
     }
     }

@@ -48,7 +48,8 @@ struct VertexPush {
     uint32_t stride, before_stride;
     float t;
     uint32_t between;
-    uint32_t now_out, before_out, store, unused;
+    uint32_t now_out, before_out, store;
+    float jump; // a vertex that moved more (on the screen, -1 to 1) stays where it is now
 };
 // a draw for the GPU's vertex shader: its inputs, triangles as indices,
 // uniforms and program
@@ -236,7 +237,7 @@ struct VulkanRenderer::Impl {
     VertexStage::Gathered gathered;
     GpuDraw live;
     const GpuDraw *gpu_draw = nullptr, *gpu_before = nullptr;
-    float gpu_t = 1;
+    float gpu_t = 1, gpu_jump = 1e9f;
     std::shared_ptr<const ProgramBlock> program_now;
     uint64_t program_version = ~0ull, program_hash = 0;
     VkDeviceSize program_offset = 0;
@@ -377,6 +378,7 @@ struct VulkanRenderer::Impl {
 
     static float distance(const Op &before, const Op &now);
     static float extent(const std::vector<Vertex> &vertices);
+    static float jump_limit(const std::vector<Vertex> &before, const std::vector<Vertex> &now);
 
     void draw_between(float t);
 

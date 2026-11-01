@@ -150,6 +150,23 @@ float Impl::extent(const std::vector<Vertex> &vertices) {
     return std::max(x1 - x0, y1 - y0);
 }
 
+// how far one vertex of a pair may move before it is not the same point:
+// eight times what the draw's vertices moved as a rule (the median, those in
+// front of the eye), an eighth of the screen at least. One far past the
+// rest is another thing's (a batch reordered); parallax and a swinging arm
+// stay well within it
+float Impl::jump_limit(const std::vector<Vertex> &before, const std::vector<Vertex> &now) {
+    std::vector<float> moves;
+    for (size_t i = 0; i < now.size() && i < before.size(); i++) {
+        const Vec4 &a = before[i].position, &b = now[i].position;
+        if (a[3] <= 0 || b[3] <= 0) continue;
+        moves.push_back(std::max(std::abs(a[0] / a[3] - b[0] / b[3]), std::abs(a[1] / a[3] - b[1] / b[3])));
+    }
+    if (moves.empty()) return 1e9f;
+    std::nth_element(moves.begin(), moves.begin() + moves.size() / 2, moves.end());
+    return std::max(moves[moves.size() / 2] * 8, 0.25f);
+}
+
 // how far a draw moved from one of the frame before, as moved has it:
 // one shaded on the GPU by a few of its vertices run here (jumps' samples)
 float Impl::distance(const Op &before, const Op &now) {
@@ -315,14 +332,29 @@ void Impl::draw_between(float t) {
         if (last != draws_before.end()) before = match(last->second, matched[op_target(op)], op);
         triangles = op.vertices;
         if (op.gpu) {
-            // the GPU's shader runs both and puts each vertex between
+            // the GPU's shader runs both and puts each vertex between, those
+            // past the limit its few vertices run here give left where they are
             gpu_draw = op.gpu.get();
             gpu_before = before && !jumps(*before, op) ? before->gpu.get() : nullptr;
             gpu_t = t;
+            gpu_jump = gpu_before && !gpu_before->samples.empty() && !op.gpu->samples.empty()
+                           ? jump_limit(gpu_before->samples, op.gpu->samples) : 1e9f;
         } else if (before && !jumps(*before, op)) {
-            for (size_t i = 0; i < triangles.size(); i++) {
-                const Vec4 &a = before->vertices[i].position, &b = op.vertices[i].position;
-                for (int k = 0; k < 4; k++) triangles[i].position[k] = a[k] + (b[k] - a[k]) * t;
+            // a triangle with a vertex far past the rest's moves (another
+            // thing's, a batch reordered) is left where it is, whole
+            const float limit = jump_limit(before->vertices, op.vertices);
+            for (size_t i = 0; i < triangles.size(); i += 3) {
+                size_t end = std::min(i + 3, triangles.size());
+                bool keep = false;
+                for (size_t j = i; j < end; j++) {
+                    const Vec4 &a = before->vertices[j].position, &b = op.vertices[j].position;
+                    if (a[3] > 0 && b[3] > 0 && std::max(std::abs(a[0] / a[3] - b[0] / b[3]), std::abs(a[1] / a[3] - b[1] / b[3])) > limit) keep = true;
+                }
+                if (keep) continue;
+                for (size_t j = i; j < end; j++) {
+                    const Vec4 &a = before->vertices[j].position, &b = op.vertices[j].position;
+                    for (int k = 0; k < 4; k++) triangles[j].position[k] = a[k] + (b[k] - a[k]) * t;
+                }
             }
         }
         std::copy(op.regs.begin(), op.regs.end(), p.regs.begin());
@@ -344,7 +376,7 @@ void Impl::draw_between(float t) {
         forced_views = views;
         render(p);
         gpu_draw = gpu_before = nullptr;
-        gpu_t = 1;
+        gpu_t = 1, gpu_jump = 1e9f;
     }
     end_rendering();
     forced_views = nullptr;
