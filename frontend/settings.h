@@ -35,6 +35,9 @@ struct Settings {
         bool smooth = true;      // the screens scaled up smoothly, or in sharp pixels
         bool between = false;    // a frame drawn between each two of the game's (30 Hz scenes shown at 60)
         std::string layout = "both"; // both screens stacked, or "top" alone
+        // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
+        // game framing a wider scene when its port has a widescreen override
+        std::string aspect = "original";
     } video;
     struct {
         int volume = 100; // percent
@@ -44,6 +47,7 @@ struct Settings {
     // button name)
     std::map<std::string, std::string> keys, pad;
     bool stats = false; // the overlay's corner with the frame times
+
 
     Settings(); // the default bindings
 

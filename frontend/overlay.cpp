@@ -74,6 +74,11 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 s.video.layout = layout ? "top" : "both";
                 moved = true;
             }
+            int aspect = s.video.aspect == "16:9" ? 1 : s.video.aspect == "21:9" ? 2 : 0;
+            if (ImGui::Combo("Top screen", &aspect, "Original (5:3)\0Widescreen (16:9)\0Ultrawide (21:9)\0")) {
+                s.video.aspect = aspect == 1 ? "16:9" : aspect == 2 ? "21:9" : "original";
+                moved = true;
+            }
             moved |= ImGui::Checkbox("Frame times in the corner", &s.stats);
             ImGui::EndTabItem();
         }

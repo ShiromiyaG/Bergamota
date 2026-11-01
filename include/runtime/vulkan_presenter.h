@@ -33,10 +33,12 @@ public:
         bool both = true;               // the bottom screen under the top one
         bool smooth = false;            // filtered, else nearest
         bool vsync = true;
+        float top = 400; // the top screen's width shown, at its height of 240 (wider for widescreen)
     };
-    // the screens' area in a window of width x height (anything): the scale
-    // and where it starts, for the mouse
-    static void letterbox(float width, float height, bool both, float &scale, float &x, float &y);
+    // the screens' area in a window of width x height (anything), the top
+    // screen top wide: the scale and where it starts, for the mouse; the
+    // bottom screen centered under the top one
+    static void letterbox(float width, float height, bool both, float top, float &scale, float &x, float &y);
 
     // shows frame (null: the last one again) in the window, then overlay
     // records onto it (inside its rendering)

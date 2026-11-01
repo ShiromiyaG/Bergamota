@@ -82,6 +82,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "smooth", s.video.smooth);
     get(t, "video", "between", s.video.between);
     get(t, "video", "layout", s.video.layout);
+    get(t, "video", "aspect", s.video.aspect);
     number = s.audio.volume;
     get(t, "audio", "volume", number);
     s.audio.volume = int(std::clamp<int64_t>(number, 0, 100));
@@ -108,7 +109,8 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"vsync", s.video.vsync},
                               {"smooth", s.video.smooth},
                               {"between", s.video.between},
-                              {"layout", s.video.layout}}},
+                              {"layout", s.video.layout},
+                              {"aspect", s.video.aspect}}},
         {"audio", toml::table{{"volume", s.audio.volume}, {"mute", s.audio.mute}}},
         {"keyboard", keys},
         {"gamepad", pad},

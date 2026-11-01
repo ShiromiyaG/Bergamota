@@ -195,8 +195,8 @@ void VulkanPresenter::idle() {
     vkQueueWaitIdle(renderer_.impl_->queue);
 }
 
-void VulkanPresenter::letterbox(float width, float height, bool both, float &scale, float &x, float &y) {
-    float w = 400, h = both ? 480.0f : 240.0f;
+void VulkanPresenter::letterbox(float width, float height, bool both, float top, float &scale, float &x, float &y) {
+    float w = top, h = both ? 480.0f : 240.0f;
     scale = std::min(width / w, height / h);
     x = (width - w * scale) / 2;
     y = (height - h * scale) / 2;
@@ -327,11 +327,11 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
     if (shown) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
         float scale, x0, y0;
-        letterbox(float(extent_.width), float(extent_.height), view.both, scale, x0, y0);
+        letterbox(float(extent_.width), float(extent_.height), view.both, view.top, scale, x0, y0);
         for (int s = 0; s < (view.both ? 2 : 1); s++) {
             const Image &image = d.sets[last_.set].screens[s];
             if (!image.view) continue;
-            float lx = s ? 40.0f : 0.0f, ly = s ? 240.0f : 0.0f, lw = s ? 320.0f : 400.0f;
+            float lx = s ? (view.top - 320.0f) / 2 : 0.0f, ly = s ? 240.0f : 0.0f, lw = s ? 320.0f : view.top;
             float px0 = x0 + lx * scale, py0 = y0 + ly * scale, px1 = px0 + lw * scale, py1 = py0 + 240.0f * scale;
             ScreenPush push{{px0 / extent_.width * 2 - 1, py0 / extent_.height * 2 - 1, px1 / extent_.width * 2 - 1,
                              py1 / extent_.height * 2 - 1},

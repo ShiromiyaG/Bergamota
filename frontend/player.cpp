@@ -52,7 +52,24 @@
 using namespace runtime;
 using frontend::Settings;
 
+// the top screen's shape for a port's widescreen override, which finds it by
+// name (Solstice's overrides/widescreen.c): width over height, 0 for the
+// 3DS's own
+extern "C" {
+#ifdef _WIN32
+__declspec(dllexport)
+#else
+__attribute__((visibility("default")))
+#endif
+volatile float runtime_top_aspect = 0;
+}
+
 namespace {
+
+// the top screen's width shown, at its height of 240
+float top_width(const Settings &s) {
+    return s.video.aspect == "16:9" ? 240.0f * 16 / 9 : s.video.aspect == "21:9" ? 240.0f * 21 / 9 : 400.0f;
+}
 
 std::vector<uint8_t> read_file(const std::string &path) {
     std::ifstream in(frontend::path_of(path), std::ios::binary);
@@ -280,6 +297,7 @@ int main(int argc, char **argv) {
     frontend::Stats stats, counting;
     bool told[5]{};
     double busy_before = 0, idle_before = 0, host_gpu_before = 0;
+    uint64_t pictures_before = 0;
     std::deque<Frame> waiting;
     Frame showing;
     while (!quit) {
@@ -321,11 +339,11 @@ int main(int argc, char **argv) {
             SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
             int ww = 0, wh = 0;
             SDL_GetWindowSize(window, &ww, &wh);
-            float scale = 1, x0 = 0, y0 = 0;
-            VulkanPresenter::letterbox(float(ww), float(wh), both, scale, x0, y0);
-            mx = (mx - x0) / scale, my = (my - y0) / scale;
-            if (both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 40 && mx < 360) {
-                now.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
+            float scale = 1, x0 = 0, y0 = 0, top = top_width(settings);
+            VulkanPresenter::letterbox(float(ww), float(wh), both, top, scale, x0, y0);
+            mx = (mx - x0) / scale - (top - 320) / 2, my = (my - y0) / scale;
+            if (both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 0 && mx < 320) {
+                now.touch = std::make_pair(uint16_t(mx), uint16_t(my - 240));
             }
         }
         {
@@ -372,6 +390,8 @@ int main(int argc, char **argv) {
         view.width = uint32_t(pw), view.height = uint32_t(ph);
         view.both = both;
         view.smooth = settings.video.smooth;
+        view.top = top_width(settings);
+        runtime_top_aspect = view.top > 400 ? view.top / 240 : 0;
         view.vsync = settings.video.vsync;
         presenter.present(fresh ? &showing : nullptr, view,
                           [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });
@@ -402,9 +422,11 @@ int main(int argc, char **argv) {
                 if (print_stats) std::printf("the renderer lacks %s (frame %llu)\n", LACKING[i], (unsigned long long)showing.number);
             }
             if (print_stats) {
-                std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms\n", stats.shown,
-                            stats.worst_ms, stats.gpu_ms, stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000);
+                std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms\n",
+                            stats.shown, (unsigned long long)(handlers.pictures - pictures_before), stats.worst_ms, stats.gpu_ms,
+                            stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000);
                 host_gpu_before = vulkan.gpu_seconds;
+                pictures_before = handlers.pictures;
                 std::fflush(stdout);
             }
             counting = {};
