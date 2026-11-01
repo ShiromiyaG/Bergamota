@@ -91,6 +91,9 @@ struct State {
     uint32_t regs[64];
     float depth[4];
 };
+// a register no game's GPU uses: what a draw is, as a port's override tags
+// it (between.cpp, match)
+constexpr uint32_t DRAW_TAG = 0x00F;
 constexpr uint32_t STATE_REGS[] = {
     0x0C0, 0x0C1, 0x0C2, 0x0C3, 0x0C4, 0x0C8, 0x0C9, 0x0CA, 0x0CB, 0x0CC, 0x0D0, 0x0D1, 0x0D2, 0x0D3, 0x0D4,
     0x0D8, 0x0D9, 0x0DA, 0x0DB, 0x0DC, 0x0F0, 0x0F1, 0x0F2, 0x0F3, 0x0F4, 0x0F8, 0x0F9, 0x0FA, 0x0FB, 0x0FC,
@@ -353,10 +356,15 @@ struct VulkanRenderer::Impl {
     // the same part each; else, near its place in the order, the first that
     // moved little. paired by order alone, one piece added or gone shifted
     // the rest onto their neighbors and opened cracks between them
+    // a port can tell: a game's draws tagged with what they are, in a PICA
+    // register nothing uses (Solstice's overrides/draw_tags.c, a model's
+    // mesh), pair with the draw of the same tag
     struct Matching {
         size_t from = 0;
         std::vector<bool> used;
+        uint64_t tagged = 0, disagreed = 0; // draws tagged, and where the guess was another
     };
+    static int guess(const std::vector<Op> &list, const Matching &m, const Op &op);
     static const Op *match(const std::vector<Op> &list, Matching &m, const Op &op);
 
     static float moved(const std::vector<Vertex> &before, const std::vector<Vertex> &now);

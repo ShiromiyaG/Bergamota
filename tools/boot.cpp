@@ -372,6 +372,8 @@ int main(int argc, char **argv) {
                     (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
                     (unsigned long long)vulkan->stats.translated_draws, (unsigned long long)vulkan->stats.reused_draws);
         std::printf("fragment shaders: %llu draws with one made for their state\n", (unsigned long long)vulkan->stats.specialized_draws);
+        std::printf("draws between paired by their tag: %llu, the guess another in %llu\n", (unsigned long long)vulkan->stats.tagged_draws,
+                    (unsigned long long)vulkan->stats.tags_disagreed);
         std::printf("draws the renderer lacks: gas %llu, geometry shader modes %llu\n",
                     (unsigned long long)vulkan->stats.lacking[0], (unsigned long long)vulkan->stats.lacking[1]);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->stats.write_back_causes[0],

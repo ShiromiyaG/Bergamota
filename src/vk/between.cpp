@@ -48,8 +48,19 @@ void Impl::note_draw(Pica &p, const VkImageView *views) {
 
 uint32_t Impl::op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
-const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &op) {
-    if (m.used.size() != list.size()) m.used.assign(list.size(), false);
+// a draw of the frame before the same as op could be: shaded on the GPU,
+// the same inputs and program; on the CPU, as many vertices; and the same
+// look either way
+static bool alike(const Impl::Op &before, const Impl::Op &op) {
+    if (before.look != op.look) return false;
+    if (op.gpu) {
+        return before.gpu && before.gpu->input_hash == op.gpu->input_hash && before.gpu->program_hash == op.gpu->program_hash;
+    }
+    return !before.gpu && before.vertices.size() == op.vertices.size();
+}
+
+// the guess from the draws alone (match): its index in list, or -1
+int Impl::guess(const std::vector<Op> &list, const Matching &m, const Op &op) {
     if (op.gpu) {
         // shaded on the GPU: the one with the same inputs and program whose
         // uniforms differ the least (quads alike in all but where they go)
@@ -57,25 +68,19 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
         float least = 0;
         for (size_t i = 0; i < list.size(); i++) {
             const Op &before = list[i];
-            if (m.used[i] || !before.gpu || before.look != op.look || before.gpu->input_hash != op.gpu->input_hash ||
-                before.gpu->program_hash != op.gpu->program_hash) {
-                continue;
-            }
+            if (m.used[i] || !alike(before, op)) continue;
             float d = 0;
             const float *a = &before.gpu->unit.f[0][0], *b = &op.gpu->unit.f[0][0];
             for (int k = 0; k < 96 * 4; k++) d += std::abs(a[k] - b[k]);
             if (best < 0 || d < least) best = int(i), least = d;
         }
-        if (best < 0) return nullptr;
-        m.used[best] = true;
-        m.from = size_t(best) + 1;
-        return &list[best];
+        return best;
     }
     int same = -1;
     float least = 0.5f; // past it, a jump
     for (size_t i = 0; i < list.size(); i++) {
         const Op &before = list[i];
-        if (m.used[i] || before.uvs != op.uvs || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
+        if (m.used[i] || before.uvs != op.uvs || !alike(before, op)) continue;
         if (float d = moved(before.vertices, op.vertices); d < least) least = d, same = int(i);
     }
     int best = same;
@@ -85,13 +90,31 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
         int in_order = -1;
         for (size_t i = start; i < end; i++) {
             const Op &before = list[i];
-            if (m.used[i] || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
+            if (m.used[i] || !alike(before, op)) continue;
             float d = moved(before.vertices, op.vertices);
             if (d >= 0.25f) continue;
             if (in_order < 0 && i >= m.from) in_order = int(i);
             if (d < nearest) nearest = d, best = int(i);
         }
         if (in_order >= 0) best = in_order;
+    }
+    return best;
+}
+
+const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &op) {
+    if (m.used.size() != list.size()) m.used.assign(list.size(), false);
+    int best = guess(list, m, op);
+    // a draw the game tagged with its model's mesh (DRAW_TAG): the next of
+    // that mesh's draws the frame before, the guess counted against it; a
+    // mesh not drawn before has none
+    if (uint32_t tag = op.regs[DRAW_TAG]) {
+        int tagged = -1;
+        for (size_t i = 0; i < list.size() && tagged < 0; i++) {
+            if (!m.used[i] && list[i].regs[DRAW_TAG] == tag && alike(list[i], op)) tagged = int(i);
+        }
+        m.tagged++;
+        if (tagged != best) m.disagreed++;
+        best = tagged;
     }
     if (best < 0) return nullptr;
     m.used[best] = true;
@@ -278,6 +301,7 @@ void Impl::draw_between(float t) {
     end_rendering();
     forced_views = nullptr;
     replaying = false;
+    for (auto &[target, m] : matched) self.stats.tagged_draws += m.tagged, self.stats.tags_disagreed += m.disagreed;
     p.regs = regs;
     p.light_tables = tables;
     p.tables_version = tables_version;
