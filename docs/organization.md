@@ -111,6 +111,10 @@ apart, so scheduling does not scan every thread.
 
 ## 8. The repository
 
+Done (2026-11-01): `boot`'s shots go to `build/shots/`, `*.ppm` was already
+ignored, the files are LF in the repository (`.gitattributes` says so),
+`CLAUDE.md` knows the GPU's thread.
+
 - `shot-*.ppm` in the root: `boot` writes into the current folder by
   default. Default to `build/shots/`, and ignore `*.ppm`.
 - Line endings: `fs.h` and `fs.cpp` are LF where the rest is CRLF; a

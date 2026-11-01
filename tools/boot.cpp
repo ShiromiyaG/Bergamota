@@ -41,6 +41,7 @@
 #include <functional>
 #include <memory>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <algorithm>
@@ -280,12 +281,14 @@ int main(int argc, char **argv) {
         }
         handlers.tick(system);
         take_frames();
-        // both screens to a picture every five seconds
+        // both screens to a picture every five seconds, in build/shots
         if (now > next_shot) {
             next_shot = now + std::chrono::seconds(5);
+            std::error_code ec;
+            std::filesystem::create_directories("build/shots", ec);
             for (uint32_t screen = 0; screen < 2; screen++) {
                 char name[64];
-                std::snprintf(name, sizeof name, "shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
+                std::snprintf(name, sizeof name, "build/shots/shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
                 save(name, latest.number ? latest.screens[screen] : screen_now(screen));
             }
             shots++;
