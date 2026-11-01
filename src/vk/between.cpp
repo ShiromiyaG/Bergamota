@@ -134,6 +134,22 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
     return &list[best];
 }
 
+// how large a draw is on the screen, in halves of it as moved counts: the
+// larger side of what its vertices in front of the eye cover, 2 when none
+float Impl::extent(const std::vector<Vertex> &vertices) {
+    float far = 0;
+    for (const Vertex &v : vertices) far = std::max(far, v.position[3]);
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (const Vertex &v : vertices) {
+        const Vec4 &p = v.position;
+        if (p[3] <= far * 0.05f) continue;
+        float x = p[0] / p[3], y = p[1] / p[3];
+        x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+    }
+    if (x1 < x0) return 2;
+    return std::max(x1 - x0, y1 - y0);
+}
+
 // how far a draw moved from one of the frame before, as moved has it:
 // one shaded on the GPU by a few of its vertices run here (jumps' samples)
 float Impl::distance(const Op &before, const Op &now) {
@@ -228,14 +244,22 @@ std::vector<Vertex> Impl::sample_positions(const GpuDraw &d) {
 // a pair that jumps (more than a quarter of the screen) is not the same
 // thing moving (a camera cut): drawn where it is now. one shaded on the
 // GPU tells it from a few vertices run here, when its uniforms changed
+// a small thing that moved more than its own size is another one (NPCs'
+// shadows, alike quads: one gone and one come paired, drawn halfway, would
+// flash up between them): past the larger of its size and a fortieth of the
+// screen, up to the quarter that tells a cut
+static float jump_past(const std::vector<Vertex> &now) {
+    return std::clamp(Impl::extent(now), 0.05f, 0.5f);
+}
+
 bool Impl::jumps(const Op &before, const Op &now) {
-    if (!now.gpu) return moved(before.vertices, now.vertices) > 0.5f;
+    if (!now.gpu) return moved(before.vertices, now.vertices) > jump_past(now.vertices);
     if (!before.gpu || std::memcmp(&before.gpu->unit, &now.gpu->unit, sizeof(UnitBlock)) == 0) return false;
     // each once: this frame's are the next one's frame before
     for (GpuDraw *d : {before.gpu.get(), now.gpu.get()}) {
         if (d->samples.empty()) d->samples = sample_positions(*d);
     }
-    return moved(before.gpu->samples, now.gpu->samples) > 0.5f;
+    return moved(before.gpu->samples, now.gpu->samples) > jump_past(now.gpu->samples);
 }
 
 // the game frame just drawn, drawn again at t (0 the frame before, 1

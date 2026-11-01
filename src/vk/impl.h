@@ -376,6 +376,7 @@ struct VulkanRenderer::Impl {
     static bool jumps(const Op &before, const Op &now);
 
     static float distance(const Op &before, const Op &now);
+    static float extent(const std::vector<Vertex> &vertices);
 
     void draw_between(float t);
 
