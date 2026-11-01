@@ -16,6 +16,8 @@
 //                           "60 FPS" in the player, 2 as 120 Hz (shots <frame>-<part>-shown)
 //   RUNTIME_SCALE=n         the buffers drawn n times as large each way (2.25: 1080p)
 //   RUNTIME_RESCALE=f:n     and changed to n at frame f, as the player may
+//   RUNTIME_CPU_PICTURES=0  no pictures read back, as the player draws (to time it; no shots)
+//   RUNTIME_GENERIC_FRAG=1  the one fragment shader for every state, none made for a shape
 //   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
 //                           it was found in most, sampled every millisecond
 //   RUNTIME_SAMPLE_FROM=s   sampled from s seconds in (on the host's clock)
@@ -166,6 +168,8 @@ int main(int argc, char **argv) {
             // RUNTIME_BETWEEN=n: frames drawn between the game's, n pictures
             // a blank; the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
+            // RUNTIME_CPU_PICTURES=0: no pictures read back (the player's way, to time it; no shots)
+            if (env("RUNTIME_CPU_PICTURES") && *env("RUNTIME_CPU_PICTURES") == '0') vulkan->cpu_pictures = false;
             // RUNTIME_SCALE=n: the buffers drawn n times as large each way (the shots stay the console's size)
             if (env("RUNTIME_SCALE")) vulkan->scale = float(std::atof(env("RUNTIME_SCALE")));
             // RUNTIME_SHADER_CACHE=folder: the translated vertex programs kept across runs
@@ -367,6 +371,7 @@ int main(int argc, char **argv) {
         std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them, %llu between reused\n",
                     (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
                     (unsigned long long)vulkan->stats.translated_draws, (unsigned long long)vulkan->stats.reused_draws);
+        std::printf("fragment shaders: %llu draws with one made for their state\n", (unsigned long long)vulkan->stats.specialized_draws);
         std::printf("draws the renderer lacks: gas %llu, geometry shader modes %llu\n",
                     (unsigned long long)vulkan->stats.lacking[0], (unsigned long long)vulkan->stats.lacking[1]);
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->stats.write_back_causes[0],

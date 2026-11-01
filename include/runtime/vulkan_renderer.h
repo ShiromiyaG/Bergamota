@@ -50,6 +50,8 @@ public:
         uint64_t translated_draws = 0;
         // draws between taken from the outputs the game's draws kept
         uint64_t reused_draws = 0;
+        // draws with a fragment shader made for their state's shape
+        uint64_t specialized_draws = 0;
         // draws asking for what the renderer does not do: gas (Azahar has
         // none either), a geometry shader mode past the three there are
         uint64_t lacking[2]{};

@@ -14,16 +14,21 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
     return pipe;
 }
 
-// a pipeline with a vertex shader: the CPU's vertices as attributes, or none
-// for the GPU's shader (key bit 41). touches nothing of the renderer's, so
-// the translator's thread makes them too
-VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const {
+// a pipeline with a vertex shader (null: the renderer's): the CPU's vertices
+// as attributes, or none for the GPU's shader (key bit 41); with a shape, a
+// fragment shader made for it. touches nothing of the renderer's, so the
+// translator's threads make them too
+VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex, const uint32_t *shape) const {
     bool on_gpu = (key >> 41) & 1, w_buffer = (key >> 42) & 1, shadow = (key >> 43) & 1;
+    if (!vertex) vertex = on_gpu ? vert_gpu : vert;
+    VkSpecializationMapEntry entries[SHAPE_SIZE];
+    for (uint32_t i = 0; i < SHAPE_SIZE; i++) entries[i] = {i, i * 4, 4};
+    VkSpecializationInfo special{uint32_t(SHAPE_SIZE), entries, SHAPE_SIZE * 4, shape};
     VkPipelineShaderStageCreateInfo stages[2] = {
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr},
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
          shadow ? frag_shadow : w_buffer ? frag_wbuffer : frag,
-         "main", nullptr},
+         "main", shape ? &special : nullptr},
     };
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription attributes[8] = {
@@ -106,6 +111,32 @@ VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vert
     VkPipeline pipe = VK_NULL_HANDLE;
     vkCreateGraphicsPipelines(device, pipeline_cache, 1, &gi, nullptr, &pipe);
     return pipe;
+}
+
+// pica.frag's constants, from the state as it reads it (st, by the slots
+// STATE_REGS puts them in) and the lighting: only the bits it reads, none of
+// the lighting's when it is off, so alike draws share one
+Shape Impl::shape_of(const State &st, const pica::LightingBlock &lit) {
+    Shape v{};
+    v[0] = 1;
+    for (int i = 0; i < 6; i++) {
+        v[1 + i] = st.regs[i * 5];
+        v[7 + i] = st.regs[i * 5 + 1];
+        v[13 + i] = st.regs[i * 5 + 2];
+        v[19 + i] = st.regs[i * 5 + 4];
+    }
+    v[25] = st.regs[30];          // the buffer's updates, the fog
+    v[26] = st.regs[32] & 0x71;   // the alpha test on and its function
+    v[27] = st.regs[33] & 0x2707; // the units on, the procedural one's coordinates, unit 2's
+    for (int u = 0; u < 3; u++) v[28 + u] = st.regs[34 + u] & 0x70003300; // the type, the border modes
+    v[31] = st.regs[33] & (1u << 10) ? st.regs[41] : 0;
+    if (lit.head[1]) {
+        for (int k = 0; k < 4; k++) v[32 + k] = lit.head[k], v[36 + k] = lit.flags[k];
+        for (int k = 0; k < 7; k++) {
+            v[40 + k] = uint32_t(lit.lookups[k][0] != 0) | std::min(lit.lookups[k][1], 7u) << 1 | uint32_t(lit.lookups[k][2] != 0) << 4;
+        }
+    }
+    return v;
 }
 
 void Impl::render(Pica &p) {
@@ -295,6 +326,16 @@ void Impl::render(Pica &p) {
         pipe = translator->pipeline(gpu_draw->program, gpu_draw->program_hash, gpu_draw->unit.misc[1], key, depth != nullptr);
     }
     if (on_gpu && pipe) self.stats.translated_draws++;
+    // and a fragment shader made for the state's shape, once it is made
+    if (translator && specialize && (!on_gpu || pipe)) {
+        const Shape shape = shape_of(st, lit);
+        const uint64_t shape_hash = hash_bytes(reinterpret_cast<const uint8_t *>(shape.data()), sizeof shape) | 1;
+        uint64_t shader = on_gpu ? Translator::shader_key(gpu_draw->program_hash, gpu_draw->unit.misc[1]) : 0;
+        if (VkPipeline special = translator->specialized(shader, key, depth != nullptr, shape, shape_hash)) {
+            pipe = special;
+            self.stats.specialized_draws++;
+        }
+    }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe ? pipe : pipeline(key, depth != nullptr));
 
     // the viewport, rows the PICA's way up

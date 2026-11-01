@@ -494,7 +494,12 @@ struct VulkanRenderer::Impl {
     // -- pipelines ---------------------------------------------------------------
 
     VkPipeline pipeline(uint64_t key, bool has_depth);
-    VkPipeline make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const;
+    VkPipeline make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex, const uint32_t *shape = nullptr) const;
+    // the shape of a draw's state for the fragment shader (pica.frag): a
+    // pipeline made for it leaves out what it does not use (RUNTIME_GENERIC_FRAG=1:
+    // the one shader for all, to compare)
+    static Shape shape_of(const State &st, const pica::LightingBlock &lit);
+    const bool specialize = std::getenv("RUNTIME_GENERIC_FRAG") == nullptr;
 
     // -- drawing -----------------------------------------------------------------
 

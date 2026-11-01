@@ -43,6 +43,15 @@ data either way, their vertex shaders and combiners come from the models.
   is data the fragment shader reads, not code generated per state. Zakuro
   generates and compiles shaders per state, which is where its hitches come
   from.
+  Since 2026-11-01 the same shader is also specialized: a draw's shape (the
+  stages' sources, operands and operations, the alpha test's function, the
+  textures' types, the lighting's switches and table reads; `shape_of` in
+  `draw.cpp`) goes into specialization constants, and the translator's
+  threads make that pipeline in the background while the generic one draws,
+  so there is no hitch. At 1080p with three pictures a blank (180 Hz) it cut
+  the host GPU's time on the `boot` replay from 20.6 s to 3.7 s, pictures
+  identical; `RUNTIME_GENERIC_FRAG=1` turns it off. The driver's pipeline
+  cache keeps them across runs.
 - **Vertex shaders on the CPU first.** The PICA vertex shader is interpreted
   on the host CPU (a frame of USUM is tens of thousands of vertices, a few
   milliseconds). Moving it to the GPU (a vertex-shader interpreter reading the

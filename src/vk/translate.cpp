@@ -262,20 +262,30 @@ void Translator::cache_in(const std::filesystem::path &folder) {
 
 VkPipeline Translator::pipeline(const std::shared_ptr<const ProgramBlock> &program, uint64_t program_hash, uint32_t entry,
                                 uint64_t key, bool has_depth) {
-    uint64_t shader_key = program_hash ^ (uint64_t(entry) + 1) * 0x9E3779B97F4A7C15ull;
+    uint64_t shader_key = Translator::shader_key(program_hash, entry);
     std::lock_guard g(lock_);
     auto it = shaders_.find(shader_key);
     if (it == shaders_.end()) {
         shaders_[shader_key];
-        queue_.push_back({program, shader_key, entry, 0, false});
+        queue_.push_back({program, shader_key, entry, 0, false, {}, 0});
         wake_.notify_one();
         return VK_NULL_HANDLE;
     }
     if (!it->second.done || it->second.failed) return VK_NULL_HANDLE;
-    auto pipe = pipelines_.find({shader_key, key});
+    auto pipe = pipelines_.find({shader_key, key, 0});
     if (pipe != pipelines_.end()) return pipe->second;
-    pipelines_[{shader_key, key}] = VK_NULL_HANDLE;
-    queue_.push_back({nullptr, shader_key, entry, key, has_depth});
+    pipelines_[{shader_key, key, 0}] = VK_NULL_HANDLE;
+    queue_.push_back({nullptr, shader_key, entry, key, has_depth, {}, 0});
+    wake_.notify_one();
+    return VK_NULL_HANDLE;
+}
+
+VkPipeline Translator::specialized(uint64_t shader_key, uint64_t key, bool has_depth, const Shape &shape, uint64_t shape_hash) {
+    std::lock_guard g(lock_);
+    auto pipe = pipelines_.find({shader_key, key, shape_hash});
+    if (pipe != pipelines_.end()) return pipe->second;
+    pipelines_[{shader_key, key, shape_hash}] = VK_NULL_HANDLE;
+    later_.push_back({nullptr, shader_key, 0, key, has_depth, shape, shape_hash});
     wake_.notify_one();
     return VK_NULL_HANDLE;
 }
@@ -290,10 +300,11 @@ void Translator::run() {
         Work work;
         {
             std::unique_lock g(lock_);
-            wake_.wait(g, [this] { return stop_ || !queue_.empty(); });
+            wake_.wait(g, [this] { return stop_ || !queue_.empty() || !later_.empty(); });
             if (stop_) break;
-            work = std::move(queue_.front());
-            queue_.pop_front();
+            auto &from = queue_.empty() ? later_ : queue_;
+            work = std::move(from.front());
+            from.pop_front();
         }
         if (work.program) {
             // made before, in another run
@@ -363,15 +374,15 @@ void Translator::run() {
             (ok ? compiled : failed)++;
             continue;
         }
-        VkShaderModule module;
-        {
+        VkShaderModule module = VK_NULL_HANDLE;
+        if (work.shader_key) {
             std::lock_guard g(lock_);
             module = shaders_[work.shader_key].module;
         }
-        VkPipeline pipe = make_(work.key, work.has_depth, module);
-        if (!pipe) std::fprintf(stderr, "a translated program's pipeline was not made\n");
+        VkPipeline pipe = make_(work.key, work.has_depth, module, work.shape_hash ? work.shape.data() : nullptr);
+        if (!pipe) std::fprintf(stderr, "a pipeline was not made\n");
         std::lock_guard g(lock_);
-        pipelines_[{work.shader_key, work.key}] = pipe;
+        pipelines_[{work.shader_key, work.key, work.shape_hash}] = pipe;
         pipelines_made++;
     }
     shaderc_compile_options_release(options);

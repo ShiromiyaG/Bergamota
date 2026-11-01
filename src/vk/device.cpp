@@ -280,8 +280,8 @@ bool Impl::init() {
     vkCreateSampler(device, &nsi, nullptr, &nearest);
 
     if (!std::getenv("RUNTIME_NO_TRANSLATE")) {
-        translator = std::make_unique<Translator>(device, [this](uint64_t key, bool has_depth, VkShaderModule vertex) {
-            return make_pipeline(key, has_depth, vertex);
+        translator = std::make_unique<Translator>(device, [this](uint64_t key, bool has_depth, VkShaderModule vertex, const uint32_t *shape) {
+            return make_pipeline(key, has_depth, vertex, shape);
         });
     }
     begin();

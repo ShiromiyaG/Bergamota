@@ -2,7 +2,9 @@
 // The PICA's fragment stage as one shader: it reads the registers as the
 // game wrote them and works the combiners (TEV) out from them, so no state
 // needs a shader of its own; the fragment lighting from a block the CPU
-// decoded (pica_lighting.h) and its tables. After Zakuro's tev.rs and
+// decoded (pica_lighting.h) and its tables. A pipeline made for a state's
+// shape (draw.cpp, shape_of) has it in the constants below instead, and the
+// driver leaves out all the shape does not use. After Zakuro's tev.rs and
 // lighting.rs (Rust, MIT, Copyright (c) 2026 fearkov; see LICENSE-zakuro).
 
 layout(location = 0) in vec4 v_color;
@@ -43,6 +45,89 @@ layout(std140, set = 0, binding = 2) uniform Lighting {
 } l;
 // the 24 tables, each entry a value and the step to the next
 layout(std430, set = 0, binding = 3) readonly buffer Tables { vec2 entries[]; } t;
+
+// the shape of the state, in a pipeline made for it (draw.cpp, shape_of):
+// each stage's sources, operands, operations and scales, the combiner
+// buffer's updates and the fog, the alpha test's function, the textures'
+// configuration and parameters, the procedural texture's, the lighting's
+// head and switches and each table read's on, input and absolute
+layout(constant_id = 0) const bool SPECIALIZED = false;
+layout(constant_id = 1) const uint K1 = 0u;
+layout(constant_id = 2) const uint K2 = 0u;
+layout(constant_id = 3) const uint K3 = 0u;
+layout(constant_id = 4) const uint K4 = 0u;
+layout(constant_id = 5) const uint K5 = 0u;
+layout(constant_id = 6) const uint K6 = 0u;
+layout(constant_id = 7) const uint K7 = 0u;
+layout(constant_id = 8) const uint K8 = 0u;
+layout(constant_id = 9) const uint K9 = 0u;
+layout(constant_id = 10) const uint K10 = 0u;
+layout(constant_id = 11) const uint K11 = 0u;
+layout(constant_id = 12) const uint K12 = 0u;
+layout(constant_id = 13) const uint K13 = 0u;
+layout(constant_id = 14) const uint K14 = 0u;
+layout(constant_id = 15) const uint K15 = 0u;
+layout(constant_id = 16) const uint K16 = 0u;
+layout(constant_id = 17) const uint K17 = 0u;
+layout(constant_id = 18) const uint K18 = 0u;
+layout(constant_id = 19) const uint K19 = 0u;
+layout(constant_id = 20) const uint K20 = 0u;
+layout(constant_id = 21) const uint K21 = 0u;
+layout(constant_id = 22) const uint K22 = 0u;
+layout(constant_id = 23) const uint K23 = 0u;
+layout(constant_id = 24) const uint K24 = 0u;
+layout(constant_id = 25) const uint K25 = 0u;
+layout(constant_id = 26) const uint K26 = 0u;
+layout(constant_id = 27) const uint K27 = 0u;
+layout(constant_id = 28) const uint K28 = 0u;
+layout(constant_id = 29) const uint K29 = 0u;
+layout(constant_id = 30) const uint K30 = 0u;
+layout(constant_id = 31) const uint K31 = 0u;
+layout(constant_id = 32) const uint K32 = 0u;
+layout(constant_id = 33) const uint K33 = 0u;
+layout(constant_id = 34) const uint K34 = 0u;
+layout(constant_id = 35) const uint K35 = 0u;
+layout(constant_id = 36) const uint K36 = 0u;
+layout(constant_id = 37) const uint K37 = 0u;
+layout(constant_id = 38) const uint K38 = 0u;
+layout(constant_id = 39) const uint K39 = 0u;
+layout(constant_id = 40) const uint K40 = 0u;
+layout(constant_id = 41) const uint K41 = 0u;
+layout(constant_id = 42) const uint K42 = 0u;
+layout(constant_id = 43) const uint K43 = 0u;
+layout(constant_id = 44) const uint K44 = 0u;
+layout(constant_id = 45) const uint K45 = 0u;
+layout(constant_id = 46) const uint K46 = 0u;
+
+uint shape_sources(int i) { switch (i) { case 0: return K1; case 1: return K2; case 2: return K3; case 3: return K4; case 4: return K5; default: return K6; } }
+uint shape_operands(int i) { switch (i) { case 0: return K7; case 1: return K8; case 2: return K9; case 3: return K10; case 4: return K11; default: return K12; } }
+uint shape_operations(int i) { switch (i) { case 0: return K13; case 1: return K14; case 2: return K15; case 3: return K16; case 4: return K17; default: return K18; } }
+uint shape_scales(int i) { switch (i) { case 0: return K19; case 1: return K20; case 2: return K21; case 3: return K22; case 4: return K23; default: return K24; } }
+uint shape_params(int i) { switch (i) { case 0: return K28; case 1: return K29; default: return K30; } }
+uint shape_head(int i) { switch (i) { case 0: return K32; case 1: return K33; case 2: return K34; default: return K35; } }
+uint shape_switches(int i) { switch (i) { case 0: return K36; case 1: return K37; case 2: return K38; default: return K39; } }
+uint shape_lookups(int i) { switch (i) { case 0: return K40; case 1: return K41; case 2: return K42; case 3: return K43; case 4: return K44; case 5: return K45; default: return K46; } }
+
+// the registers, by the slots renderer.cpp puts them in
+uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
+const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
+          FOG_COLOR = 40, PROCTEX = 41, TEX_SHADOW = 47, SHADOW_OUTPUT = 48; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
+
+// what the shape fixes, from the constants or the blocks
+uint stage_reg(int stage, int k) {
+    if (SPECIALIZED) return k == 0 ? shape_sources(stage) : k == 1 ? shape_operands(stage) : k == 2 ? shape_operations(stage) : shape_scales(stage);
+    return reg(TEV + stage * 5 + k);
+}
+uint tev_update() { return SPECIALIZED ? K25 : reg(TEV_UPDATE); }
+uint alpha_test() { return SPECIALIZED ? (K26 & 0x71u) | (reg(ALPHA_TEST) & 0xFF00u) : reg(ALPHA_TEST); } // the reference as it is
+uint tex_config() { return SPECIALIZED ? K27 : reg(TEX_CONFIG); }
+uint tex_params(int unit) { return SPECIALIZED ? shape_params(unit) : reg(TEX_PARAMS + unit); }
+uint proctex_config() { return SPECIALIZED ? K31 : reg(PROCTEX); }
+uint light_head(int k) { return SPECIALIZED ? shape_head(k) : l.head[k]; }
+uint light_switch(int k) { return SPECIALIZED ? shape_switches(k) : l.switches[k]; }
+bool lookup_on(int slot) { return SPECIALIZED ? (shape_lookups(slot) & 1u) != 0u : l.lookups[slot].x != 0u; }
+uint lookup_input(int slot) { return SPECIALIZED ? (shape_lookups(slot) >> 1) & 7u : l.lookups[slot].y; }
+bool lookup_absolute(int slot) { return SPECIALIZED ? (shape_lookups(slot) & 16u) != 0u : l.lookups[slot].z != 0u; }
 const int D0 = 0, D1 = 1, FRESNEL = 3, REFLECT_BLUE = 4, REFLECT_GREEN = 5, REFLECT_RED = 6, SPOTLIGHT = 8, DISTANCE = 16;
 const int LOOKUP_D0 = 0, LOOKUP_D1 = 1, LOOKUP_FRESNEL = 2, LOOKUP_RED = 3, LOOKUP_GREEN = 4, LOOKUP_BLUE = 5, LOOKUP_SPOT = 6;
 
@@ -60,10 +145,9 @@ vec3 rotate(vec4 q, vec3 v) {
 // a table read: the dot product its input names, as an index, absolute or
 // signed (wrapping into the upper half), scaled
 float lookup(int slot, int which, float result, bool two_sided) {
-    uvec4 k = l.lookups[slot];
     uint entry;
     float delta;
-    if (k.z != 0u) {
+    if (lookup_absolute(slot)) {
         result = two_sided ? abs(result) : max(result, 0.0);
         float e = clamp(floor(result * 256.0), 0.0, 255.0);
         entry = uint(e);
@@ -73,15 +157,15 @@ float lookup(int slot, int which, float result, bool two_sided) {
         entry = uint(int(e)) & 0xFFu;
         delta = result * 128.0 - e;
     }
-    return uintBitsToFloat(k.w) * table(which, entry, delta);
+    return uintBitsToFloat(l.lookups[slot].w) * table(which, entry, delta);
 }
 
 vec4 quantize(vec4 c) { return floor(clamp(c, 0.0, 1.0) * 255.0) / 255.0; }
 
 // the primary (diffuse) and secondary (specular) fragment colors
 void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
-    uint config = l.head.x, count = l.head.y, bump = l.head.z, shadow_cfg = l.head.w;
-    bool needs_half = (l.switches.w & 1u) != 0u, needs_view = (l.switches.w & 2u) != 0u;
+    uint config = light_head(0), count = light_head(1), bump = light_head(2), shadow_cfg = light_head(3);
+    bool needs_half = (light_switch(3) & 1u) != 0u, needs_view = (light_switch(3) & 2u) != 0u;
     float length2 = dot(v_quaternion, v_quaternion);
     vec4 q = length2 > 0.0 ? v_quaternion * inversesqrt(length2) : vec4(0.0, 0.0, 0.0, 1.0);
 
@@ -129,28 +213,28 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
         inputs[3] = dot(light_vector, normal);
         inputs[4] = dot(light_vector, li.spot.xyz);
         inputs[5] = config == 8u ? dot(half_unit - normal * dot(normal, half_unit), tangent) : 0.0;
-        #define VALUE(slot, which) lookup(slot, which, l.lookups[slot].y < 6u ? inputs[l.lookups[slot].y] : 0.0, two_sided)
+        #define VALUE(slot, which) lookup(slot, which, lookup_input(slot) < 6u ? inputs[lookup_input(slot)] : 0.0, two_sided)
 
         float spot = (flags & 32u) != 0u ? VALUE(LOOKUP_SPOT, SPOTLIGHT + int(number)) : 1.0;
-        float d0 = l.lookups[LOOKUP_D0].x != 0u ? VALUE(LOOKUP_D0, D0) : 1.0;
-        float red = l.lookups[LOOKUP_RED].x != 0u ? VALUE(LOOKUP_RED, REFLECT_RED) : 1.0;
-        vec3 reflect_rgb = vec3(red, l.lookups[LOOKUP_GREEN].x != 0u ? VALUE(LOOKUP_GREEN, REFLECT_GREEN) : red,
-                                l.lookups[LOOKUP_BLUE].x != 0u ? VALUE(LOOKUP_BLUE, REFLECT_BLUE) : red);
-        float d1 = l.lookups[LOOKUP_D1].x != 0u ? VALUE(LOOKUP_D1, D1) : 1.0;
+        float d0 = lookup_on(LOOKUP_D0) ? VALUE(LOOKUP_D0, D0) : 1.0;
+        float red = lookup_on(LOOKUP_RED) ? VALUE(LOOKUP_RED, REFLECT_RED) : 1.0;
+        vec3 reflect_rgb = vec3(red, lookup_on(LOOKUP_GREEN) ? VALUE(LOOKUP_GREEN, REFLECT_GREEN) : red,
+                                lookup_on(LOOKUP_BLUE) ? VALUE(LOOKUP_BLUE, REFLECT_BLUE) : red);
+        float d1 = lookup_on(LOOKUP_D1) ? VALUE(LOOKUP_D1, D1) : 1.0;
         vec3 specular0 = li.specular0.rgb * d0;
         vec3 specular1 = d1 * reflect_rgb * li.specular1.rgb;
 
         // only the last light applies fresnel
-        if (i == count - 1u && l.lookups[LOOKUP_FRESNEL].x != 0u) {
+        if (i == count - 1u && lookup_on(LOOKUP_FRESNEL)) {
             float fresnel = VALUE(LOOKUP_FRESNEL, FRESNEL);
-            if (l.switches.x != 0u) diffuse_sum.a = fresnel;
-            if (l.switches.y != 0u) specular_sum.a = fresnel;
+            if (light_switch(0) != 0u) diffuse_sum.a = fresnel;
+            if (light_switch(1) != 0u) specular_sum.a = fresnel;
         }
         #undef VALUE
 
         float facing = dot(light_vector, normal);
         facing = two_sided ? abs(facing) : max(facing, 0.0);
-        float highlights = l.switches.z != 0u && facing == 0.0 ? 0.0 : 1.0;
+        float highlights = light_switch(2) != 0u && facing == 0.0 ? 0.0 : 1.0;
         if ((flags & 12u) != 0u) {
             float len = dot(half_v, half_v);
             float factor = len == 0.0 ? 0.0 : min(facing / len, 1.0);
@@ -167,8 +251,8 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
         specular_sum.rgb += specular * shadow_secondary;
     }
     if (shadowing && (shadow_cfg & 0x800u) != 0u) {
-        if (l.switches.x != 0u) diffuse_sum.a *= shadow.a;
-        if (l.switches.y != 0u) specular_sum.a *= shadow.a;
+        if (light_switch(0) != 0u) diffuse_sum.a *= shadow.a;
+        if (light_switch(1) != 0u) specular_sum.a *= shadow.a;
     }
     diffuse_sum.rgb += l.global_ambient.rgb;
     // the unit hands the combiners 8-bit colors
@@ -176,10 +260,6 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
     secondary = quantize(specular_sum);
 }
 
-// the registers, by the slots renderer.cpp puts them in
-uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
-const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, PROCTEX = 41, TEX_SHADOW = 47, SHADOW_OUTPUT = 48; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
 // where the tables are in t.entries, after lighting's 24 of 256
 const int FOG_TABLE = 24 * 256, PROCTEX_MAPS = FOG_TABLE + 128, PROCTEX_COLORS = PROCTEX_MAPS + 3 * 128,
           PROCTEX_STEPS = PROCTEX_COLORS + 2 * 256;
@@ -253,7 +333,7 @@ precise float proctex_combine(float u, float v, uint function) {
 }
 
 precise vec4 procedural(vec2 uv) {
-    uint config = s.regs[PROCTEX >> 2][PROCTEX & 3];
+    uint config = proctex_config();
     uint noise_u = reg(PROCTEX + 1), noise_v = reg(PROCTEX + 2), lut = reg(PROCTEX + 4);
     uvec2 clamps = uvec2(config & 7u, (config >> 3) & 7u);
     float u = abs(uv.x);
@@ -304,8 +384,8 @@ vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu
 // a texture unit's color: v up as the PICA has it, and the border color
 // outside when the unit clamps to it
 vec4 texel(int unit, vec2 uv) {
-    if ((reg(TEX_CONFIG) & (1u << unit)) == 0u) return vec4(0.0);
-    uint params = reg(TEX_PARAMS + unit);
+    if ((tex_config() & (1u << unit)) == 0u) return vec4(0.0);
+    uint params = tex_params(unit);
     bool border_s = ((params >> 12) & 3u) == 1u, border_t = ((params >> 8) & 3u) == 1u;
     if ((border_s && (uv.x < 0.0 || uv.x > 1.0)) || (border_t && (uv.y < 0.0 || uv.y > 1.0))) {
         return unpack(reg(TEX_BORDER + unit));
@@ -460,13 +540,51 @@ bool compare(uint func, float a, float b) {
     }
 }
 
+// a combiner stage; the buffer lags a stage: the first reads zero, the
+// second the configured color, a stage's update reaches the stage after next
+void tev_stage(int i, vec4 primary, vec4 frag_primary, vec4 frag_secondary, vec4 tex[4], uint update, inout vec4 previous,
+               inout vec4 held, inout vec4 next_buffer) {
+    uint src = stage_reg(i, 0), ops = stage_reg(i, 1), comb = stage_reg(i, 2);
+    vec4 konst = unpack(reg(TEV + i * 5 + 3));
+    uint sc = stage_reg(i, 4);
+    vec4 in_[6];
+    for (int k = 0; k < 6; k++) {
+        uint which = (src >> ((k < 3 ? k * 4 : 16 + (k - 3) * 4))) & 0xFu;
+        vec4 v;
+        switch (which) {
+        case 0u: v = primary; break;
+        case 1u: v = frag_primary; break;
+        case 2u: v = frag_secondary; break;
+        case 3u: v = tex[0]; break;
+        case 4u: v = tex[1]; break;
+        case 5u: v = tex[2]; break;
+        case 6u: v = tex[3]; break;
+        case 13u: v = held; break;
+        case 14u: v = konst; break;
+        default: v = previous; break;
+        }
+        in_[k] = v;
+    }
+    vec3 rgb = combine3(comb & 0xFu, color_operand(in_[0], ops & 0xFu), color_operand(in_[1], (ops >> 4) & 0xFu),
+                        color_operand(in_[2], (ops >> 8) & 0xFu));
+    float a = (comb & 0xFu) == 7u ? rgb.r
+                                  : combine1((comb >> 16) & 0xFu, alpha_operand(in_[3], (ops >> 12) & 7u),
+                                             alpha_operand(in_[4], (ops >> 16) & 7u), alpha_operand(in_[5], (ops >> 20) & 7u));
+    previous = clamp(vec4(rgb * scale(sc & 3u), a * scale((sc >> 16) & 3u)), 0.0, 1.0);
+    held = next_buffer;
+    if (i < 4) {
+        if ((update & (0x100u << i)) != 0u) next_buffer.rgb = previous.rgb;
+        if ((update & (0x1000u << i)) != 0u) next_buffer.a = previous.a;
+    }
+}
+
 void main() {
     // texture 2 reads coordinate set 1 or 2
     vec4 tex[4];
     // texture 0 projected (its type, 3): the coordinates over their w; a
     // cube map (1): (u, v, w) a direction
-    uint type0 = (reg(TEX_PARAMS) >> 28) & 7u;
-    bool on0 = (reg(TEX_CONFIG) & 1u) != 0u;
+    uint type0 = (tex_params(0) >> 28) & 7u;
+    bool on0 = (tex_config() & 1u) != 0u;
     if (on0 && type0 == 1u) tex[0] = cube_texel(vec3(v_uv0, v_w0));
     else if (on0 && (type0 == 2u || type0 == 4u)) tex[0] = shadow_texel(type0 == 4u);
     else tex[0] = texel(0, type0 == 3u ? v_uv0 / v_w0 : v_uv0);
@@ -476,66 +594,36 @@ void main() {
     vec2 uv1 = nearer == 1.0 ? v_uv1 : v_uv0 + (v_uv1 - v_uv0) * nearer;
     vec2 uv2 = nearer == 1.0 ? v_uv2 : v_uv0 + (v_uv2 - v_uv0) * nearer;
     tex[1] = texel(1, uv1);
-    tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? uv1 : uv2);
+    tex[2] = texel(2, (tex_config() & (1u << 13)) != 0u ? uv1 : uv2);
     // the procedural one reads coordinate set 0, 1 or 2
-    uint coordinates = min((reg(TEX_CONFIG) >> 8) & 3u, 2u);
-    tex[3] = (reg(TEX_CONFIG) & (1u << 10)) != 0u ? procedural(coordinates == 0u ? v_uv0 : coordinates == 1u ? v_uv1 : v_uv2) : vec4(0.0);
+    uint coordinates = min((tex_config() >> 8) & 3u, 2u);
+    tex[3] = (tex_config() & (1u << 10)) != 0u ? procedural(coordinates == 0u ? v_uv0 : coordinates == 1u ? v_uv1 : v_uv2) : vec4(0.0);
     vec4 primary = v_color;
     // without lighting the primary fragment color is the vertex's, and
     // there is no specular term
     vec4 frag_primary = primary, frag_secondary = vec4(0.0, 0.0, 0.0, 1.0);
-    if (l.head.y != 0u) light(tex, frag_primary, frag_secondary);
+    if (light_head(1) != 0u) light(tex, frag_primary, frag_secondary);
 
     vec4 previous = primary;
-    // the buffer lags a stage: the first reads zero, the second the
-    // configured color, a stage's update reaches the stage after next
     vec4 held = vec4(0.0);
     vec4 next_buffer = unpack(reg(TEV_BUFFER));
-    uint update = reg(TEV_UPDATE);
-    for (int i = 0; i < 6; i++) {
-        uint src = reg(TEV + i * 5), ops = reg(TEV + i * 5 + 1), comb = reg(TEV + i * 5 + 2);
-        vec4 konst = unpack(reg(TEV + i * 5 + 3));
-        uint sc = reg(TEV + i * 5 + 4);
-        vec4 in_[6];
-        for (int k = 0; k < 6; k++) {
-            uint which = (src >> ((k < 3 ? k * 4 : 16 + (k - 3) * 4))) & 0xFu;
-            vec4 v;
-            switch (which) {
-            case 0u: v = primary; break;
-            case 1u: v = frag_primary; break;
-            case 2u: v = frag_secondary; break;
-            case 3u: v = tex[0]; break;
-            case 4u: v = tex[1]; break;
-            case 5u: v = tex[2]; break;
-            case 6u: v = tex[3]; break;
-            case 13u: v = held; break;
-            case 14u: v = konst; break;
-            default: v = previous; break;
-            }
-            in_[k] = v;
-        }
-        vec3 rgb = combine3(comb & 0xFu, color_operand(in_[0], ops & 0xFu), color_operand(in_[1], (ops >> 4) & 0xFu),
-                            color_operand(in_[2], (ops >> 8) & 0xFu));
-        float a = (comb & 0xFu) == 7u ? rgb.r
-                                      : combine1((comb >> 16) & 0xFu, alpha_operand(in_[3], (ops >> 12) & 7u),
-                                                 alpha_operand(in_[4], (ops >> 16) & 7u), alpha_operand(in_[5], (ops >> 20) & 7u));
-        previous = clamp(vec4(rgb * scale(sc & 3u), a * scale((sc >> 16) & 3u)), 0.0, 1.0);
-        held = next_buffer;
-        if (i < 4) {
-            if ((update & (0x100u << i)) != 0u) next_buffer.rgb = previous.rgb;
-            if ((update & (0x1000u << i)) != 0u) next_buffer.a = previous.a;
-        }
-    }
+    uint update = tev_update();
+    tev_stage(0, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
+    tev_stage(1, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
+    tev_stage(2, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
+    tev_stage(3, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
+    tev_stage(4, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
+    tev_stage(5, primary, frag_primary, frag_secondary, tex, update, previous, held, next_buffer);
 
     // the alpha test, against an 8-bit reference
-    uint test = reg(ALPHA_TEST);
+    uint test = alpha_test();
     if ((test & 1u) != 0u && !compare((test >> 4) & 7u, round(previous.a * 255.0), float((test >> 8) & 0xFFu))) discard;
 
     // fog (mode 5, under the combiner buffer's update): the fog's color
     // mixed in by the fragment's depth through its table, from the far end
     // with bit 16. the depth as the depth buffer gets it (times w for the w
     // buffer), screen-linear (Zakuro's fog.rs)
-    uint fog = reg(TEV_UPDATE);
+    uint fog = update;
     if ((fog & 7u) == 5u) {
         float depth = gl_FragCoord.z;
         if (s.depth.z == 0.0) depth /= gl_FragCoord.w; // the w buffer: DEPTHMAP_ENABLE off
