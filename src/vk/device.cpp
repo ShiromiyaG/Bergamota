@@ -172,7 +172,7 @@ bool Impl::init() {
     // its tables; for the vertex shader on the GPU, the program, the
     // uniforms and the inputs, this frame's and the frame before's
     constexpr VkShaderStageFlags V = VK_SHADER_STAGE_VERTEX_BIT;
-    VkDescriptorSetLayoutBinding bindings[10] = {
+    VkDescriptorSetLayoutBinding bindings[11] = {
         {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -183,10 +183,12 @@ bool Impl::init() {
         {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V, nullptr},
         {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
         {9, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
+        // a cube map's faces past texture 0
+        {10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 5, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sli.bindingCount = 10;
+    sli.bindingCount = 11;
     sli.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
     VkPushConstantRange push{V, 0, sizeof(VertexPush)};

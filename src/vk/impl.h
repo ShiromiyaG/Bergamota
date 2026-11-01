@@ -437,6 +437,8 @@ struct VulkanRenderer::Impl {
     VkSampler sampler(uint32_t params);
 
     VkImageView texture(Pica &p, int unit);
+    VkImageView texture_at(Pica &p, int unit, uint32_t address);
+    VkImageView cube_face(Pica &p, int face);
 
     VkImageView depth_as_color(Surface &s);
 

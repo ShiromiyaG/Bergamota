@@ -35,9 +35,19 @@ VkSampler Impl::sampler(uint32_t params) {
 // what a unit samples: a buffer drawn there, or the texture in memory
 VkImageView Impl::texture(Pica &p, int unit) {
     if (!(p.regs[TEXTURE_CONFIG] >> unit & 1)) return blank.view;
+    return texture_at(p, unit, (p.regs[UNIT_BASE[unit] + 4] & 0x0FFFFFFF) << 3);
+}
+
+// a cube map's face 1-5 (-X, +Y, -Y, +Z, -Z; +X is texture 0's own): its
+// address the low 22 bits of its register over texture 0's
+VkImageView Impl::cube_face(Pica &p, int face) {
+    uint32_t main = p.regs[UNIT_BASE[0] + 4] & 0x0FFFFFFF, own = p.regs[UNIT_BASE[0] + 4 + face] & 0x3FFFFF;
+    return texture_at(p, 0, ((main & ~0x3FFFFFu) | own) << 3);
+}
+
+VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
     uint32_t base = UNIT_BASE[unit], dims = p.regs[base + 1];
     uint32_t h = dims & 0x7FF, w = (dims >> 16) & 0x7FF, format = unit_format(p, unit);
-    uint32_t address = (p.regs[base + 4] & 0x0FFFFFFF) << 3;
     if (!w || !h || !address) return blank.view;
     // a color buffer drawn into, read in place when it is the same
     for (auto &s : surfaces) {

@@ -124,6 +124,10 @@ void Impl::render(Pica &p) {
     // what the draw reads first, outside a pass
     VkImageView views[3];
     for (int u = 0; u < 3; u++) views[u] = forced_views ? forced_views[u] : texture(p, u);
+    // texture 0 a cube map (its type, 1): the other five faces
+    VkImageView faces[5];
+    const bool cube = (r[TEXTURE_CONFIG] & 1) && ((r[UNIT_BASE[0] + 2] >> 28) & 7) == 1;
+    for (int f = 0; f < 5; f++) faces[f] = cube ? cube_face(p, f + 1) : blank.view;
     Surface *color = surface(color_address, w, h, (r[COLOR_BUFFER_FORMAT] >> 16) & 7, false);
     Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
     if (!color) return;
@@ -309,7 +313,9 @@ void Impl::render(Pica &p) {
     for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
     VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
-    VkWriteDescriptorSet writes[10]{};
+    VkDescriptorImageInfo face_images[5];
+    for (int f = 0; f < 5; f++) face_images[f] = {sampler(r[UNIT_BASE[0] + 2]), faces[f], VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[11]{};
     for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
@@ -327,8 +333,12 @@ void Impl::render(Pica &p) {
     writes[3].descriptorCount = 1;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[3].pBufferInfo = &tables_info;
+    writes[4].dstBinding = 10;
+    writes[4].descriptorCount = 5;
+    writes[4].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[4].pImageInfo = face_images;
     if (!on_gpu) {
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 5, writes);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.stats.triangles += triangles.size() / 3;
@@ -345,12 +355,12 @@ void Impl::render(Pica &p) {
                                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
         for (int k = 0; k < 6; k++) {
-            writes[4 + k].dstBinding = uint32_t(4 + k);
-            writes[4 + k].descriptorCount = 1;
-            writes[4 + k].descriptorType = TYPES[k];
-            writes[4 + k].pBufferInfo = &gpu_info[k];
+            writes[5 + k].dstBinding = uint32_t(4 + k);
+            writes[5 + k].descriptorCount = 1;
+            writes[5 + k].descriptorType = TYPES[k];
+            writes[5 + k].pBufferInfo = &gpu_info[k];
         }
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 10, writes);
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 11, writes);
         VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u,
                         0, 0, store, 0};
         if (from_outputs) {

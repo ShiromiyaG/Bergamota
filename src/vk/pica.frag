@@ -21,6 +21,7 @@ layout(std140, set = 0, binding = 0) uniform State {
     vec4 depth;
 } s;
 layout(set = 0, binding = 1) uniform sampler2D textures[3];
+layout(set = 0, binding = 10) uniform sampler2D cube_faces[5]; // -X, +Y, -Y, +Z, -Z
 
 // the lighting, as LightingBlock in pica_lighting.h lays it out
 struct Light {
@@ -306,6 +307,34 @@ vec4 texel(int unit, vec2 uv) {
     return texture(textures[unit], vec2(uv.x, 1.0 - uv.y));
 }
 
+// texture 0 as a cube map: the face the direction (u, v, w) points at most,
+// and where on it, the larger component over the others
+vec4 cube_texel(vec3 d) {
+    vec3 a = abs(d);
+    int face;
+    vec2 st;
+    if (a.x > a.y && a.x > a.z) {
+        face = d.x > 0.0 ? 0 : 1;
+        st = vec2(-d.z, d.x > 0.0 ? -d.y : d.y) / d.x;
+    } else if (a.y > a.z) {
+        face = d.y > 0.0 ? 2 : 3;
+        st = vec2(d.y > 0.0 ? d.x : -d.x, d.z) / d.y;
+    } else {
+        face = d.z > 0.0 ? 4 : 5;
+        st = vec2(d.x, d.z > 0.0 ? -d.y : d.y) / d.z;
+    }
+    vec2 uv = st * 0.5 + 0.5;
+    vec2 at = vec2(uv.x, 1.0 - uv.y);
+    switch (face) {
+    case 0: return texture(textures[0], at);
+    case 1: return texture(cube_faces[0], at);
+    case 2: return texture(cube_faces[1], at);
+    case 3: return texture(cube_faces[2], at);
+    case 4: return texture(cube_faces[3], at);
+    default: return texture(cube_faces[4], at);
+    }
+}
+
 vec3 color_operand(vec4 v, uint op) {
     switch (op) {
     case 1u: return 1.0 - v.rgb;
@@ -380,8 +409,11 @@ bool compare(uint func, float a, float b) {
 void main() {
     // texture 2 reads coordinate set 1 or 2
     vec4 tex[4];
-    // texture 0 projected (its type, 3): the coordinates over their w
-    tex[0] = texel(0, ((reg(TEX_PARAMS) >> 28) & 7u) == 3u ? v_uv0 / v_w0 : v_uv0);
+    // texture 0 projected (its type, 3): the coordinates over their w; a
+    // cube map (1): (u, v, w) a direction
+    uint type0 = (reg(TEX_PARAMS) >> 28) & 7u;
+    tex[0] = type0 == 1u && (reg(TEX_CONFIG) & 1u) != 0u ? cube_texel(vec3(v_uv0, v_w0))
+                                                        : texel(0, type0 == 3u ? v_uv0 / v_w0 : v_uv0);
     tex[1] = texel(1, v_uv1);
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
     // the procedural one reads coordinate set 0, 1 or 2

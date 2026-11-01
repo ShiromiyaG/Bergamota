@@ -70,7 +70,6 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
     stats.lacking[3] += operation == 3;
     if (r[TEXTURE_CONFIG] & 1) {
         const uint32_t type = (r[0x083] >> 28) & 7;
-        stats.lacking[4] += type == 1;
         stats.lacking[5] += type == 2 || type == 4;
     }
     // the inputs gathered here and the shader run on the GPU, or all of it here

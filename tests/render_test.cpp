@@ -17,7 +17,7 @@ using namespace runtime::pica;
 
 namespace {
 
-constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, DEPTH = 0x20200000, TEXTURE = 0x20300000, VERTICES = 0x20400000, SIZE = 64;
+constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, DEPTH = 0x20200000, TEXTURE = 0x20300000, VERTICES = 0x20400000, CUBE = 0x20500000, SIZE = 64;
 
 // a float as the PICA's 24-bit one (1.7.16)
 uint32_t to_f24(float f) {
@@ -329,5 +329,43 @@ int main() {
     std::printf("  fixed primitives %d, variable %d of %d pixels grey\n", fixed, variable, SIZE * SIZE);
     check("the geometry shader's fixed primitives are drawn", fixed == SIZE * SIZE);
     check("the geometry shader's variable primitives are drawn", variable == SIZE * SIZE);
+
+    // a cube map (type 1): six faces of one red each (40 times the face's
+    // number plus one: +X, -X, +Y, -Y, +Z, -Z), read by the direction (u, v,
+    // w) of texture 0's coordinates
+    for (uint32_t face = 0; face < 6; face++) {
+        uint8_t *texels = b.memory.host(CUBE + face * 0x1000, 8 * 8 * 4);
+        for (uint32_t i = 0; i < 64; i++) texels[i * 4] = 255, texels[i * 4 + 1] = texels[i * 4 + 2] = 0, texels[i * 4 + 3] = uint8_t(40 * (face + 1));
+    }
+    auto cube_read = [&](float x, float y, float z) {
+        List l = base;
+        l.put(TEV_STAGE0, 3 | 3 << 16);
+        l.put(TEXTURE_CONFIG, 1);
+        l.put(0x082, 8 | 8 << 16);
+        l.put(0x083, 1u << 28);
+        l.put(0x085, CUBE >> 3);
+        for (uint32_t face = 1; face < 6; face++) l.put(0x085 + face, ((CUBE + face * 0x1000) >> 3) & 0x3FFFFF);
+        l.put(0x08E, 0);
+        l.put(OUTPUT_MAP + 1, 0x1F100D0C);
+        l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+        const float corners[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
+        for (auto &c : corners) {
+            l.put4(FIXED_ATTRIBUTE_DATA, c[0], c[1], 0, 1);
+            l.put4(FIXED_ATTRIBUTE_DATA, x, y, z, 0);
+        }
+        l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        return int(b.draw(l)[(SIZE / 2) * SIZE + SIZE / 2][0]);
+    };
+    const float directions[6][3] = {{1, 0.2f, 0.1f}, {-1, 0.2f, 0.1f}, {0.2f, 1, 0.1f},
+                                    {0.2f, -1, 0.1f}, {0.2f, 0.1f, 1}, {0.2f, 0.1f, -1}};
+    bool faces_right = true;
+    std::printf("  cube faces read:");
+    for (int face = 0; face < 6; face++) {
+        int red = cube_read(directions[face][0], directions[face][1], directions[face][2]);
+        std::printf(" %d", red);
+        faces_right &= red == 40 * (face + 1);
+    }
+    std::printf("\n");
+    check("a cube map reads the face its direction points at", faces_right);
     return failed ? 1 : 0;
 }
