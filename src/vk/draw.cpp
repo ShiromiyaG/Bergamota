@@ -248,7 +248,7 @@ void Impl::render(Pica &p) {
 
     if (!rendering && shadow) {
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0, 0}, {w, h}};
+        ri.renderArea = {{0, 0}, {color->image.width, color->image.height}};
         ri.layerCount = 1;
         vkCmdBeginRendering(cmd, &ri);
         self.stats.passes++;
@@ -265,7 +265,7 @@ void Impl::render(Pica &p) {
         VkRenderingAttachmentInfo da = ca;
         if (depth) da.imageView = depth->image.view;
         VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
-        ri.renderArea = {{0, 0}, {w, h}};
+        ri.renderArea = {{0, 0}, {color->image.width, color->image.height}};
         ri.layerCount = 1;
         ri.colorAttachmentCount = 1;
         ri.pColorAttachments = &ca;
@@ -309,9 +309,10 @@ void Impl::render(Pica &p) {
         vy += (vh - narrower) / 2;
         vh = narrower;
     }
-    VkViewport viewport{vx, float(h) - (vy + vh), vw, vh, 0, 1};
+    // at the resolution
+    VkViewport viewport{vx * res, (float(h) - (vy + vh)) * res, vw * res, vh * res, 0, 1};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
-    VkRect2D scissor{{0, 0}, {w, h}};
+    VkRect2D scissor{{0, 0}, {color->image.width, color->image.height}};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
     uint32_t cull = r[FACE_CULLING] & 3;
     vkCmdSetFrontFace(cmd, VK_FRONT_FACE_COUNTER_CLOCKWISE);

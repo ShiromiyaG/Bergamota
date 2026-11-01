@@ -7,6 +7,7 @@ namespace runtime {
 
 using Impl = VulkanRenderer::Impl;
 
+
 void Impl::copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect) {
     Buffer b = staging_buffer(size, false);
     std::memcpy(b.mapped, bytes, size);
@@ -37,6 +38,7 @@ void Impl::upload(Surface &s) {
                 std::memcpy(&rgba[(size_t(y) * w + x) * 4], c.data(), 4);
             }
         }
+        rgba = resampled(rgba, w, h, s.image.width, s.image.height, 4);
         upload_color(s.image, rgba.data(), rgba.size());
         return;
     }
@@ -54,6 +56,8 @@ void Impl::upload(Surface &s) {
             stencil[at] = bpp == 4 ? p[3] : 0;
         }
     }
+    depth = resampled(depth, w, h, s.image.width, s.image.height);
+    stencil = resampled(stencil, w, h, s.image.width, s.image.height);
     copy_in(s.image, depth.data(), depth.size() * 4, VK_IMAGE_ASPECT_DEPTH_BIT);
     copy_in(s.image, stencil.data(), stencil.size(), VK_IMAGE_ASPECT_STENCIL_BIT);
 }
@@ -62,13 +66,14 @@ void Impl::write_back(Surface &s) {
     if (replaying) return; // a frame between the game's never reaches memory
     self.stats.write_back_causes[cause]++;
     auto started = std::chrono::steady_clock::now();
-    uint32_t w = s.width, h = s.height;
-    VkDeviceSize texels = VkDeviceSize(w) * h;
+    // read at the image's size, each logical pixel's middle taken
+    uint32_t w = s.width, h = s.height, pw = s.image.width, ph = s.image.height;
+    VkDeviceSize texels = VkDeviceSize(pw) * ph;
     Buffer a = staging_buffer(texels * 4, true), b{};
     end_rendering();
     VkBufferImageCopy c{};
     c.imageSubresource = {VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
-    c.imageExtent = {w, h, 1};
+    c.imageExtent = {pw, ph, 1};
     vkCmdCopyImageToBuffer(cmd, s.image.image, VK_IMAGE_LAYOUT_GENERAL, a.buffer, 1, &c);
     if (s.depth) {
         b = staging_buffer(texels, true);
@@ -83,7 +88,7 @@ void Impl::write_back(Surface &s) {
             uint32_t bpp = bytes_per_pixel(s.format);
             for (uint32_t y = 0; y < h; y++) {
                 for (uint32_t x = 0; x < w; x++) {
-                    const uint8_t *p = a.mapped + (size_t(y) * w + x) * 4;
+                    const uint8_t *p = a.mapped + (size_t(middle(y, h, ph)) * pw + middle(x, w, pw)) * 4;
                     encode_color(s.format, {p[0], p[1], p[2], p[3]}, dst + s.offset(x, y, bpp));
                 }
             }
@@ -92,7 +97,7 @@ void Impl::write_back(Surface &s) {
             uint32_t bpp = BYTES[s.format & 3];
             for (uint32_t y = 0; y < h; y++) {
                 for (uint32_t x = 0; x < w; x++) {
-                    size_t at = size_t(y) * w + x;
+                    size_t at = size_t(middle(y, h, ph)) * pw + middle(x, w, pw);
                     uint32_t v;
                     std::memcpy(&v, a.mapped + at * 4, 4);
                     if (depth_format == VK_FORMAT_D32_SFLOAT_S8_UINT) v = uint32_t(std::clamp(std::bit_cast<float>(v), 0.0f, 1.0f) * 16777215.0f + 0.5f);
@@ -162,10 +167,34 @@ Surface *Impl::surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format
         surfaces.erase(surfaces.begin() + i);
     }
     auto s = std::make_unique<Surface>(fresh);
-    s->image = image(w, h, depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth);
+    s->image = image(scaled(w), scaled(h), depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, depth);
     upload(*s);
     surfaces.push_back(std::move(s));
     return surfaces.back().get();
+}
+
+// another resolution: every buffer back to memory and away, made again at
+// the new size as the game draws (screens' images and the read-back
+// buffers follow)
+void Impl::rescale(float to) {
+    end_rendering();
+    for (auto &s : surfaces) {
+        if (s->dirty) write_back(*s);
+        let_go(s->image);
+        if (s->as_color.image) let_go(s->as_color);
+        if (s->between.image) let_go(s->between);
+    }
+    surfaces.clear();
+    drop_ops();
+    draws_before.clear();
+    between_ready = false;
+    res = to;
+    // the read-back buffers as large as the screens now are
+    submit();
+    for (Buffer &b : shown.buffers) {
+        destroy(b);
+        b = buffer(VkDeviceSize(scaled(240)) * scaled(400) * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    }
 }
 
 // a fill: a buffer it covers whole is cleared on the GPU, the rest goes
@@ -238,17 +267,18 @@ bool Impl::transfer(const Backend::Transfer &t) {
     end_rendering();
     VkImageBlit b{};
     b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    b.srcOffsets[0] = {0, int32_t(row), 0};
-    b.srcOffsets[1] = {int32_t(t.copy_width * t.scale_x), int32_t(row + t.copy_height * t.scale_y), 1};
+    // both at the resolution
+    b.srcOffsets[0] = {0, at_res(float(row)), 0};
+    b.srcOffsets[1] = {at_res(float(t.copy_width * t.scale_x)), at_res(float(row + t.copy_height * t.scale_y)), 1};
     if (t.flip) {
-        b.dstOffsets[0] = {0, int32_t(t.out_height), 0};
-        b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.out_height - t.copy_height), 1};
+        b.dstOffsets[0] = {0, at_res(float(t.out_height)), 0};
+        b.dstOffsets[1] = {at_res(float(t.copy_width)), at_res(float(t.out_height - t.copy_height)), 1};
     } else {
-        b.dstOffsets[1] = {int32_t(t.copy_width), int32_t(t.copy_height), 1};
+        b.dstOffsets[1] = {at_res(float(t.copy_width)), at_res(float(t.copy_height)), 1};
     }
-    bool scaled = t.scale_x > 1 || t.scale_y > 1;
+    bool halved = t.scale_x > 1 || t.scale_y > 1;
     vkCmdBlitImage(cmd, in->image.image, VK_IMAGE_LAYOUT_GENERAL, out->image.image, VK_IMAGE_LAYOUT_GENERAL, 1, &b,
-                   scaled ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+                   halved ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     barrier();
     out->dirty = true;
     guard(*out);

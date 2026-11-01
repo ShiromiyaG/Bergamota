@@ -79,6 +79,18 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 s.video.aspect = aspect == 1 ? "16:9" : aspect == 2 ? "21:9" : "original";
                 moved = true;
             }
+            static const char *RESOLUTIONS[] = {"native", "1280x720", "1920x1080", "2560x1440", "3840x2160", "window"};
+            int resolution = 0;
+            for (int i = 0; i < 6; i++) {
+                if (s.video.resolution == RESOLUTIONS[i]) resolution = i;
+            }
+            if (ImGui::Combo("Resolution", &resolution,
+                             "Native (400x240)\0" "720p\0" "1080p\0" "1440p\0" "4K\0" "The window's\0")) {
+                s.video.resolution = RESOLUTIONS[resolution];
+                moved = true;
+            }
+            moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
+            moved |= ImGui::SliderFloat("Sharpening", &s.video.sharpen, 0.0f, 1.0f, "%.2f");
             moved |= ImGui::Checkbox("Frame times in the corner", &s.stats);
             ImGui::EndTabItem();
         }

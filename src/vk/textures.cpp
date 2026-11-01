@@ -94,7 +94,7 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
 }
 
 VkImageView Impl::depth_as_color(Surface &s) {
-    if (!s.as_color.image) s.as_color = image(s.width, s.height, VK_FORMAT_R8G8B8A8_UNORM, false);
+    if (!s.as_color.image) s.as_color = image(s.image.width, s.image.height, VK_FORMAT_R8G8B8A8_UNORM, false);
     if (s.converted == s.version) return s.as_color.view;
     end_rendering();
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_pipeline);
@@ -112,7 +112,7 @@ VkImageView Impl::depth_as_color(Surface &s) {
         writes[i].pImageInfo = &images[i];
     }
     push_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_layout, 0, 3, writes);
-    vkCmdDispatch(cmd, (s.width + 7) / 8, (s.height + 7) / 8, 1);
+    vkCmdDispatch(cmd, (s.image.width + 7) / 8, (s.image.height + 7) / 8, 1);
     barrier();
     s.converted = s.version;
     return s.as_color.view;

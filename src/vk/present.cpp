@@ -20,6 +20,8 @@ const uint32_t PRESENT_FRAG[] = {
 struct ScreenPush {
     float rect[4];
     float extent[2];
+    float unused[2];
+    float post[4]; // anti-aliasing on, sharpening 0-1 (present.frag)
 };
 
 void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to) {
@@ -89,7 +91,7 @@ VulkanPresenter::VulkanPresenter(VulkanRenderer &renderer, const std::function<b
     sli.bindingCount = 1;
     sli.pBindings = &binding;
     vkCreateDescriptorSetLayout(d.device, &sli, nullptr, &set_layout_);
-    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(ScreenPush)};
+    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ScreenPush)};
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount = 1;
     pli.pSetLayouts = &set_layout_;
@@ -335,7 +337,9 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
             float px0 = x0 + lx * scale, py0 = y0 + ly * scale, px1 = px0 + lw * scale, py1 = py0 + 240.0f * scale;
             ScreenPush push{{px0 / extent_.width * 2 - 1, py0 / extent_.height * 2 - 1, px1 / extent_.width * 2 - 1,
                              py1 / extent_.height * 2 - 1},
-                            {float(last_.size[s][0]) / 240.0f, float(last_.size[s][1]) / (s ? 320.0f : 400.0f)}};
+                            {float(last_.size[s][0]) / 240.0f, float(last_.size[s][1]) / (s ? 320.0f : 400.0f)},
+                            {},
+                            {view.antialias ? 1.0f : 0.0f, view.sharpen, 0, 0}};
             VkDescriptorImageInfo info{view.smooth ? linear_ : nearest_, image.view, VK_IMAGE_LAYOUT_GENERAL};
             VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             write.dstBinding = 0;
@@ -343,7 +347,7 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.pImageInfo = &info;
             d.push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &write);
-            vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, &push);
+            vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
             vkCmdDraw(cmd, 6, 1, 0, 0);
         }
     }

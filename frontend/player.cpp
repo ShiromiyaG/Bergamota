@@ -72,6 +72,16 @@ float top_width(const Settings &s) {
     return s.video.aspect == "16:9" ? 240.0f * 16 / 9 : s.video.aspect == "21:9" ? 240.0f * 21 / 9 : 400.0f;
 }
 
+// how many of the host's pixels a 3DS pixel is drawn as, each way: as many
+// as fill the resolution asked for (a size, or the window's) with the
+// screens shown, both stacked (480 rows) or the top one alone (240)
+float resolution_scale(const Settings &s, bool both, int window_width, int window_height) {
+    float width = 0, height = 0;
+    if (s.video.resolution == "window") width = float(window_width), height = float(window_height);
+    else if (std::sscanf(s.video.resolution.c_str(), "%fx%f", &width, &height) != 2) return 1;
+    return std::clamp(std::min(width / top_width(s), height / (both ? 480.0f : 240.0f)), 1.0f, 8.0f);
+}
+
 // the bindings, resolved from their names: a scancode and a gamepad button
 // for each of the settings' buttons
 struct Bindings {
@@ -366,6 +376,8 @@ int main(int argc, char **argv) {
     });
 
     Dump dump;
+    float scale_wanted = 1;
+    auto scale_since = std::chrono::steady_clock::now();
     std::deque<Frame> waiting;
     Frame showing;
     while (!quit) {
@@ -420,6 +432,16 @@ int main(int argc, char **argv) {
         runtime_top_aspect = view.top > 400 ? view.top / 240 : 0;
         vulkan.top_wide = view.top / 400;
         view.vsync = settings.video.vsync;
+        view.antialias = settings.video.antialias;
+        view.sharpen = settings.video.sharpen;
+        // the resolution, once it held a moment (a window being resized
+        // would make the buffers again at every step)
+        if (float want = resolution_scale(settings, both, pw, ph); std::abs(want - scale_wanted) > 0.01f) {
+            scale_wanted = want;
+            scale_since = std::chrono::steady_clock::now();
+        } else if (std::chrono::steady_clock::now() - scale_since > std::chrono::milliseconds(500)) {
+            vulkan.scale = scale_wanted;
+        }
         presenter.present(fresh ? &showing : nullptr, view,
                           [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });
         if (changed) apply();

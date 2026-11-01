@@ -13,6 +13,7 @@
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
+//   RUNTIME_SCALE=n         the buffers drawn n times as large each way (2.25: 1080p)
 //   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
 //                           it was found in most, sampled every millisecond
 //   RUNTIME_SAMPLE_FROM=s   sampled from s seconds in (on the host's clock)
@@ -163,6 +164,8 @@ int main(int argc, char **argv) {
             // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's;
             // the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
+            // RUNTIME_SCALE=n: the buffers drawn n times as large each way (the shots stay the console's size)
+            if (env("RUNTIME_SCALE")) vulkan->scale = float(std::atof(env("RUNTIME_SCALE")));
             // RUNTIME_SHADER_CACHE=folder: the translated vertex programs kept across runs
             if (env("RUNTIME_SHADER_CACHE")) vulkan->cache_in(env("RUNTIME_SHADER_CACHE"));
         }

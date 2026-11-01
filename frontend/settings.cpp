@@ -83,6 +83,11 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "between", s.video.between);
     get(t, "video", "layout", s.video.layout);
     get(t, "video", "aspect", s.video.aspect);
+    get(t, "video", "resolution", s.video.resolution);
+    get(t, "video", "antialias", s.video.antialias);
+    double sharpen = s.video.sharpen;
+    get(t, "video", "sharpen", sharpen);
+    s.video.sharpen = float(std::clamp(sharpen, 0.0, 1.0));
     number = s.audio.volume;
     get(t, "audio", "volume", number);
     s.audio.volume = int(std::clamp<int64_t>(number, 0, 100));
@@ -110,7 +115,10 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"smooth", s.video.smooth},
                               {"between", s.video.between},
                               {"layout", s.video.layout},
-                              {"aspect", s.video.aspect}}},
+                              {"aspect", s.video.aspect},
+                              {"resolution", s.video.resolution},
+                              {"antialias", s.video.antialias},
+                              {"sharpen", double(s.video.sharpen)}}},
         {"audio", toml::table{{"volume", s.audio.volume}, {"mute", s.audio.mute}}},
         {"keyboard", keys},
         {"gamepad", pad},

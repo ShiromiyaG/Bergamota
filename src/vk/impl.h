@@ -68,6 +68,24 @@ struct GpuDraw {
     std::vector<Vertex> samples;
 };
 
+// w x h values resampled to pw x ph, each taking the nearest (the buffers
+// at another resolution than memory's)
+template <typename T> std::vector<T> resampled(const std::vector<T> &in, uint32_t w, uint32_t h, uint32_t pw, uint32_t ph, uint32_t n = 1) {
+    if (pw == w && ph == h) return in;
+    std::vector<T> out(size_t(pw) * ph * n);
+    for (uint32_t y = 0; y < ph; y++) {
+        uint32_t sy = std::min(h - 1, uint32_t(uint64_t(y) * h / ph));
+        for (uint32_t x = 0; x < pw; x++) {
+            uint32_t sx = std::min(w - 1, uint32_t(uint64_t(x) * w / pw));
+            std::copy_n(&in[(size_t(sy) * w + sx) * n], n, &out[(size_t(y) * pw + x) * n]);
+        }
+    }
+    return out;
+}
+
+// where a logical pixel's middle falls among n physical ones over count logical
+inline uint32_t middle(uint32_t at, uint32_t count, uint32_t n) { return std::min(n - 1, uint32_t((2 * uint64_t(at) + 1) * n / (2 * count))); }
+
 // the registers the shaders read, by slot (pica.frag)
 struct State {
     uint32_t regs[64];
@@ -300,6 +318,12 @@ struct VulkanRenderer::Impl {
     // its rows (games draw both screens into one, each in rows of its own)
     uint32_t top_source = 0, top_rows[2] = {0, 0};
     bool drawn_flat(const Pica &p) const;   // the draw about to go: 2D (draw.cpp)
+    // the resolution the buffers are drawn at (VulkanRenderer::scale): a
+    // PICA pixel is res of the image's each way
+    float res = 1;
+    uint32_t scaled(uint32_t n) const { return std::max(1u, uint32_t(std::lround(n * res))); }
+    int32_t at_res(float n) const { return int32_t(std::lround(n * res)); }
+    void rescale(float to);
     // the newest picture in each buffer (a counter of the transfers and
     // writes into it), and the buffer each screen showed
     std::unordered_map<uint32_t, uint64_t> picture_in;
@@ -347,6 +371,7 @@ struct VulkanRenderer::Impl {
     // the GPU is long done with it, then handed on as a Frame
     struct Shown {
         Buffer buffers[2];
+        uint32_t image_size[2][2]; // the images copied into buffers, as large as they are
         uint32_t size[2][2]{};
         bool on_gpu[2]{};
         Picture from_memory[2];

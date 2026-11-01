@@ -65,6 +65,12 @@ public:
     // so a scene at 30 shows at 60. 0 or 1; set from any thread, taken at
     // the next vertical blank
     std::atomic<int> between{0};
+    // the resolution: how many of the host's pixels each of the PICA's is,
+    // each way (fractions too: 4.5 makes the top screen 1080 rows tall). its
+    // buffers are drawn that large; memory keeps them as the console does.
+    // set from any thread, taken at the next vertical blank (the buffers go
+    // back to memory and come again at the new size)
+    std::atomic<float> scale{1};
     // the top screen shown this much wider than it is drawn (widescreen,
     // anamorphic: a port's override frames its 3D wider): what is drawn
     // flat on it (2D, every w 1) goes narrower by as much, centered, so it

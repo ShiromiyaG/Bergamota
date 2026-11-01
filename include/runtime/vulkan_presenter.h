@@ -34,6 +34,8 @@ public:
         bool smooth = false;            // filtered, else nearest
         bool vsync = true;
         float top = 400; // the top screen's width shown, at its height of 240 (wider for widescreen)
+        bool antialias = false; // FXAA over the screens
+        float sharpen = 0;      // 0-1
     };
     // the screens' area in a window of width x height (anything), the top
     // screen top wide: the scale and where it starts, for the mouse; the

@@ -204,11 +204,11 @@ void Impl::draw_between(float t) {
     int whole = gpu_open(2), seeding = gpu_open(1);
     for (auto &s : surfaces) {
         kept.push_back({s->dirty, s->stale, s->version, s->converted});
-        if (!s->between.image) s->between = image(s->width, s->height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
+        if (!s->between.image) s->between = image(s->image.width, s->image.height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
         VkImageCopy c{};
         c.srcSubresource = c.dstSubresource = {
             VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
-        c.extent = {s->width, s->height, 1};
+        c.extent = {s->image.width, s->image.height, 1};
         vkCmdCopyImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         between_views[s->image.view] = s->between.view;
         std::swap(s->image, s->between);

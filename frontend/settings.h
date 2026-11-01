@@ -38,6 +38,12 @@ struct Settings {
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
         std::string aspect = "original";
+        // the resolution drawn at: "native" (the console's), a size such as
+        // "1920x1080" the screens are drawn to fill, or "window" (the
+        // window's own); the 3DS's pixels then scale by a fraction
+        std::string resolution = "native";
+        bool antialias = false; // FXAA over the screens
+        float sharpen = 0;      // 0-1
     } video;
     struct {
         int volume = 100; // percent

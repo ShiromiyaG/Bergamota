@@ -17,6 +17,9 @@ Surface *Impl::framebuffer(uint32_t address, uint32_t stride) {
 
 bool Impl::vblank(Pica &p) {
     blanks++;
+    // the resolution asked for, once it settles (a hundredth either way is
+    // the same)
+    if (float want = std::clamp(self.scale.load(), 1.0f, 8.0f); std::abs(want - res) > 0.01f) rescale(want);
     if (int want = self.between.load(); want != between) {
         // switched: nothing kept from before
         between = want;
@@ -71,7 +74,9 @@ bool Impl::vblank(Pica &p) {
             vkWaitSemaphores(device, &wi, 1000000000ull);
         }
         for (int s = 0; s < 2; s++) {
-            if (!set.screens[s].image) set.screens[s] = image(240, s ? 320 : 400, VK_FORMAT_R8G8B8A8_UNORM, false);
+            uint32_t pw = scaled(240), ph = scaled(s ? 320 : 400);
+            if (set.screens[s].image && (set.screens[s].width != pw || set.screens[s].height != ph)) let_go(set.screens[s]), set.screens[s] = {};
+            if (!set.screens[s].image) set.screens[s] = image(pw, ph, VK_FORMAT_R8G8B8A8_UNORM, false);
         }
         end_rendering();
     }
@@ -93,7 +98,9 @@ bool Impl::vblank(Pica &p) {
                         std::memcpy(&sideways[(size_t(x) * 240 + (239 - y)) * 4], &picture.rgba[(size_t(y) * picture.width + x) * 4], 4);
                     }
                 }
-                upload_color(sets[set_index].screens[screen], sideways.data(), sideways.size());
+                Image &to = sets[set_index].screens[screen];
+                sideways = resampled(sideways, 240, rows, to.width, to.height, 4);
+                upload_color(to, sideways.data(), sideways.size());
                 shown.size[screen][0] = 240, shown.size[screen][1] = rows;
             }
             shown.from_memory[screen] = std::move(picture);
@@ -103,13 +110,15 @@ bool Impl::vblank(Pica &p) {
         if (to_cpu) {
             VkBufferImageCopy c{};
             c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            c.imageExtent = {fb->width, fb->height, 1};
+            c.imageExtent = {from.width, from.height, 1};
             vkCmdCopyImageToBuffer(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, shown.buffers[screen].buffer, 1, &c);
+            shown.image_size[screen][0] = from.width, shown.image_size[screen][1] = from.height;
         }
         if (set_index >= 0) {
             VkImageCopy c{};
             c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            c.extent = {std::min(fb->width, 240u), std::min(fb->height, screen ? 320u : 400u), 1};
+            const Image &to = sets[set_index].screens[screen];
+            c.extent = {std::min(from.width, to.width), std::min(from.height, to.height), 1};
             vkCmdCopyImage(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, sets[set_index].screens[screen].image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         }
         shown.size[screen][0] = fb->width, shown.size[screen][1] = fb->height;
@@ -155,6 +164,7 @@ void Impl::finish_shown(Pica &p) {
             continue;
         }
         uint32_t w = shown.size[screen][0], h = shown.size[screen][1];
+        uint32_t pw = shown.image_size[screen][0], ph = shown.image_size[screen][1];
         out.width = screen ? 320 : 400;
         out.height = 240;
         out.rgba.assign(out.width * out.height * 4, 0);
@@ -163,7 +173,7 @@ void Impl::finish_shown(Pica &p) {
         const uint8_t *src = shown.buffers[screen].mapped;
         for (uint32_t x = 0; x < out.width && x < h; x++) {
             for (uint32_t y = 0; y < out.height && y < w; y++) {
-                const uint8_t *px = src + (size_t(x) * w + (w - 1 - y)) * 4;
+                const uint8_t *px = src + (size_t(middle(x, h, ph)) * pw + middle(w - 1 - y, w, pw)) * 4;
                 uint8_t *d = &out.rgba[(size_t(y) * out.width + x) * 4];
                 d[0] = px[0], d[1] = px[1], d[2] = px[2], d[3] = 255;
             }
