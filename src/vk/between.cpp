@@ -174,66 +174,12 @@ void Impl::pair_frame() {
             if (ops_now[c.now].regs[DRAW_TAG]) self.stats.tagged_draws++;
         }
     }
-    // one thing drawn twice (a base, then its lighting over it where the
-    // depths are equal) is put between one way: the draws to a target with
-    // the same inputs and program, at the same place now, all take the pair
-    // of the first of them paired, and its jump. Paired apart, one could pair
-    // and the other not (a texture swapped, a character coming in), or jump
-    // and the other not, and the base showed through, dark, for a frame
-    std::vector<size_t> lead(ops_now.size());
-    for (size_t i = 0; i < lead.size(); i++) lead[i] = i;
-    auto same_place = [](const Op &a, const Op &b) {
-        const std::vector<Vertex> *x = &a.vertices, *y = &b.vertices;
-        if (a.gpu) {
-            if (std::memcmp(&a.gpu->unit, &b.gpu->unit, sizeof(UnitBlock)) == 0) return true;
-            for (GpuDraw *g : {a.gpu.get(), b.gpu.get()}) {
-                if (g->samples.empty()) g->samples = sample_positions(*g);
-            }
-            x = &a.gpu->samples, y = &b.gpu->samples;
-        }
-        if (x->size() != y->size()) return false;
-        for (size_t i = 0; i < x->size(); i++) {
-            if (std::memcmp(&(*x)[i].position, &(*y)[i].position, sizeof(Vec4)) != 0) return false;
-        }
-        return true;
-    };
-    std::map<std::tuple<uint32_t, uint64_t, uint64_t>, std::vector<size_t>> made_of;
-    for (size_t i = 0; i < ops_now.size(); i++) {
-        const Op &op = ops_now[i];
-        if (op.kind != Op::Draw) continue;
-        if (op.gpu) made_of[{op_target(op), op.gpu->input_hash, op.gpu->program_hash}].push_back(i);
-        else {
-            std::vector<Vec4> at;
-            for (const Vertex &v : op.vertices) at.push_back(v.position);
-            made_of[{op_target(op), hash_bytes(reinterpret_cast<const uint8_t *>(at.data()), at.size() * sizeof(Vec4)), at.size()}].push_back(i);
-        }
-    }
-    for (auto &[key, list] : made_of) {
-        for (size_t k = 0; k < list.size(); k++) {
-            for (size_t j = 0; j < k; j++) {
-                if (lead[list[j]] != list[j] || !ops_now[list[j]].gpu != !ops_now[list[k]].gpu) continue;
-                if (same_place(ops_now[list[j]], ops_now[list[k]])) {
-                    lead[list[k]] = list[j];
-                    break;
-                }
-            }
-        }
-    }
-    // the first of each paired
-    for (size_t i = 0; i < lead.size(); i++) {
-        if (lead[i] != i && pairs[i] && !pairs[lead[i]]) {
-            size_t was = lead[i];
-            for (size_t j = 0; j < lead.size(); j++) {
-                if (lead[j] == was) lead[j] = i;
-            }
-        }
-    }
     // a pair that jumps is no pair; how far its vertices may move
     limits.assign(ops_now.size(), 1e9f);
     for (size_t i = 0; i < ops_now.size(); i++) {
         const Op &op = ops_now[i];
         const Op *before = pairs[i];
-        if (lead[i] != i || !before) continue;
+        if (!before) continue;
         if (jumps(*before, op)) {
             pairs[i] = nullptr;
         } else if (!op.gpu) {
@@ -242,8 +188,56 @@ void Impl::pair_frame() {
             limits[i] = jump_limit(before->gpu->samples, op.gpu->samples);
         }
     }
+    // one thing drawn more than once is put between one way or not at all:
+    // the draws at the same places now (a few of their vertices, rounded), to
+    // any target and by any program, are all mixed or all left where they are
+    // now. A character is drawn into a buffer of its own and again on the
+    // screen, which reads the other where it draws; one pass mixed and the
+    // other not (one of them paired, or jumped, and the other not), the two
+    // did not meet and the character went flat grey, whole or a side of it
+    auto places = [](const std::vector<Vertex> &v) {
+        uint64_t key = v.size();
+        for (const Vertex &x : v) {
+            const float w = x.position[3] > 0 ? x.position[3] : 1;
+            for (int k = 0; k < 3; k++) {
+                const int64_t q = std::llround(double(x.position[k] / w) * 1024);
+                key = (key ^ uint64_t(q)) * 0x100000001B3ull;
+            }
+        }
+        return key;
+    };
+    auto points = [](const Op &op) -> const std::vector<Vertex> & {
+        if (!op.gpu) return op.vertices;
+        if (op.gpu->samples.empty()) op.gpu->samples = sample_positions(*op.gpu);
+        return op.gpu->samples;
+    };
+    std::unordered_map<uint64_t, std::vector<size_t>> alike_now;
     for (size_t i = 0; i < ops_now.size(); i++) {
-        if (lead[i] != i) pairs[i] = pairs[lead[i]], limits[i] = limits[lead[i]];
+        const Op &op = ops_now[i];
+        if (op.kind != Op::Draw) continue;
+        const std::vector<Vertex> &at = points(op);
+        if (!at.empty()) alike_now[places(at) ^ uint64_t(!op.gpu) << 63].push_back(i);
+    }
+    for (auto &[key, list] : alike_now) {
+        if (list.size() < 2) continue;
+        bool mixed = true;
+        uint64_t was = 0;
+        float limit = 1e9f;
+        for (size_t k = 0; k < list.size() && mixed; k++) {
+            const Op *before = pairs[list[k]];
+            if (!before) {
+                mixed = false;
+                break;
+            }
+            const uint64_t here = places(points(*before));
+            mixed = k == 0 || here == was;
+            was = here;
+            limit = std::min(limit, limits[list[k]]);
+        }
+        for (size_t i : list) {
+            if (!mixed) pairs[i] = nullptr;
+            else limits[i] = limit;
+        }
     }
 }
 
