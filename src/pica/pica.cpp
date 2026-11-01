@@ -370,12 +370,36 @@ void Pica::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t
 
 Picture Pica::screen(uint32_t s) {
     const Screen &screen = screens[s & 1];
-    // from the GPU, or what it keeps of it into memory first
+    // what the GPU keeps of it into memory first
     uint32_t stride = screen.stride ? screen.stride : 240 * bytes_per_pixel(screen.format);
-    Picture direct;
-    if (backend && backend->picture(s & 1, screen.address, stride, screen.format, direct)) return direct;
     if (backend) backend->sync(screen.address, stride * (s & 1 ? 320 : 400), false);
     return read_screen(memory, s & 1, screen.address, screen.stride, screen.format);
+}
+
+void Pica::vblank() {
+    vblanks++;
+    if (backend && backend->vblank(*this)) return;
+    Frame frame;
+    frame.number = vblanks;
+    frame.screens[0] = screen(0);
+    frame.screens[1] = screen(1);
+    push_frame(std::move(frame));
+}
+
+void Pica::push_frame(Frame frame) {
+    frame.busy = busy;
+    std::lock_guard g(frames_lock_);
+    frames_.push_back(std::move(frame));
+    // nobody taking them (a run without a window): the oldest go
+    while (frames_.size() > 4) frames_.pop_front();
+}
+
+bool Pica::next_frame(Frame &out) {
+    std::lock_guard g(frames_lock_);
+    if (frames_.empty()) return false;
+    out = std::move(frames_.front());
+    frames_.pop_front();
+    return true;
 }
 
 } // namespace runtime::pica

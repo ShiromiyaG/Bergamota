@@ -6,6 +6,7 @@
 
 #include "runtime/pica.h"
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -24,8 +25,7 @@ public:
     void sync(uint32_t paddr, uint32_t size, bool write) override;
     void fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) override;
     bool display_transfer(const Transfer &transfer) override;
-    bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) override;
-    void frame_done() override;
+    bool vblank(pica::Pica &pica) override;
 
     // counters
     uint64_t draws = 0, triangles = 0, uploads = 0, write_backs = 0, submits = 0;
@@ -33,28 +33,16 @@ public:
     double time_vertices = 0, time_render = 0, time_sync = 0;
     // write-backs by cause: the CPU (guards), the front end, a fill, a texture
     uint64_t write_back_causes[4]{};
-    // how much of each game frame matches the one before, draw for draw (the
-    // ground for interpolated frames): with count_shapes, the frames seen,
-    // their draws, those matched, and those of them that moved
-    bool count_shapes = false;
     // frames drawn between two of the game's, its logic untouched: each
-    // draw's vertices placed between the frame before and this one (1 for
-    // now, halfway). each game frame is drawn again once it is done
-    int between = 0;
-    // a screen of the last frame drawn between, as picture() gives the game's
-    bool picture_between(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out);
-    // the game frame done so far drawn between, before the screens are taken
-    // (frame_done does it otherwise); game_frames counts the frames that went
-    // to a screen screen_rows tall (400 the top one: a display transfer there)
-    void prepare_between(uint32_t screen_rows = 400);
-    uint64_t game_frames = 0;
-    uint64_t frames_seen = 0, draws_seen = 0, draws_matched = 0, draws_moved = 0;
+    // draw's vertices placed halfway between the frame before and this one,
+    // so a scene at 30 shows at 60. 0 or 1; set from any thread, taken at
+    // the next vertical blank
+    std::atomic<int> between{0};
 
     struct Impl;
 
 private:
     std::unique_ptr<Impl> impl_;
-    bool prepared_ = false;
 };
 
 } // namespace runtime

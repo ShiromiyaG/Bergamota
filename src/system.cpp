@@ -214,6 +214,7 @@ bool System::run(const std::function<bool()> &stop) {
             // services signal (the caller's stop() lets it raise them)
             auto wake = kernel.next_wakeup();
             if (config_.virtual_clock) {
+                if (settle && settle()) continue;
                 // a millisecond on at most, so the hardware's events (stop()'s
                 // caller) come in order, or straight to the wakeup
                 constexpr uint64_t MS = CPU_CLOCK_HZ / 1000;

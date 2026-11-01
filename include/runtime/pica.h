@@ -11,6 +11,8 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
+#include <mutex>
 #include <vector>
 
 namespace runtime::pica {
@@ -137,14 +139,10 @@ struct Backend {
         bool flip, out_tiled;
     };
     virtual bool display_transfer(const Transfer &) { return false; }
-    // what a screen shows, straight from the GPU when it is there (a frame
-    // behind, to not wait for it); false to read memory instead
-    virtual bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
-        (void)screen, (void)address, (void)stride, (void)format, (void)out;
-        return false;
-    }
-    // the frontend showed a frame: what was recorded goes to the GPU
-    virtual void frame_done() {}
+    // a vertical blank: the back end takes what the screens show and hands
+    // it to pica.push_frame (a blank later, to not wait for the GPU); false
+    // leaves it to the front end, which reads memory
+    virtual bool vblank(Pica &) { return false; }
 };
 
 class Pica : public Gpu {
@@ -163,13 +161,13 @@ public:
     void framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
                      uint32_t format) override;
     void sync(uint32_t paddr, uint32_t size) override;
+    void vblank() override;
+    bool next_frame(Frame &out) override;
+    // a frame for whoever shows them, from the back end's thread
+    void push_frame(Frame frame);
 
-    // what a screen shows now (from the GPU a frame behind, or from memory)
+    // what a screen shows now, read from memory
     Picture screen(uint32_t screen);
-    // after the screens of a frame were taken
-    void frame_done() {
-        if (backend) backend->frame_done();
-    }
 
     Memory &memory;
     std::array<uint32_t, REGISTERS> regs{};
@@ -188,10 +186,12 @@ public:
     } screens[2];
 
     // counters
-    uint64_t lists = 0, draws = 0, fills = 0, transfers = 0;
+    uint64_t lists = 0, draws = 0, fills = 0, transfers = 0, vblanks = 0;
     double busy = 0; // seconds in command lists and transfers
 
 private:
+    std::mutex frames_lock_;
+    std::deque<Frame> frames_; // shown next, a few at most
     void run(uint32_t paddr, uint32_t size);
     void write(uint32_t reg, uint32_t value, uint32_t mask);
     void flush_immediate();

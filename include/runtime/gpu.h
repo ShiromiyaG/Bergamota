@@ -15,6 +15,21 @@ struct ZGpu; // bridge/zakuro-gpu.h
 
 namespace runtime {
 
+// a screen's picture as it shows now, upright RGBA (400x240 or 320x240)
+struct Picture {
+    uint32_t width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+};
+
+// what both screens showed at a vertical blank, the game's frame or one
+// drawn between two of them (VulkanRenderer::between)
+struct Frame {
+    uint64_t number = 0; // the vertical blank
+    Picture screens[2];
+    bool between = false;
+    double busy = 0; // the GPU's seconds of work so far, for the stats
+};
+
 struct Gpu {
     virtual ~Gpu() = default;
     // the GPU's registers, from 0x1EF00000 (offsets as gsp gets them)
@@ -39,6 +54,12 @@ struct Gpu {
     virtual bool deferred() const { return false; }
     virtual void after(uint8_t) {}
     virtual void take_interrupts(std::vector<uint8_t> &) {}
+    // a vertical blank, in order with the rest: what the screens show now
+    // becomes a frame
+    virtual void vblank() {}
+    // the frames since the last call, oldest first: false when none is
+    // left. any thread may ask
+    virtual bool next_frame(Frame &) { return false; }
 };
 
 class NullGpu : public Gpu {
@@ -56,12 +77,6 @@ public:
 private:
     Memory &memory_;
     uint32_t registers_[0x1000]{}; // the registers games read back
-};
-
-// a screen's picture as it shows now, upright RGBA (400x240 or 320x240)
-struct Picture {
-    uint32_t width = 0, height = 0;
-    std::vector<uint8_t> rgba;
 };
 
 // reads the picture the LCD shows from memory: the 3DS keeps it turned on

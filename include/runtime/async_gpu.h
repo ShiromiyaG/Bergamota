@@ -40,9 +40,14 @@ public:
     bool deferred() const override { return true; }
     void take_interrupts(std::vector<uint8_t> &out) override;
     void after(uint8_t interrupt) override;
+    void vblank() override;
+    // the renderer's frames: they keep their own lock
+    bool next_frame(Frame &out) override { return inner_.next_frame(out); }
 
-    // runs f with the GPU idle and to itself: the screens, the frames between
+    // runs f with the GPU idle and to itself
     void locked(const std::function<void()> &f);
+    // nothing queued, running, or done and not yet taken
+    bool settled();
     // seconds the game's thread waited for the GPU
     double waited = 0;
 

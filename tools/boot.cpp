@@ -12,6 +12,9 @@
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
+//   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
+//   RUNTIME_ASYNC=0         the GPU on the game's thread (on its own by default, as
+//                           in the player)
 
 #include "runtime/decomp.h"
 #include "runtime/fs.h"
@@ -198,9 +201,8 @@ int main(int argc, char **argv) {
             vulkan = std::make_unique<VulkanRenderer>(system.memory);
             if (vulkan->ready()) pica_gpu->backend = vulkan.get();
             else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
-            vulkan->count_shapes = env("RUNTIME_SHAPES") && *env("RUNTIME_SHAPES") == '1';
-            // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's,
-            // saved with the shots as <frame>-between-top.ppm
+            // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's;
+            // the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
         }
 #endif
@@ -208,10 +210,17 @@ int main(int argc, char **argv) {
         handlers.gpu = pica_gpu.get();
         gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
                [&] { return pica_gpu->lists; }};
-        // RUNTIME_ASYNC=1: the GPU on a thread of its own, as the player runs it
-        if (env("RUNTIME_ASYNC") && *env("RUNTIME_ASYNC") == '1') {
+        // the GPU on a thread of its own, as the player runs it; RUNTIME_ASYNC=0
+        // keeps it on the game's
+        if (!(env("RUNTIME_ASYNC") && *env("RUNTIME_ASYNC") == '0')) {
             async = std::make_unique<AsyncGpu>(*pica_gpu, system.memory);
             handlers.gpu = async.get();
+            // on the virtual clock, time waits for it as it waits for the game
+            system.settle = [&] {
+                if (async->settled()) return false;
+                async->locked([] {});
+                return true;
+            };
             gpu.screen = [&](uint32_t s) {
                 Picture p;
                 async->locked([&] { p = pica_gpu->screen(s); });
@@ -220,13 +229,47 @@ int main(int argc, char **argv) {
         }
     }
 
+    auto save = [](const std::string &name, const Picture &p) {
+        std::ofstream out(name, std::ios::binary);
+        out << "P6\n" << p.width << " " << p.height << "\n255\n";
+        for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
+    };
+    // the frames as the player gets them, a vertical blank each: the last
+    // one, and with RUNTIME_SHOTS those due
+    Frame latest;
+    uint64_t next_shot_frame = shot_every;
+    int trail = 0;
+    std::string trail_line;
+    auto take_frames = [&] {
+        Frame f;
+        while (handlers.gpu->next_frame(f)) {
+            if (frames && shots_dir && f.number >= next_shot_frame) {
+                char prefix[512];
+                std::snprintf(prefix, sizeof prefix, "%s/%06llu", shots_dir, (unsigned long long)next_shot_frame);
+                save(std::string(prefix) + "-top.ppm", f.screens[0]);
+                save(std::string(prefix) + "-bottom.ppm", f.screens[1]);
+                next_shot_frame = f.number / shot_every * shot_every + shot_every;
+                // with frames between: the next few frames shown, to see one fall between two
+#ifdef RUNTIME_VULKAN
+                if (vulkan && vulkan->between) trail = env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 8;
+#endif
+                trail_line.clear();
+            } else if (trail > 0) {
+                trail--;
+                char name[512];
+                std::snprintf(name, sizeof name, "%s/%06llu-shown-top.ppm", shots_dir, (unsigned long long)f.number);
+                save(name, f.screens[0]);
+                trail_line += f.between ? " between" : " game";
+                if (!trail) std::printf("frames shown after %llu:%s\n", (unsigned long long)(next_shot_frame - shot_every), trail_line.c_str());
+            }
+            latest = std::move(f);
+        }
+    };
+
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
     auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     int shots = 0;
-    uint64_t shot_frame = 0, shapes_vblank = 0, trail_vblank = 0;
-    int between_trail = 0;
-    uint64_t trail_frames = 0;
-    bool trail_new_before = false;
+    uint64_t sketch_frame = 0;
     bool went_on = system.run([&] {
         auto now = std::chrono::steady_clock::now();
         if (frames) {
@@ -238,63 +281,13 @@ int main(int argc, char **argv) {
             handlers.input.touch.reset();
             if (in.tx >= 0) handlers.input.touch = std::make_pair(uint16_t(in.tx), uint16_t(in.ty));
             handlers.tick(system);
-#ifdef RUNTIME_VULKAN
-            // RUNTIME_SHAPES=1: each frame's draws matched against the last's
-            if (vulkan && (vulkan->count_shapes || vulkan->between) && handlers.vblanks != shapes_vblank) {
-                shapes_vblank = handlers.vblanks;
-                vulkan->frame_done();
+            take_frames();
+            if (sketch && shots_dir && handlers.vblanks >= sketch_frame + shot_every) {
+                sketch_frame = handlers.vblanks / shot_every * shot_every;
+                char prefix[512];
+                std::snprintf(prefix, sizeof prefix, "%s/%06llu-sketch", shots_dir, (unsigned long long)sketch_frame);
+                sketch->save(prefix);
             }
-#endif
-            if (shots_dir && handlers.vblanks >= shot_frame + shot_every) {
-                shot_frame = handlers.vblanks / shot_every * shot_every;
-                if (pica_gpu) pica_gpu->frame_done();
-                if (sketch) {
-                    char prefix[512];
-                    std::snprintf(prefix, sizeof prefix, "%s/%06llu-sketch", shots_dir, (unsigned long long)shot_frame);
-                    sketch->save(prefix);
-                }
-                for (uint32_t screen = 0; screen < 2; screen++) {
-                    Picture p = gpu.screen(screen);
-                    char name[512];
-                    std::snprintf(name, sizeof name, "%s/%06llu-%s.ppm", shots_dir, (unsigned long long)shot_frame,
-                                  screen ? "bottom" : "top");
-                    std::ofstream out(name, std::ios::binary);
-                    out << "P6\n" << p.width << " " << p.height << "\n255\n";
-                    for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&p.rgba[i]), 3);
-                }
-#ifdef RUNTIME_VULKAN
-                if (vulkan && vulkan->between) between_trail = env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 8;
-#endif
-            }
-#ifdef RUNTIME_VULKAN
-            // with frames between: the next few vertical blanks, the game's top
-            // screen and the frame between, to see one fall between two
-            if (vulkan && between_trail && handlers.vblanks != trail_vblank) {
-                trail_vblank = handlers.vblanks;
-                between_trail--;
-                const auto &top = pica_gpu->screens[0];
-                uint32_t stride = top.stride ? top.stride : 240 * pica::bytes_per_pixel(top.format);
-                Picture shots_of[3];
-                shots_of[0] = gpu.screen(0);
-                vulkan->picture_between(0, top.address, stride, top.format, shots_of[1]);
-                // what the player shows: the frame between on the tick a new
-                // game frame comes, the game's the tick after (frontend/player.cpp)
-                bool new_frame = vulkan->game_frames != trail_frames;
-                trail_frames = vulkan->game_frames;
-                bool show_between = new_frame && !trail_new_before && !shots_of[1].rgba.empty();
-                trail_new_before = new_frame;
-                shots_of[2] = shots_of[show_between ? 1 : 0];
-                for (int k = 0; k < 3; k++) {
-                    if (shots_of[k].rgba.empty()) continue;
-                    char name[512];
-                    std::snprintf(name, sizeof name, "%s/%06llu-%s-top.ppm", shots_dir, (unsigned long long)handlers.vblanks,
-                                  k == 2 ? "shown" : k ? "between" : "game");
-                    std::ofstream out(name, std::ios::binary);
-                    out << "P6\n" << shots_of[k].width << " " << shots_of[k].height << "\n255\n";
-                    for (size_t i = 0; i < shots_of[k].rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&shots_of[k].rgba[i]), 3);
-                }
-            }
-#endif
             // seconds given with RUNTIME_FRAMES: a hung run still stops and says where it is
             return handlers.vblanks >= frames || (argc > 4 && seconds > 0 && now >= until);
         }
@@ -302,21 +295,22 @@ int main(int argc, char **argv) {
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
         handlers.tick(system);
+        take_frames();
         // both screens to a picture every five seconds
         if (now > next_shot) {
             next_shot = now + std::chrono::seconds(5);
             for (uint32_t screen = 0; screen < 2; screen++) {
-                Picture p = gpu.screen(screen);
                 char name[64];
                 std::snprintf(name, sizeof name, "shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
-                std::ofstream out(name, std::ios::binary);
-                out << "P6\n" << p.width << " " << p.height << "\n255\n";
-                for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<char *>(&p.rgba[i]), 3);
+                save(name, latest.number ? latest.screens[screen] : gpu.screen(screen));
             }
             shots++;
         }
         return now > until;
     });
+    // the frames still on their way
+    if (async) async->locked([] {});
+    take_frames();
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
     if (async) std::printf("the game waited %.1f s for the GPU's thread\n", async->waited);
@@ -344,11 +338,6 @@ int main(int argc, char **argv) {
         std::printf("write-backs: cpu %llu, front end %llu, fill %llu, texture %llu\n", (unsigned long long)vulkan->write_back_causes[0],
                     (unsigned long long)vulkan->write_back_causes[1], (unsigned long long)vulkan->write_back_causes[2],
                     (unsigned long long)vulkan->write_back_causes[3]);
-        if (vulkan->count_shapes && vulkan->draws_seen) {
-            std::printf("frames: %llu, draws matched to the frame before %.1f%%, of them moving %.1f%%\n",
-                        (unsigned long long)vulkan->frames_seen, 100.0 * vulkan->draws_matched / vulkan->draws_seen,
-                        vulkan->draws_matched ? 100.0 * vulkan->draws_moved / vulkan->draws_matched : 0.0);
-        }
     }
 #endif
     if (sketch) {

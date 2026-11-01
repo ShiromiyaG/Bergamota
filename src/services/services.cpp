@@ -428,6 +428,7 @@ void Services::tick(System &system) {
         if (now >= gsp_.next_vblank) {
             gsp_.next_vblank = std::max(gsp_.next_vblank + FRAME, now);
             gsp_refresh(system);
+            gpu->vblank();
             vblanks++;
             hid_update(system);
             gsp_interrupt(system, 2); // top screen

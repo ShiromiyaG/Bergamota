@@ -114,6 +114,7 @@ struct Buffer {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     uint8_t *mapped = nullptr;
     VkDeviceSize size = 0;
+    bool read = false; // cached on the CPU's side, for reading back
 };
 
 struct VulkanRenderer::Impl {
@@ -139,14 +140,6 @@ struct VulkanRenderer::Impl {
     int current = 0;
     VkCommandBuffer cmd = VK_NULL_HANDLE; // the current slot's
     uint64_t submitted = 0;               // submissions so far; the next one is submitted + 1
-    // each screen read back into two buffers in turn: a copy is recorded
-    // into one, the last one recorded is read once its submission ran
-    struct ScreenCopy {
-        Buffer buffers[2];
-        uint64_t serial[2]{}; // the submission each copy went with, 0 for none
-        uint32_t size[2][2]{};
-        int next = 0;
-    } screen_copies[2];
     VkFormat depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
     VkPhysicalDeviceMemoryProperties memory_props{};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors = nullptr;
@@ -186,56 +179,18 @@ struct VulkanRenderer::Impl {
     pica::LightTables light_tables{};
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
-    // frames drawn between the game's (interpolation): each draw of a frame
-    // matched to the previous frame's, by its place among the draws to the
-    // same target with as many vertices. for now only counted, to see how
-    // much of a frame would interpolate
-    struct DrawShape {
-        uint32_t target;
-        size_t vertices;
-        std::vector<Vec4> positions;
-    };
-    std::vector<DrawShape> shapes_before, shapes_now;
-
-    void note_shape(uint32_t target) {
-        DrawShape shape{target, triangles.size(), {}};
-        shape.positions.reserve(triangles.size());
-        for (const Vertex &v : triangles) shape.positions.push_back(v.position);
-        shapes_now.push_back(std::move(shape));
-    }
-
-    // a game frame drawn: its draws matched against the one before
-    void shapes_done() {
-        if (shapes_now.empty()) return;
-        self.frames_seen++;
-        size_t from = 0;
-        for (const DrawShape &now : shapes_now) {
-            self.draws_seen++;
-            // the same place in the order, or a little further on: a draw
-            // added or dropped shifts the rest
-            for (size_t i = from; i < shapes_before.size() && i < from + 16; i++) {
-                const DrawShape &before = shapes_before[i];
-                if (before.target != now.target || before.vertices != now.vertices) continue;
-                self.draws_matched++;
-                if (std::memcmp(before.positions.data(), now.positions.data(), now.vertices * sizeof(Vec4)) != 0) {
-                    self.draws_moved++;
-                }
-                from = i + 1;
-                break;
-            }
-        }
-        shapes_before = std::move(shapes_now);
-        shapes_now.clear();
-    }
-
     // -- frames between the game's ----------------------------------------------
-    // each game frame's draws, fills and transfers are kept; once it is done
-    // they are drawn again into each buffer's `between` image, every vertex
-    // placed between where the frame before and this one put it (a draw
-    // matched as shapes_done matches them). the game's logic is untouched
-    int between = 0; // frames drawn between two of the game's, 0 for none
+    // each game frame's draws, fills and transfers are kept; when the frame
+    // ends (its display transfer into a top screen buffer, frame_end) they
+    // are drawn again into each buffer's `between` image, every vertex
+    // placed halfway between where the frame before and this one put it.
+    // the next vertical blank shows that picture, the one after the game's
+    // own (vblank). the game's logic is untouched
+    int between = 0; // self.between, taken at each vertical blank
     bool replaying = false;
     const VkImageView *forced_views = nullptr;
+    // in a replay, a buffer read as a texture is read from its between image
+    std::unordered_map<VkImageView, VkImageView> between_views;
     Pica *last_pica = nullptr;
     using Tables = std::array<std::array<uint32_t, 256>, 32>;
     struct Op {
@@ -247,14 +202,19 @@ struct VulkanRenderer::Impl {
         uint64_t tables_version;
         std::array<uint32_t, 4> fill; // start, end, value, width
         Backend::Transfer transfer;
+        uint64_t look = 0; // the textures and the combiners: two draws alike in them are the same thing
     };
     std::vector<Op> ops_now;
     std::map<uint32_t, std::vector<Op>> draws_before; // by target: the last frame's that drew it
+    std::vector<Image> dead_held; // let go during a frame whose ops still use them
     std::shared_ptr<const Tables> tables_kept;
     uint64_t tables_kept_version = ~0ull;
-    // screens read back from the frames between, as screen_copies are
-    ScreenCopy between_copies[2];
-    ScreenCopy *copies = nullptr; // which picture() reads into, null for screen_copies
+    uint64_t blanks = 0, top_blank = 0; // vertical blanks so far, and at the last frame for the top screen
+    uint64_t top_frames = 0, top_frames_shown = 0;
+    uint32_t top_output = 0, top_shown = 0; // the buffer the last frame went to, the one the top screen showed
+    bool new_before = false;
+    bool between_ready = false; // the last frame was drawn between, into the buffer at between_address
+    uint32_t between_address = 0;
 
     void note_draw(Pica &p, const VkImageView *views) {
         last_pica = &p;
@@ -262,36 +222,69 @@ struct VulkanRenderer::Impl {
             tables_kept = std::make_shared<const Tables>(p.light_tables);
             tables_kept_version = p.tables_version;
         }
+        // the six combiner stages without their constant colors (fades move
+        // those), and the textures
+        static constexpr uint32_t STAGES[6] = {0x0C0, 0x0C8, 0x0D0, 0x0D8, 0x0F0, 0x0F8};
+        uint64_t look[13] = {};
+        for (int i = 0; i < 6; i++) {
+            const uint32_t *r = &p.regs[STAGES[i]];
+            look[i * 2] = r[0] | uint64_t(r[1]) << 32;
+            look[i * 2 + 1] = r[2] | uint64_t(r[4]) << 32;
+        }
+        look[12] = p.regs[COLOR_OPERATION];
         Op op{Op::Draw, std::vector<uint32_t>(p.regs.begin(), p.regs.end()), triangles, {views[0], views[1], views[2]},
               tables_kept, p.tables_version, {}, {}};
+        op.look = hash_bytes(reinterpret_cast<const uint8_t *>(look), sizeof look) ^
+                  hash_bytes(reinterpret_cast<const uint8_t *>(views), 3 * sizeof(VkImageView)) * 3;
         ops_now.push_back(std::move(op));
     }
 
     static uint32_t op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
+    // where a draw of the frame before went: the next one to the same target
+    // made of the same (vertices, textures, combiners), a little on at most
+    static const Op *match(const std::vector<Op> &list, size_t &from, const Op &op) {
+        for (size_t i = from; i < list.size() && i < from + 48; i++) {
+            if (list[i].vertices.size() != op.vertices.size() || list[i].look != op.look) continue;
+            from = i + 1;
+            return &list[i];
+        }
+        return nullptr;
+    }
+
+    // a pair that jumps (more than a quarter of the screen, or across the
+    // eye) is not the same thing moving: drawn where it is now
+    static bool jumps(const Op &before, const Op &now) {
+        for (size_t i = 0; i < now.vertices.size(); i++) {
+            const Vec4 &a = before.vertices[i].position, &b = now.vertices[i].position;
+            if ((a[3] > 0) != (b[3] > 0) || a[3] == 0 || b[3] == 0) return true;
+            if (std::abs(a[0] / a[3] - b[0] / b[3]) > 0.5f || std::abs(a[1] / a[3] - b[1] / b[3]) > 0.5f) return true;
+        }
+        return false;
+    }
+
     // the game frame just drawn, drawn again at t (0 the frame before, 1
     // this one) into the between images
     void draw_between(float t) {
-        if (!last_pica || ops_now.empty()) return;
         Pica &p = *last_pica;
         end_rendering();
-        // each buffer's between image, starting from what the game's holds
+        // each buffer's between image starts from what the game's holds, its
+        // depth and stencil too
         struct Kept {
             bool dirty, stale;
             uint64_t version, converted;
         };
-        // every buffer starts from the game's: drawn again only on a tick the
-        // top screen got a new frame, the frame between is that frame's
         std::vector<Kept> kept;
+        between_views.clear();
         for (auto &s : surfaces) {
             kept.push_back({s->dirty, s->stale, s->version, s->converted});
             if (!s->between.image) s->between = image(s->width, s->height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
-            if (!s->depth) {
-                VkImageCopy c{};
-                c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                c.extent = {s->width, s->height, 1};
-                vkCmdCopyImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
-            }
+            VkImageCopy c{};
+            c.srcSubresource = c.dstSubresource = {
+                VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
+            c.extent = {s->width, s->height, 1};
+            vkCmdCopyImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+            between_views[s->image.view] = s->between.view;
             std::swap(s->image, s->between);
         }
         barrier();
@@ -299,8 +292,6 @@ struct VulkanRenderer::Impl {
         auto tables = p.light_tables;
         uint64_t tables_version = p.tables_version;
         replaying = true;
-        // the draws matched to the frame before: the same place in the order
-        // among those to the same target with as many vertices, or a little on
         std::map<uint32_t, size_t> matched_from;
         for (Op &op : ops_now) {
             if (op.kind == Op::Fill) {
@@ -311,21 +302,11 @@ struct VulkanRenderer::Impl {
                 transfer(op.transfer);
                 continue;
             }
-            // matched among the draws the last frame to draw this target made
             const Op *before = nullptr;
             auto last = draws_before.find(op_target(op));
-            size_t &from = matched_from[op_target(op)];
-            if (last != draws_before.end()) {
-                const std::vector<Op> &list = last->second;
-                for (size_t i = from; i < list.size() && i < from + 48; i++) {
-                    if (list[i].vertices.size() != op.vertices.size()) continue;
-                    before = &list[i];
-                    from = i + 1;
-                    break;
-                }
-            }
+            if (last != draws_before.end()) before = match(last->second, matched_from[op_target(op)], op);
             triangles = op.vertices;
-            if (before) {
+            if (before && !jumps(*before, op)) {
                 for (size_t i = 0; i < triangles.size(); i++) {
                     const Vec4 &a = before->vertices[i].position, &b = op.vertices[i].position;
                     for (int k = 0; k < 4; k++) triangles[i].position[k] = a[k] + (b[k] - a[k]) * t;
@@ -334,7 +315,12 @@ struct VulkanRenderer::Impl {
             std::copy(op.regs.begin(), op.regs.end(), p.regs.begin());
             if (op.tables) p.light_tables = *op.tables;
             p.tables_version = op.tables_version;
-            forced_views = op.views.data();
+            VkImageView views[3];
+            for (int u = 0; u < 3; u++) {
+                auto it = between_views.find(op.views[u]);
+                views[u] = it != between_views.end() ? it->second : op.views[u];
+            }
+            forced_views = views;
             render(p);
         }
         end_rendering();
@@ -351,35 +337,152 @@ struct VulkanRenderer::Impl {
         barrier();
     }
 
-    // a game frame done: drawn between, then kept as the frame before
-    // top: the top screen got a frame this tick (a transfer into it); only
-    // then is a frame drawn between, the bottom screen running at its own rate
-    void frame_between(bool top) {
-        if (ops_now.empty()) return;
+    // a frame for the top screen ended in a transfer into output: drawn
+    // between when it came two blanks or more after the one before (a scene
+    // at 60 needs none), then kept as the frame before
+    void frame_end(uint32_t output) {
+        top_frames++;
+        top_output = output;
+        bool slow = blanks - top_blank >= 2;
+        top_blank = blanks;
+        between_ready = false;
         bool drew = std::any_of(ops_now.begin(), ops_now.end(), [](const Op &op) { return op.kind == Op::Draw; });
-        if (drew && top) draw_between(0.5f);
+        if (drew && slow && last_pica) {
+            draw_between(0.5f);
+            between_ready = true;
+            between_address = output;
+        }
         // each target's draws, as the next frame to draw it matches them
         std::map<uint32_t, std::vector<Op>> drawn;
         for (Op &op : ops_now) {
             if (op.kind == Op::Draw) drawn[op_target(op)].push_back(std::move(op));
         }
         for (auto &[target, list] : drawn) draws_before[target] = std::move(list);
-        ops_now.clear();
+        drop_ops();
     }
 
-    // a screen as the last frame between showed it, read back a frame behind
-    // as picture() reads the game's
-    bool picture_between(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
-        for (auto &s : surfaces) {
-            if (!s->between.image) return false;
-        }
-        for (auto &s : surfaces) std::swap(s->image, s->between);
-        copies = between_copies;
-        bool got = picture(screen, address, stride, format, out);
-        copies = nullptr;
-        for (auto &s : surfaces) std::swap(s->image, s->between);
-        return got;
+    void drop_ops() {
+        ops_now.clear();
+        dead.insert(dead.end(), dead_held.begin(), dead_held.end());
+        dead_held.clear();
     }
+
+    // an image let go: kept while a frame's ops may still draw with it
+    void let_go(const Image &i) { (between && !replaying ? dead_held : dead).push_back(i); }
+
+    // -- the screens, a frame each vertical blank ------------------------------
+    // what each screen shows is copied at a blank and read at the next, when
+    // the GPU is long done with it, then handed on as a Frame
+    struct Shown {
+        Buffer buffers[2];
+        uint32_t size[2][2]{};
+        bool on_gpu[2]{};
+        Picture from_memory[2];
+        uint64_t number = 0, serial = 0;
+        bool between = false, pending = false;
+    } shown;
+
+    // the framebuffer a screen shows, when it is on the GPU
+    Surface *framebuffer(uint32_t address, uint32_t stride) {
+        Surface *fb = nullptr;
+        for (auto &s : surfaces) {
+            if (s->linear && !s->stale && !s->depth && s->address == address && s->width * bytes_per_pixel(s->format) == stride) fb = s.get();
+        }
+        return fb && fb->width <= 240 && fb->height <= 400 ? fb : nullptr;
+    }
+
+    bool vblank(Pica &p) {
+        blanks++;
+        if (int want = self.between.load(); want != between) {
+            // switched: nothing kept from before
+            between = want;
+            drop_ops();
+            draws_before.clear();
+            between_ready = false;
+        }
+        // no frame for the top screen in a while (only the bottom one drawn):
+        // nothing to draw between
+        if (!ops_now.empty() && blanks - top_blank > 8) drop_ops();
+        finish_shown(p);
+
+        // the frame between on the blank a new frame shows (the one from the
+        // frame before to it), the game's own on the next; two new ones in a
+        // row (a scene at 60) show the game's. a new frame shows when the
+        // screen moves to another buffer (a blank or more after its transfer),
+        // or when the buffer it shows got one
+        uint32_t top = p.screens[0].address;
+        bool into_shown = top_frames != top_frames_shown && top_output == top;
+        bool new_frame = top != top_shown || into_shown;
+        top_frames_shown = top_frames;
+        top_shown = top;
+        bool use_between = between_ready && new_frame && !new_before && top == between_address;
+        new_before = new_frame;
+
+        end_rendering();
+        for (uint32_t screen = 0; screen < 2; screen++) {
+            const Pica::Screen &at = p.screens[screen];
+            uint32_t stride = at.stride ? at.stride : 240 * bytes_per_pixel(at.format);
+            Surface *fb = framebuffer(at.address, stride);
+            shown.on_gpu[screen] = fb != nullptr;
+            if (!fb) {
+                // drawn by the CPU, or not yet: memory has it
+                sync(at.address, stride * (screen ? 320 : 400), false);
+                shown.from_memory[screen] = read_screen(memory, screen, at.address, at.stride, at.format);
+                continue;
+            }
+            const Image &from = screen == 0 && use_between && fb->between.image ? fb->between : fb->image;
+            VkBufferImageCopy c{};
+            c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.imageExtent = {fb->width, fb->height, 1};
+            vkCmdCopyImageToBuffer(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, shown.buffers[screen].buffer, 1, &c);
+            shown.size[screen][0] = fb->width, shown.size[screen][1] = fb->height;
+        }
+        barrier();
+        shown.number = p.vblanks;
+        shown.between = use_between;
+        shown.pending = true;
+        submit(false);
+        shown.serial = submitted;
+        return true;
+    }
+
+    // the copies of the blank before, done by now as a rule (waited for
+    // otherwise), as a frame
+    void finish_shown(Pica &p) {
+        if (!shown.pending) return;
+        shown.pending = false;
+        for (Slot &slot : slots) {
+            if (slot.pending && slot.serial <= shown.serial) retire(slot);
+        }
+        Frame frame;
+        frame.number = shown.number;
+        frame.between = shown.between;
+        for (uint32_t screen = 0; screen < 2; screen++) {
+            Picture &out = frame.screens[screen];
+            if (!shown.on_gpu[screen]) {
+                out = std::move(shown.from_memory[screen]);
+                continue;
+            }
+            uint32_t w = shown.size[screen][0], h = shown.size[screen][1];
+            out.width = screen ? 320 : 400;
+            out.height = 240;
+            out.rgba.assign(out.width * out.height * 4, 0);
+            // the framebuffer is the screen turned on its side: a screen column
+            // is a row of it, bottom to top
+            const uint8_t *src = shown.buffers[screen].mapped;
+            for (uint32_t x = 0; x < out.width && x < h; x++) {
+                for (uint32_t y = 0; y < out.height && y < w; y++) {
+                    const uint8_t *px = src + (size_t(x) * w + (w - 1 - y)) * 4;
+                    uint8_t *d = &out.rgba[(size_t(y) * out.width + x) * 4];
+                    d[0] = px[0], d[1] = px[1], d[2] = px[2], d[3] = 255;
+                }
+            }
+        }
+        p.push_frame(std::move(frame));
+    }
+
+    // RUNTIME_VK_DEBUG, read once
+    const bool debug = std::getenv("RUNTIME_VK_DEBUG") != nullptr;
 
     Impl(VulkanRenderer &s, Memory &m) : self(s), memory(m) {}
 
@@ -486,11 +589,7 @@ struct VulkanRenderer::Impl {
             s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
         }
-        for (ScreenCopy *set : {screen_copies, between_copies}) {
-            for (int i = 0; i < 2; i++) {
-                for (Buffer &b : set[i].buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
-            }
-        }
+        for (Buffer &b : shown.buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
         cmd = slots[0].cmd;
         vertices = slots[0].vertices;
         uniforms = slots[0].uniforms;
@@ -569,7 +668,30 @@ struct VulkanRenderer::Impl {
         vkAllocateMemory(device, &ai, nullptr, &b.memory);
         vkBindBufferMemory(device, b.buffer, b.memory, 0);
         vkMapMemory(device, b.memory, 0, size, 0, reinterpret_cast<void **>(&b.mapped));
+        b.read = read;
         return b;
+    }
+
+    // a staging buffer: a spare one that fits, else a new one (sizes in
+    // powers of two, so they fit again)
+    std::vector<Buffer> spare;
+    Buffer staging_buffer(VkDeviceSize size, bool read) {
+        int best = -1;
+        for (int i = 0; i < int(spare.size()); i++) {
+            if (spare[i].read == read && spare[i].size >= size && (best < 0 || spare[i].size < spare[best].size)) best = i;
+        }
+        if (best >= 0) {
+            Buffer b = spare[best];
+            spare.erase(spare.begin() + best);
+            return b;
+        }
+        VkDeviceSize rounded = std::bit_ceil(std::max<VkDeviceSize>(size, 64 << 10));
+        return buffer(rounded, read ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : VK_BUFFER_USAGE_TRANSFER_SRC_BIT, read);
+    }
+    void give_back(Buffer &b) {
+        if (!b.buffer) return;
+        if (spare.size() < 32) spare.push_back(b), b = {};
+        else destroy(b);
     }
 
     void destroy(Buffer &b) {
@@ -674,7 +796,7 @@ struct VulkanRenderer::Impl {
         if (!s.pending) return;
         vkWaitForFences(device, 1, &s.fence, VK_TRUE, UINT64_MAX);
         vkResetFences(device, 1, &s.fence);
-        for (Buffer &b : s.staging) destroy(b);
+        for (Buffer &b : s.staging) give_back(b);
         s.staging.clear();
         for (Image &i : s.dead) destroy(i);
         s.dead.clear();
@@ -713,71 +835,6 @@ struct VulkanRenderer::Impl {
         begin();
     }
 
-    // a screen, read back from its framebuffer on the GPU a frame behind:
-    // the copy goes with this frame, the picture is the last frame's
-    bool picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
-        if (std::getenv("RUNTIME_VK_NO_PICTURE")) return false;
-        Surface *fb = nullptr;
-        for (auto &s : surfaces) {
-            if (s->linear && !s->stale && !s->depth && s->address == address && s->width * bytes_per_pixel(s->format) == stride) fb = s.get();
-        }
-        if (!fb || fb->width > 240 || fb->height > 400) {
-            static int shown = 0;
-            if (std::getenv("RUNTIME_VK_DEBUG") && shown++ < 6) {
-                std::fprintf(stderr, "picture %u at %08X stride %u fmt %u:", screen, address, stride, format);
-                for (auto &s : surfaces)
-                    if (overlaps(s->address, s->bytes(), address, stride * 400))
-                        std::fprintf(stderr, " [%08X %ux%u f%u lin%d stale%d dirty%d]", s->address, s->width, s->height, s->format, s->linear, s->stale, s->dirty);
-                std::fprintf(stderr, "%s", "\n");
-            }
-            return false;
-        }
-        (void)format;
-        if (std::getenv("RUNTIME_VK_DEBUG")) {
-            static int calls = 0;
-            calls++;
-            if (screen == 0 && calls > 200 && calls < 212) {
-                std::fprintf(stderr, "picture call %d: fb %08X %ux%u f%u dirty%d; others:", calls, fb->address, fb->width, fb->height,
-                             fb->format, fb->dirty);
-                for (auto &o : surfaces) std::fprintf(stderr, " [%08X %ux%u lin%d stale%d dirty%d]", o->address, o->width, o->height, o->linear, o->stale, o->dirty);
-                std::fprintf(stderr, "%s", "\n");
-            }
-        }
-        end_rendering();
-        ScreenCopy &sc = (copies ? copies : screen_copies)[screen];
-        int now = sc.next, last = now ^ 1;
-        sc.next = last;
-        VkBufferImageCopy c{};
-        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.imageExtent = {fb->width, fb->height, 1};
-        vkCmdCopyImageToBuffer(cmd, fb->image.image, VK_IMAGE_LAYOUT_GENERAL, sc.buffers[now].buffer, 1, &c);
-        barrier();
-        sc.serial[now] = submitted + 1;
-        sc.size[now][0] = fb->width, sc.size[now][1] = fb->height;
-        // the copy before: its submission done by now, as a rule (frame_done
-        // sent it a frame ago), waited for otherwise
-        if (!sc.serial[last]) return false;
-        if (sc.serial[last] > submitted) submit(true);
-        for (Slot &slot : slots) {
-            if (slot.pending && slot.serial <= sc.serial[last]) retire(slot);
-        }
-        uint32_t w = sc.size[last][0], h = sc.size[last][1];
-        out.width = screen ? 320 : 400;
-        out.height = 240;
-        out.rgba.assign(out.width * out.height * 4, 0);
-        // the framebuffer is the screen turned on its side: a screen column is
-        // a row of it, bottom to top
-        const uint8_t *src = sc.buffers[last].mapped;
-        for (uint32_t x = 0; x < out.width && x < h; x++) {
-            for (uint32_t y = 0; y < out.height && y < w; y++) {
-                const uint8_t *p = src + (size_t(x) * w + (w - 1 - y)) * 4;
-                uint8_t *d = &out.rgba[(size_t(y) * out.width + x) * 4];
-                d[0] = p[0], d[1] = p[1], d[2] = p[2], d[3] = 255;
-            }
-        }
-        return true;
-    }
-
     // room in a ring, submitting what is there when it runs out
     VkDeviceSize take(Buffer &ring, VkDeviceSize &at, VkDeviceSize size, VkDeviceSize align) {
         at = (at + align - 1) / align * align;
@@ -790,7 +847,7 @@ struct VulkanRenderer::Impl {
     // -- moving pixels between memory and images ------------------------------
 
     void copy_in(Image &i, const void *bytes, VkDeviceSize size, VkImageAspectFlags aspect) {
-        Buffer b = buffer(size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        Buffer b = staging_buffer(size, false);
         std::memcpy(b.mapped, bytes, size);
         end_rendering();
         VkBufferImageCopy c{};
@@ -848,14 +905,14 @@ struct VulkanRenderer::Impl {
         auto started = std::chrono::steady_clock::now();
         uint32_t w = s.width, h = s.height;
         VkDeviceSize texels = VkDeviceSize(w) * h;
-        Buffer a = buffer(texels * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true), b{};
+        Buffer a = staging_buffer(texels * 4, true), b{};
         end_rendering();
         VkBufferImageCopy c{};
         c.imageSubresource = {VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
         c.imageExtent = {w, h, 1};
         vkCmdCopyImageToBuffer(cmd, s.image.image, VK_IMAGE_LAYOUT_GENERAL, a.buffer, 1, &c);
         if (s.depth) {
-            b = buffer(texels, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+            b = staging_buffer(texels, true);
             c.imageSubresource.aspectMask = VK_IMAGE_ASPECT_STENCIL_BIT;
             vkCmdCopyImageToBuffer(cmd, s.image.image, VK_IMAGE_LAYOUT_GENERAL, b.buffer, 1, &c);
         }
@@ -889,11 +946,11 @@ struct VulkanRenderer::Impl {
                 }
             }
         }
-        destroy(a);
-        destroy(b);
+        give_back(a);
+        give_back(b);
         s.dirty = false;
         self.write_backs++;
-        if (std::getenv("RUNTIME_VK_DEBUG")) {
+        if (debug) {
             static int shown = 0;
             if (shown++ < 30) {
                 std::fprintf(stderr, "write-back %08X %ux%u f%u depth %d linear %d cause %d: %.1f ms\n", s.address, s.width, s.height,
@@ -943,9 +1000,9 @@ struct VulkanRenderer::Impl {
             }
             if (s.dirty) write_back(s);
             if (color_target == &s || depth_target == &s) end_rendering();
-            dead.push_back(s.image);
-            if (s.as_color.image) dead.push_back(s.as_color);
-            if (s.between.image) dead.push_back(s.between);
+            let_go(s.image);
+            if (s.as_color.image) let_go(s.as_color);
+            if (s.between.image) let_go(s.between);
             surfaces.erase(surfaces.begin() + i);
         }
         auto s = std::make_unique<Surface>(fresh);
@@ -963,6 +1020,7 @@ struct VulkanRenderer::Impl {
             if (!overlaps(s->address, s->bytes(), start, end - start)) continue;
             bool whole = start <= s->address && end >= s->address + s->bytes() && !s->linear;
             if (!whole) {
+                if (replaying) continue; // memory is the game's, not the frame between's
                 if (s->dirty) write_back(*s);
                 if (color_target == s.get() || depth_target == s.get()) end_rendering();
                 s->stale = true;
@@ -1007,7 +1065,7 @@ struct VulkanRenderer::Impl {
         }
         if (!in || !in->dirty) {
             static int shown = 0;
-            if (std::getenv("RUNTIME_VK_DEBUG") && shown++ < 12) {
+            if (debug && shown++ < 12) {
                 std::fprintf(stderr, "transfer %08X %ux%u -> %08X %ux%u fmt %u tiled %d:", t.input, t.in_width, t.in_height, t.output,
                              t.out_width, t.out_height, t.out_format, t.out_tiled);
                 for (auto &s : surfaces) {
@@ -1037,6 +1095,8 @@ struct VulkanRenderer::Impl {
         barrier();
         out->dirty = true;
         guard(*out);
+        // a frame for the top screen (240x400) is done
+        if (between && !replaying && t.out_height == 400) frame_end(t.output);
         return true;
     }
 
@@ -1087,7 +1147,7 @@ struct VulkanRenderer::Impl {
             }
         }
         size_t size = size_t(w) * h * texture_bits(format) / 8;
-        if (std::getenv("RUNTIME_VK_DEBUG")) {
+        if (debug) {
             static int shown = 0;
             for (auto &s : surfaces) {
                 if (s->dirty && overlaps(s->address, s->bytes(), address, uint32_t(size)) && shown++ < 10)
@@ -1248,17 +1308,12 @@ struct VulkanRenderer::Impl {
         bool use_depth = depth_address && (depth_test || depth_write || stencil);
 
         // what the draw reads first, outside a pass
-        auto t0 = std::chrono::steady_clock::now();
         VkImageView views[3];
         for (int u = 0; u < 3; u++) views[u] = forced_views ? forced_views[u] : texture(p, u);
-        auto t1 = std::chrono::steady_clock::now();
         Surface *color = surface(color_address, w, h, (r[COLOR_BUFFER_FORMAT] >> 16) & 7, false);
         Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
         if (!color) return;
         if (between && !replaying) note_draw(p, views);
-        auto t2 = std::chrono::steady_clock::now();
-        part[0] += std::chrono::duration<double>(t1 - t0).count();
-        part[1] += std::chrono::duration<double>(t2 - t1).count();
         // a texture that is this pass's target cannot be read inside it
         if (rendering && (color_target != color || depth_target != depth)) end_rendering();
 
@@ -1385,7 +1440,6 @@ struct VulkanRenderer::Impl {
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.triangles += triangles.size() / 3;
-        if (self.count_shapes) note_shape(color_address);
 
         // drawn: memory is behind until written back, which the CPU asks for
         // through the guards
@@ -1399,8 +1453,6 @@ struct VulkanRenderer::Impl {
         }
     }
 
-    double part[2]{}; // textures, surfaces
-
     void guard(Surface &s) {
         if (replaying) return;
         uint32_t paddr = s.address, size = s.bytes();
@@ -1412,19 +1464,17 @@ struct VulkanRenderer::Impl {
 
     void shutdown() {
         if (!device) return;
-        if (std::getenv("RUNTIME_VK_DEBUG")) std::fprintf(stderr, "render parts: textures %.1f s, surfaces %.1f s\n", part[0], part[1]);
         vkDeviceWaitIdle(device);
         for (auto &s : surfaces) destroy(s->image), destroy(s->as_color), destroy(s->between);
+        for (Image &i : dead_held) destroy(i);
+        for (Image &i : dead) destroy(i);
+        for (Buffer &b : spare) destroy(b);
         for (auto &[k, t] : textures) destroy(t.image);
         destroy(blank);
         for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
         for (auto &[k, s] : samplers) vkDestroySampler(device, s, nullptr);
         for (Buffer &b : staging) destroy(b);
-        for (ScreenCopy *set : {screen_copies, between_copies}) {
-            for (int i = 0; i < 2; i++) {
-                for (Buffer &b : set[i].buffers) destroy(b);
-            }
-        }
+        for (Buffer &b : shown.buffers) destroy(b);
         for (Slot &s : slots) {
             s.pending = true;
             vkResetFences(device, 1, &s.fence);
@@ -1497,35 +1547,7 @@ void VulkanRenderer::fill(uint32_t start, uint32_t end, uint32_t value, uint32_t
     time_sync += since(t);
 }
 
-void VulkanRenderer::frame_done() {
-    if (!ready()) return;
-    if (count_shapes) impl_->shapes_done();
-    if (!prepared_) prepare_between(400);
-    prepared_ = false;
-    impl_->submit(false);
-}
-
-void VulkanRenderer::prepare_between(uint32_t screen_rows) {
-    if (!ready()) return;
-    impl_->between = between;
-    prepared_ = true;
-    if (!between) return;
-    // a new frame for the screen: a transfer into a buffer its size (its
-    // two buffers take turns; the other screen may be drawn at another rate)
-    bool shown = std::any_of(impl_->ops_now.begin(), impl_->ops_now.end(), [&](const Impl::Op &op) {
-        return op.kind == Impl::Op::Transfer && op.transfer.out_height == screen_rows;
-    });
-    impl_->frame_between(shown);
-    if (shown) game_frames++;
-}
-
-bool VulkanRenderer::picture_between(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
-    return ready() && between && impl_->picture_between(screen, address, stride, format, out);
-}
-
-bool VulkanRenderer::picture(uint32_t screen, uint32_t address, uint32_t stride, uint32_t format, Picture &out) {
-    return ready() && impl_->picture(screen, address, stride, format, out);
-}
+bool VulkanRenderer::vblank(Pica &p) { return ready() && impl_->vblank(p); }
 
 bool VulkanRenderer::display_transfer(const Transfer &transfer) {
     auto t = clock::now();

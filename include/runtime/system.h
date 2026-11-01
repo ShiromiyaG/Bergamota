@@ -52,6 +52,10 @@ public:
     // runs threads until stop() says to, every thread blocks, or the
     // process ends; false when it ended or could not go on
     bool run(const std::function<bool()> &stop);
+    // with the virtual clock and every thread waiting: work beside the game
+    // that will wake one (a GPU on its own thread) is let finish before time
+    // moves on; true when there was some
+    std::function<bool()> settle;
 
     // the time, in CPU ticks: the host's clock since boot, or the virtual one
     uint64_t ticks() override;

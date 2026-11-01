@@ -80,6 +80,11 @@ void AsyncGpu::locked(const std::function<void()> &f) {
     f();
 }
 
+bool AsyncGpu::settled() {
+    std::lock_guard g(lock_);
+    return queue_.empty() && !busy_ && done_.empty();
+}
+
 void AsyncGpu::take_interrupts(std::vector<uint8_t> &out) {
     std::lock_guard g(lock_);
     out.insert(out.end(), done_.begin(), done_.end());
@@ -116,6 +121,9 @@ void AsyncGpu::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint
 
 // the interrupt for what was queued before it, once that is done
 void AsyncGpu::after(uint8_t interrupt) { push(interrupt, [] {}); }
+
+// the screens taken in order: after the frame's last transfer, before the next
+void AsyncGpu::vblank() { push(NONE, [this] { inner_.vblank(); }); }
 
 void AsyncGpu::framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
                            uint32_t format) {
