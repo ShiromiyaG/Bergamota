@@ -174,6 +174,8 @@ float Impl::jump_limit(const std::vector<Vertex> &before, const std::vector<Vert
 float Impl::distance(const Op &before, const Op &now) {
     if (!now.gpu) return moved(before.vertices, now.vertices);
     if (!before.gpu) return 2;
+    // the same uniforms: nothing moved, nothing to run
+    if (std::memcmp(&before.gpu->unit, &now.gpu->unit, sizeof(UnitBlock)) == 0) return 0;
     for (GpuDraw *d : {before.gpu.get(), now.gpu.get()}) {
         if (d->samples.empty()) d->samples = sample_positions(*d);
     }
@@ -424,6 +426,28 @@ bool Impl::keep_between(uint32_t output, int slot) {
 // (`between` a blank, the last the game's own: one for a scene at 30 shown
 // at 60, none for one at 60 unless more than 60), then kept as the frame
 // before
+// the frame a cut (a cutscene's camera to another shot): of the pairs the
+// frame before has that moved, more than a quarter jumped. Each draw tells
+// a jump of its own (jumps), but across a cut a few things land near where
+// something like them was (a big piece of the set, a character on the same
+// side) and would be drawn halfway between two shots while the rest is in
+// the new one, a picture of neither that flashes up; a cut gets no frames
+// between at all
+bool Impl::cut() {
+    std::map<uint32_t, Matching> matched;
+    size_t moving = 0, jumped = 0;
+    for (const Op &op : ops_now) {
+        if (op.kind != Op::Draw) continue;
+        auto last = draws_before.find(op_target(op));
+        if (last == draws_before.end()) continue;
+        const Op *before = match(last->second, matched[op_target(op)], op);
+        if (!before || distance(*before, op) < 0.002f) continue;
+        moving++;
+        if (jumps(*before, op)) jumped++;
+    }
+    return moving >= 4 && jumped * 4 > moving;
+}
+
 void Impl::frame_end(uint32_t output) {
     top_frames++;
     top_output = output;
@@ -432,7 +456,7 @@ void Impl::frame_end(uint32_t output) {
     between_ready = false;
     bool drew = std::any_of(ops_now.begin(), ops_now.end(), [](const Op &op) { return op.kind == Op::Draw; });
     const int pictures = span * std::clamp(between, 0, PARTS);
-    if (drew && pictures > 1 && last_pica) {
+    if (drew && pictures > 1 && last_pica && !cut()) {
         bool kept = true;
         between_list ^= 1;
         for (int k = 1; k < pictures; k++) {

@@ -384,6 +384,8 @@ struct VulkanRenderer::Impl {
 
     bool keep_between(uint32_t output, int slot);
 
+    bool cut();
+
     void frame_end(uint32_t output);
 
     void drop_ops();
