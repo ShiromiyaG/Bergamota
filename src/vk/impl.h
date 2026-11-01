@@ -375,6 +375,8 @@ struct VulkanRenderer::Impl {
 
     static bool jumps(const Op &before, const Op &now);
 
+    static float distance(const Op &before, const Op &now);
+
     void draw_between(float t);
 
     bool keep_between(uint32_t output, int slot);

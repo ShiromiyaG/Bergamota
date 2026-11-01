@@ -106,20 +106,44 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
     int best = guess(list, m, op);
     // a draw the game tagged with its model's mesh (DRAW_TAG): the next of
     // that mesh's draws the frame before, the guess counted against it; a
-    // mesh not drawn before has none
+    // mesh not drawn before has none. A tag is a draw tag's address, which
+    // a model made after another was let go can take over (NPCs come and go
+    // as the field scrolls): where the two disagree, the pair that moved
+    // the least, and a tagged one the guess found none for only if it moved
+    // little, as the guess asks (else a shadow drawn between two NPCs
+    // flashes up halfway)
     if (uint32_t tag = op.regs[DRAW_TAG]) {
         int tagged = -1;
         for (size_t i = 0; i < list.size() && tagged < 0; i++) {
             if (!m.used[i] && list[i].regs[DRAW_TAG] == tag && alike(list[i], op)) tagged = int(i);
         }
         m.tagged++;
-        if (tagged != best) m.disagreed++;
-        best = tagged;
+        if (tagged != best) {
+            m.disagreed++;
+            if (tagged >= 0) {
+                float by_tag = distance(list[tagged], op);
+                if (best < 0 ? by_tag < 0.25f : by_tag <= distance(list[best], op)) best = tagged;
+            } else {
+                best = -1;
+            }
+        }
     }
     if (best < 0) return nullptr;
     m.used[best] = true;
     m.from = size_t(best) + 1;
     return &list[best];
+}
+
+// how far a draw moved from one of the frame before, as moved has it:
+// one shaded on the GPU by a few of its vertices run here (jumps' samples)
+float Impl::distance(const Op &before, const Op &now) {
+    if (!now.gpu) return moved(before.vertices, now.vertices);
+    if (!before.gpu) return 2;
+    for (GpuDraw *d : {before.gpu.get(), now.gpu.get()}) {
+        if (d->samples.empty()) d->samples = sample_positions(*d);
+    }
+    if (before.gpu->samples.size() != now.gpu->samples.size()) return 2;
+    return moved(before.gpu->samples, now.gpu->samples);
 }
 
 // the most a vertex moved, in halves of the screen. only the vertices
