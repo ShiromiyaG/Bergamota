@@ -151,8 +151,10 @@ float Impl::extent(const std::vector<Vertex> &vertices) {
 }
 
 // how far one vertex of a pair may move before it is not the same point:
-// eight times what the draw's vertices moved as a rule (the median, those in
-// front of the eye), an eighth of the screen at least. One far past the
+// sixteen times what the draw's vertices moved as a rule (the median, those
+// in front of the eye), a quarter of the screen at least: decided a vertex
+// at a time on the GPU, a triangle split by it would stretch (a cutscene's
+// camera sweeping past things near it). One far past the
 // rest is another thing's (a batch reordered); parallax and a swinging arm
 // stay well within it
 float Impl::jump_limit(const std::vector<Vertex> &before, const std::vector<Vertex> &now) {
@@ -164,7 +166,7 @@ float Impl::jump_limit(const std::vector<Vertex> &before, const std::vector<Vert
     }
     if (moves.empty()) return 1e9f;
     std::nth_element(moves.begin(), moves.begin() + moves.size() / 2, moves.end());
-    return std::max(moves[moves.size() / 2] * 8, 0.25f);
+    return std::max(moves[moves.size() / 2] * 16, 0.5f);
 }
 
 // how far a draw moved from one of the frame before, as moved has it:
