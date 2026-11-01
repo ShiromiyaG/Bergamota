@@ -145,8 +145,13 @@ textures, a geometry shader or the shadow output. Fog is done since (the
 table after the lighting tables, mixed in at the end of `pica.frag` as
 Zakuro's `fog.rs` does); the depth it reads is the w buffer's when
 `DEPTHMAP_ENABLE` is off. The renderer's own depth still ignores the w
-buffer, which the counter now has in fog's place (none so far). The rest
-waits for a scene that uses it: the counter tells, in `boot` and in the
+buffer, which the counter now has in fog's place (none so far).
+Procedural textures and the geometry shader (mode 0, on the CPU: its draws
+go the CPU's way, the triangles it emits as a list) are done since, both
+from Zakuro's and checked by `render_test`, which draws command lists made
+by hand and reads the buffer back. The counter keeps the w buffer, gas,
+the geometry shader's other modes and the shadow output, none of which
+Zakuro does either; each waits for a scene that uses it: the counter tells, in `boot` and in the
 player, which notes the first draw of each in a session in
 `renderer-lacks.txt` beside its config (`%APPDATA%\Solstice` for the
 port).

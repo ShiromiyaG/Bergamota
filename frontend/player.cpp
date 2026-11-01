@@ -410,8 +410,8 @@ int main(int argc, char **argv) {
             stats = counting;
             // the first draw of a session asking for what the renderer does
             // not do yet, noted beside the config: any session tells
-            static constexpr const char *LACKING[5] = {"w buffer", "gas", "procedural textures", "geometry shader", "shadow"};
-            for (int i = 0; i < 5; i++) {
+            static constexpr const char *LACKING[4] = {"w buffer", "gas", "geometry shader modes", "shadow"};
+            for (int i = 0; i < 4; i++) {
                 if (!vulkan.lacking[i] || told[i]) continue;
                 told[i] = true;
                 std::time_t now = std::time(nullptr);

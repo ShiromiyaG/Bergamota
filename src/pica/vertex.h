@@ -48,8 +48,10 @@ private:
                   std::vector<Vertex> &triangles);
     // the same as indices
     static void assemble(Pica &pica, const std::vector<uint32_t> *order, size_t count, std::vector<uint32_t> &indices);
+    // the inputs through the vertex shader and then the geometry shader
+    void geometry(Pica &pica, const std::vector<uint32_t> *order, size_t count, std::vector<Vertex> &triangles);
 
-    std::unique_ptr<Program> program_;
+    std::unique_ptr<Program> program_, geometry_program_;
     Runner runner_;
     std::unique_ptr<BatchRunner> batch_;
     std::vector<Vertex> shaded_;

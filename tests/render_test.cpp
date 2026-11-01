@@ -168,5 +168,39 @@ int main() {
         return std::abs(lo - 64) <= 6 && std::abs(v[1] - 128) <= 6 && std::abs(hi - 192) <= 6;
     };
     check("a ramp table gives a ramp along u", climbs(row) != climbs(column));
+
+    // a geometry shader (as Zakuro's lib.rs tests it): one vertex in, the
+    // shader emits a triangle over the whole buffer from its uniforms c0-c2,
+    // the flat grey on it, over a buffer cleared to black
+    b.pica.memory_fill(COLOR, COLOR + SIZE * SIZE * 4, 0, 4);
+    List geometry = base;
+    table(geometry, 4, std::vector<uint32_t>(256, 0xFF808080));
+    geometry.put(VS_COM_MODE, 1); // its own program from here
+    geometry.put(GEOSTAGE_CONFIG, 2);
+    geometry.put(GS_CONFIG, 0);
+    geometry.put(VS_OUTPUT_TOTAL, 1);              // o0 and o1 a vertex
+    geometry.put(GS_BLOCK + INPUT_CONFIG, 1);      // both, one vertex an invocation
+    geometry.put(GS_BLOCK + INPUT_MAP_LOW, 0x76543210);
+    geometry.put(GS_BLOCK + OUTPUT_MASK, 3);
+    geometry.put(GS_BLOCK + ENTRY_POINT, 0);
+    auto setemit = [](uint32_t slot, bool primitive) { return 0x2Bu << 26 | slot << 24 | uint32_t(primitive) << 23; };
+    auto mov = [](uint32_t dest, uint32_t src) { return 0x13u << 26 | dest << 21 | src << 12; };
+    const uint32_t program[] = {mov(1, 1),      setemit(0, false), mov(0, 0x20), 0x2Au << 26, setemit(1, false), mov(0, 0x21),
+                                0x2Au << 26,    setemit(2, true),  mov(0, 0x22), 0x2Au << 26, 0x22u << 26};
+    geometry.put(GS_BLOCK + PROGRAM_INDEX, 0);
+    for (uint32_t word : program) geometry.put(GS_BLOCK + PROGRAM_DATA, word);
+    geometry.put(GS_BLOCK + UNIFORM_INDEX, 0);
+    geometry.put4(GS_BLOCK + UNIFORM_DATA, -1, -1, 0, 1);
+    geometry.put4(GS_BLOCK + UNIFORM_DATA, 3, -1, 0, 1);
+    geometry.put4(GS_BLOCK + UNIFORM_DATA, -1, 3, 0, 1);
+    geometry.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+    geometry.put4(FIXED_ATTRIBUTE_DATA, 0, 0, 0, 1);
+    geometry.put4(FIXED_ATTRIBUTE_DATA, 0.5f, 0.5f, 0, 0);
+    geometry.put(FIXED_ATTRIBUTE_INDEX, 0);
+    pixels = b.draw(geometry);
+    int covered = 0;
+    for (auto &p : pixels) covered += std::abs(p[0] - 128) <= 1;
+    std::printf("  %d of %d pixels grey\n", covered, SIZE * SIZE);
+    check("a geometry shader's triangle is drawn", covered == SIZE * SIZE);
     return failed ? 1 : 0;
 }

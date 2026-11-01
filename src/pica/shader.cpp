@@ -111,6 +111,8 @@ void Runner::run(const ShaderUnit &unit, const Program &program) {
     address_[0] = address_[1] = address_[2] = 0;
     cond_[0] = cond_[1] = false;
     blocks_.clear();
+    emit_slot_ = 0;
+    emit_completes_ = false;
     uint32_t pc = unit.entry;
     for (uint32_t budget = 0; budget < 0x10000; budget++) {
         // blocks ending here: loops go round again, the rest return
@@ -135,7 +137,19 @@ void Runner::run(const ShaderUnit &unit, const Program &program) {
         };
         switch (d.op) {
         case END: return;
-        case NOP: case EMIT: case SETEMIT: break; // the geometry stage's, not run here
+        case NOP: break;
+        // the geometry shader's: three slots of output registers, the slot
+        // set to complete one making a triangle (Zakuro's shader/batch.rs)
+        case SETEMIT:
+            emit_slot_ = std::min((w >> 24) & 3u, 2u);
+            emit_completes_ = (w >> 23) & 1;
+            break;
+        case EMIT:
+            if (emitted) {
+                emit_slots_[emit_slot_] = output;
+                if (emit_completes_) emitted->push_back(emit_slots_);
+            }
+            break;
         case CALL: case CALLC: case CALLU: {
             bool go = d.op == CALL || (d.op == CALLU ? bool(unit.bools >> ((w >> 22) & 0xF) & 1) : condition(w));
             if (go) next = enter(target, count, pc + 1);

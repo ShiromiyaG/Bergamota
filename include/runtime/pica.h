@@ -69,6 +69,8 @@ enum Reg : uint32_t {
     CMDBUF_JUMP1 = 0x23D,
     VS_ATTRIBUTE_COUNT = 0x242,
     VS_COM_MODE = 0x244,
+    VS_OUTPUT_TOTAL = 0x24A, // the vertex shader's outputs each vertex, less one, for the geometry shader
+    GS_CONFIG = 0x252,
     PRIMITIVE_CONFIG = 0x25E,
     GS_BLOCK = 0x280,
     VS_BLOCK = 0x2B0,

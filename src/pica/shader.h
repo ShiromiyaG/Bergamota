@@ -35,6 +35,10 @@ struct Program {
 class Runner {
 public:
     std::array<Vec4, 16> input{}, output{};
+    // a geometry shader's: what its EMITs put out, a triangle each, as the
+    // output registers of its three vertices; none for a vertex shader
+    using Triangle = std::array<std::array<Vec4, 16>, 3>;
+    std::vector<Triangle> *emitted = nullptr;
     void run(const ShaderUnit &unit, const Program &program);
 
 private:
@@ -53,6 +57,10 @@ private:
     int32_t address_[3]{};
     bool cond_[2]{};
     std::vector<Block> blocks_;
+    // SETEMIT's: the slot the next EMIT fills, whether it completes a triangle
+    uint32_t emit_slot_ = 0;
+    bool emit_completes_ = false;
+    Triangle emit_slots_{};
 };
 
 // the same over BATCH vertices at once (batch.cpp): registers by component
