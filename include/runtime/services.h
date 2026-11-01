@@ -193,6 +193,8 @@ private:
     void y2r_convert(System &);
 
     std::map<std::pair<std::string, uint32_t>, uint32_t> unimplemented_;
+    // an audio frame of the DSP: 160 samples at 32728 Hz
+    static constexpr uint64_t DSP_FRAME_TICKS = CPU_CLOCK_HZ * 160 / 32728;
 };
 
 } // namespace runtime

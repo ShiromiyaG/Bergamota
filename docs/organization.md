@@ -92,6 +92,13 @@ stays a separate program that `tools/compare.py` runs to compare.
 
 ## 6. Services one file each
 
+Done (2026-11-01), but for the one list: `cfg`, `dsp`, `ldr_ro`, `gsp`,
+`hid` and `y2r` each have a file in `src/services/`; `services.cpp` keeps
+the dispatch, srv, APT, `tick` and the online ones; `src/services.cpp` is
+`src/service_list.cpp`. The two lists of what is native or offline are
+still two (they answer different questions: the C interface's, and which
+services report no network).
+
 `src/services/services.cpp` (1,169 lines) holds srv, APT, cfg, dsp,
 ldr:ro, gsp, hid, y2r and the online ones; `fs.cpp` is already apart.
 One file per service, as Zakuro has them (`services/gsp.cpp`,

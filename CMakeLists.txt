@@ -26,6 +26,12 @@ add_library(recomp_runtime STATIC
     src/gpu.cpp
     src/services/services.cpp
     src/services/fs.cpp
+    src/services/cfg.cpp
+    src/services/dsp.cpp
+    src/services/ldr_ro.cpp
+    src/services/gsp.cpp
+    src/services/hid.cpp
+    src/services/y2r.cpp
     src/audio.cpp
     src/pica/pica.cpp
     src/pica/shader.cpp
@@ -33,7 +39,7 @@ add_library(recomp_runtime STATIC
     src/pica/vertex.cpp
     src/pica/lighting.cpp
     src/pica/sketch.cpp
-    src/services.cpp
+    src/service_list.cpp
     src/sampler.cpp
 )
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
