@@ -346,9 +346,16 @@ void place() {
 }
 
 // a vertex between two frames: its position from the frame before's (was)
-// at t (between_t), the rest this frame's
+// at t (between_t), the rest this frame's. Precise, and this frame's whole
+// at t = 1: one thing drawn twice by two pipelines (a base, its lighting
+// over it where the depths are equal) must land on the same bits in both,
+// and a contraction the driver made in one and not the other left the base
+// showing through
 void mix_between(float was[24], float t) {
-    for (int k = 0; k < 4; k++) values[k] = mix(was[k], values[k], t);
+    for (int k = 0; k < 4; k++) {
+        precise float at = was[k] * (1.0 - t) + values[k] * t;
+        values[k] = at;
+    }
 }
 
 void main() {

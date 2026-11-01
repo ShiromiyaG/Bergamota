@@ -370,7 +370,8 @@ struct VulkanRenderer::Impl {
     // likeliest first (between.cpp). A port can tell what a draw is: tagged
     // in a PICA register nothing uses (Solstice's native/draw_tags.c, a
     // model's mesh), two meshes never pair
-    std::vector<const Op *> pairs; // by place in ops_now
+    std::vector<const Op *> pairs; // by place in ops_now, null for none or a jump
+    std::vector<float> limits;     // by place: how far a vertex of the pair may move (jump_limit)
     void pair_frame();
 
     static float moved(const std::vector<Vertex> &before, const std::vector<Vertex> &now);

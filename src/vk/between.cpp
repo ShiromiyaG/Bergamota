@@ -127,6 +127,77 @@ void Impl::pair_frame() {
             if (ops_now[c.now].regs[DRAW_TAG]) self.stats.tagged_draws++;
         }
     }
+    // one thing drawn twice (a base, then its lighting over it where the
+    // depths are equal) is put between one way: the draws to a target with
+    // the same inputs and program, at the same place now, all take the pair
+    // of the first of them paired, and its jump. Paired apart, one could pair
+    // and the other not (a texture swapped, a character coming in), or jump
+    // and the other not, and the base showed through, dark, for a frame
+    std::vector<size_t> lead(ops_now.size());
+    for (size_t i = 0; i < lead.size(); i++) lead[i] = i;
+    auto same_place = [](const Op &a, const Op &b) {
+        const std::vector<Vertex> *x = &a.vertices, *y = &b.vertices;
+        if (a.gpu) {
+            if (std::memcmp(&a.gpu->unit, &b.gpu->unit, sizeof(UnitBlock)) == 0) return true;
+            for (GpuDraw *g : {a.gpu.get(), b.gpu.get()}) {
+                if (g->samples.empty()) g->samples = sample_positions(*g);
+            }
+            x = &a.gpu->samples, y = &b.gpu->samples;
+        }
+        if (x->size() != y->size()) return false;
+        for (size_t i = 0; i < x->size(); i++) {
+            if (std::memcmp(&(*x)[i].position, &(*y)[i].position, sizeof(Vec4)) != 0) return false;
+        }
+        return true;
+    };
+    std::map<std::tuple<uint32_t, uint64_t, uint64_t>, std::vector<size_t>> made_of;
+    for (size_t i = 0; i < ops_now.size(); i++) {
+        const Op &op = ops_now[i];
+        if (op.kind != Op::Draw) continue;
+        if (op.gpu) made_of[{op_target(op), op.gpu->input_hash, op.gpu->program_hash}].push_back(i);
+        else {
+            std::vector<Vec4> at;
+            for (const Vertex &v : op.vertices) at.push_back(v.position);
+            made_of[{op_target(op), hash_bytes(reinterpret_cast<const uint8_t *>(at.data()), at.size() * sizeof(Vec4)), at.size()}].push_back(i);
+        }
+    }
+    for (auto &[key, list] : made_of) {
+        for (size_t k = 0; k < list.size(); k++) {
+            for (size_t j = 0; j < k; j++) {
+                if (lead[list[j]] != list[j] || !ops_now[list[j]].gpu != !ops_now[list[k]].gpu) continue;
+                if (same_place(ops_now[list[j]], ops_now[list[k]])) {
+                    lead[list[k]] = list[j];
+                    break;
+                }
+            }
+        }
+    }
+    // the first of each paired
+    for (size_t i = 0; i < lead.size(); i++) {
+        if (lead[i] != i && pairs[i] && !pairs[lead[i]]) {
+            size_t was = lead[i];
+            for (size_t j = 0; j < lead.size(); j++) {
+                if (lead[j] == was) lead[j] = i;
+            }
+        }
+    }
+    // a pair that jumps is no pair; how far its vertices may move
+    limits.assign(ops_now.size(), 1e9f);
+    for (size_t i = 0; i < ops_now.size(); i++) {
+        const Op &op = ops_now[i];
+        const Op *before = pairs[i];
+        if (lead[i] != i || !before) continue;
+        if (jumps(*before, op)) {
+            pairs[i] = nullptr;
+        } else if (!op.gpu) {
+            limits[i] = jump_limit(before->vertices, op.vertices);
+        } else if (!before->gpu->samples.empty() && !op.gpu->samples.empty()) {
+            limits[i] = jump_limit(before->gpu->samples, op.gpu->samples);
+        }
+    }
+    for (size_t i = 0; i < ops_now.size(); i++) {
+        if (lead[i] != i) pairs[i] = pairs[lead[i]], limits[i] = limits[lead[i]];
+    }
 }
 
 // how far one vertex of a pair may move before it is not the same point:
@@ -308,16 +379,15 @@ void Impl::draw_between(float t) {
             // the GPU's shader runs both and puts each vertex between, those
             // past the limit its few vertices run here give left where they are
             gpu_draw = op.gpu.get();
-            gpu_before = before && !jumps(*before, op) ? before->gpu.get() : nullptr;
+            gpu_before = before ? before->gpu.get() : nullptr;
             gpu_t = t;
-            gpu_jump = gpu_before && !gpu_before->samples.empty() && !op.gpu->samples.empty()
-                           ? jump_limit(gpu_before->samples, op.gpu->samples) : 1e9f;
-        } else if (before && !jumps(*before, op)) {
+            gpu_jump = limits[index];
+        } else if (before) {
             // a triangle with a vertex far past the rest's moves (another
             // thing's, a batch reordered), or one that crossed the eye's
             // plane (mixed, it would pass through infinity), is left where
             // it is, whole
-            const float limit = jump_limit(before->vertices, op.vertices);
+            const float limit = limits[index];
             for (size_t i = 0; i < triangles.size(); i += 3) {
                 size_t end = std::min(i + 3, triangles.size());
                 bool keep = false;
