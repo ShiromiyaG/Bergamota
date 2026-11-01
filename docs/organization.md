@@ -112,6 +112,11 @@ sharing a name.
 
 ## 7. The kernel's threads
 
+Enough as it is (2026-11-01): scheduling goes over the live threads only
+(`live_`) and TLS slots are reused; `boot` from the title to the field
+spends 0.1 s scheduling in 1710 frames, so a list of the ready threads
+apart would save nothing that shows.
+
 With dead threads reused (`docs/problems.md`, performance 2), `Kernel`
 keeps a free list of thread slots and of TLS slots, and the ready threads
 apart, so scheduling does not scan every thread.
