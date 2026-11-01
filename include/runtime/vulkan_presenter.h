@@ -28,6 +28,14 @@ public:
     bool ready() const { return surface_ != VK_NULL_HANDLE && error.empty(); }
     std::string error;
 
+    // a screen, or a part of it, drawn into a rectangle of the canvas
+    struct Placement {
+        int screen = 0;               // 0 the top screen, 1 the bottom one
+        float from[4] = {0, 0, 1, 1}; // the part of it: left, top, right, bottom, 0 to 1
+        float to[4] = {};             // where: left, top, right, bottom, in the canvas's units
+        float brightness = 1, opacity = 1;
+        float blur = 0; // blurred, by as many of the screen's pixels
+    };
     struct View {
         uint32_t width = 0, height = 0; // the window's, in pixels
         bool both = true;               // the bottom screen under the top one
@@ -36,11 +44,20 @@ public:
         float top = 400; // the top screen's width shown, at its height of 240 (wider for widescreen)
         bool antialias = false; // FXAA over the screens
         float sharpen = 0;      // 0-1
+        // what is drawn, in order, on a canvas of canvas[0] x canvas[1]
+        // (the screens' pixels: the top screen is top x 240) fitted to the
+        // window; none: the top screen, and with both the bottom one
+        // centered under it (place_screens)
+        std::vector<Placement> placements;
+        float canvas[2] = {};
     };
-    // the screens' area in a window of width x height (anything), the top
-    // screen top wide: the scale and where it starts, for the mouse; the
-    // bottom screen centered under the top one
-    static void letterbox(float width, float height, bool both, float top, float &scale, float &x, float &y);
+    // the placements a view without its own has (both, top)
+    static void place_screens(View &view);
+    // the canvas fitted to the window: the scale and where it starts
+    static void fit(const View &view, float &scale, float &x, float &y);
+    // a point of the window (its pixels) on the bottom screen as the view
+    // places it, the topmost placement first: false when it is on none
+    static bool on_bottom(const View &view, float x, float y, float &bx, float &by);
 
     // shows frame (null: the last one again) in the window, then overlay
     // records onto it (inside its rendering)

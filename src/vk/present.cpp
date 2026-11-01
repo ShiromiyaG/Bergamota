@@ -19,9 +19,10 @@ const uint32_t PRESENT_FRAG[] = {
 
 struct ScreenPush {
     float rect[4];
-    float extent[2];
-    float unused[2];
-    float post[4]; // anti-aliasing on, sharpening 0-1 (present.frag)
+    float from[4];   // the part of the screen, 0 to 1
+    float extent[2]; // the part of the image the screen fills
+    float blur, unused;
+    float post[4]; // anti-aliasing on, sharpening 0-1, brightness, opacity (present.frag)
 };
 
 void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to) {
@@ -121,8 +122,16 @@ VulkanPresenter::VulkanPresenter(VulkanRenderer &renderer, const std::function<b
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    // a placement see-through by its opacity
     VkPipelineColorBlendAttachmentState blend{};
     blend.colorWriteMask = 0xF;
+    blend.blendEnable = VK_TRUE;
+    blend.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend.colorBlendOp = VK_BLEND_OP_ADD;
+    blend.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend.alphaBlendOp = VK_BLEND_OP_ADD;
     VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
     cb.attachmentCount = 1;
     cb.pAttachments = &blend;
@@ -197,11 +206,43 @@ void VulkanPresenter::idle() {
     vkQueueWaitIdle(renderer_.impl_->queue);
 }
 
-void VulkanPresenter::letterbox(float width, float height, bool both, float top, float &scale, float &x, float &y) {
-    float w = top, h = both ? 480.0f : 240.0f;
-    scale = std::min(width / w, height / h);
-    x = (width - w * scale) / 2;
-    y = (height - h * scale) / 2;
+void VulkanPresenter::place_screens(View &view) {
+    if (!view.placements.empty()) return;
+    view.canvas[0] = view.top, view.canvas[1] = view.both ? 480.0f : 240.0f;
+    Placement top;
+    top.to[2] = view.top, top.to[3] = 240;
+    view.placements.push_back(top);
+    if (view.both) {
+        Placement bottom;
+        bottom.screen = 1;
+        bottom.to[0] = (view.top - 320) / 2, bottom.to[1] = 240, bottom.to[2] = bottom.to[0] + 320, bottom.to[3] = 480;
+        view.placements.push_back(bottom);
+    }
+}
+
+void VulkanPresenter::fit(const View &view, float &scale, float &x, float &y) {
+    float w = std::max(view.canvas[0], 1.0f), h = std::max(view.canvas[1], 1.0f);
+    scale = std::min(float(view.width) / w, float(view.height) / h);
+    x = (float(view.width) - w * scale) / 2;
+    y = (float(view.height) - h * scale) / 2;
+}
+
+bool VulkanPresenter::on_bottom(const View &view, float x, float y, float &bx, float &by) {
+    float scale, x0, y0;
+    fit(view, scale, x0, y0);
+    if (scale <= 0) return false;
+    float cx = (x - x0) / scale, cy = (y - y0) / scale;
+    for (auto p = view.placements.rbegin(); p != view.placements.rend(); ++p) {
+        const float *to = p->to;
+        if (cx < to[0] || cx >= to[2] || cy < to[1] || cy >= to[3] || p->opacity <= 0) continue;
+        // the topmost under the point takes it, whichever screen it shows
+        if (p->screen != 1) return false;
+        float u = (cx - to[0]) / (to[2] - to[0]), v = (cy - to[1]) / (to[3] - to[1]);
+        bx = (p->from[0] + u * (p->from[2] - p->from[0])) * 320;
+        by = (p->from[1] + v * (p->from[3] - p->from[1])) * 240;
+        return true;
+    }
+    return false;
 }
 
 void VulkanPresenter::drop_swapchain() {
@@ -324,22 +365,29 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
     vkCmdSetViewport(cmd, 0, 1, &whole);
     vkCmdSetScissor(cmd, 0, 1, &all);
 
-    // the screens, letterboxed: the top one, and the bottom one under it
+    // the placements on the canvas, fitted to the window
     bool shown = last_.set >= 0;
     if (shown) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
+        View placed = view;
+        placed.width = extent_.width, placed.height = extent_.height;
+        place_screens(placed);
         float scale, x0, y0;
-        letterbox(float(extent_.width), float(extent_.height), view.both, view.top, scale, x0, y0);
-        for (int s = 0; s < (view.both ? 2 : 1); s++) {
+        fit(placed, scale, x0, y0);
+        for (const Placement &p : placed.placements) {
+            const int s = p.screen ? 1 : 0;
             const Image &image = d.sets[last_.set].screens[s];
-            if (!image.view) continue;
-            float lx = s ? (view.top - 320.0f) / 2 : 0.0f, ly = s ? 240.0f : 0.0f, lw = s ? 320.0f : view.top;
-            float px0 = x0 + lx * scale, py0 = y0 + ly * scale, px1 = px0 + lw * scale, py1 = py0 + 240.0f * scale;
+            if (!image.view || p.opacity <= 0) continue;
+            float px0 = x0 + p.to[0] * scale, py0 = y0 + p.to[1] * scale, px1 = x0 + p.to[2] * scale, py1 = y0 + p.to[3] * scale;
+            // the blur in the image's texels (the screen's pixels, scaled as it is drawn)
+            float texels = p.blur * float(image.width) / 240.0f;
             ScreenPush push{{px0 / extent_.width * 2 - 1, py0 / extent_.height * 2 - 1, px1 / extent_.width * 2 - 1,
                              py1 / extent_.height * 2 - 1},
+                            {p.from[0], p.from[1], p.from[2], p.from[3]},
                             {float(last_.size[s][0]) / 240.0f, float(last_.size[s][1]) / (s ? 320.0f : 400.0f)},
-                            {},
-                            {view.antialias ? 1.0f : 0.0f, view.sharpen, 0, 0}};
+                            texels,
+                            0,
+                            {view.antialias ? 1.0f : 0.0f, view.sharpen, p.brightness, p.opacity}};
             VkDescriptorImageInfo info{view.smooth ? linear_ : nearest_, image.view, VK_IMAGE_LAYOUT_GENERAL};
             VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
             write.dstBinding = 0;

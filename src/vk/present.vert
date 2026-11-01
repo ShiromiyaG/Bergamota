@@ -6,6 +6,7 @@
 
 layout(push_constant) uniform Push {
     vec4 rect;   // left, top, right, bottom, in Vulkan's -1..1
+    vec4 from;   // the part of the screen drawn: left, top, right, bottom, 0..1
     vec2 extent; // the part of the image the screen fills, 0..1
 } pc;
 
@@ -18,5 +19,6 @@ void main() {
     vec2 at = vec2(c & 1, c >> 1); // across, down the screen
     gl_Position = vec4(mix(pc.rect.x, pc.rect.z, at.x), mix(pc.rect.y, pc.rect.w, at.y), 0.0, 1.0);
     // the screen's x is the image's row, its y the image's column from the right
-    v_uv = vec2((1.0 - at.y) * pc.extent.x, at.x * pc.extent.y);
+    vec2 on = vec2(mix(pc.from.x, pc.from.z, at.x), mix(pc.from.y, pc.from.w, at.y));
+    v_uv = vec2((1.0 - on.y) * pc.extent.x, on.x * pc.extent.y);
 }

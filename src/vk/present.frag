@@ -2,12 +2,14 @@
 // A screen's pixels, opaque (present.cpp), with the post-processing asked
 // for: anti-aliasing (FXAA: edges found by their contrast in luma and
 // blended along their direction) and sharpening (an unsharp mask held
-// within the neighbors' range, so it adds no halos).
+// within the neighbors' range, so it adds no halos). A placement can be
+// blurred (a fill behind the screens), dimmed and see-through.
 
 layout(set = 0, binding = 0) uniform sampler2D screen;
 
 layout(push_constant) uniform Push {
-    layout(offset = 32) vec4 post; // anti-aliasing on (x), sharpening 0-1 (y)
+    layout(offset = 40) float blur; // texels
+    layout(offset = 48) vec4 post;  // anti-aliasing on (x), sharpening 0-1 (y), brightness (z), opacity (w)
 } pc;
 
 layout(location = 0) in vec2 v_uv;
@@ -43,9 +45,25 @@ vec3 sharpened(vec3 c, vec2 uv, vec2 px, float amount) {
     return clamp(c + (c - blur) * amount * 2.0, low, high);
 }
 
+// two rings of eight around the point, wide: a fill, not a lens
+vec3 blurred(vec2 uv, vec2 px, float radius) {
+    vec3 sum = at(uv);
+    for (int i = 0; i < 8; i++) {
+        float angle = float(i) * 0.785398;
+        vec2 d = vec2(cos(angle), sin(angle)) * px * radius;
+        sum += at(uv + d) + at(uv + d * 0.5);
+    }
+    return sum / 17.0;
+}
+
 void main() {
     vec2 px = 1.0 / vec2(textureSize(screen, 0));
-    vec3 c = pc.post.x > 0.5 ? antialiased(v_uv, px) : at(v_uv);
-    if (pc.post.y > 0.0) c = sharpened(c, v_uv, px, pc.post.y);
-    out_color = vec4(c, 1.0);
+    vec3 c;
+    if (pc.blur > 0.0) {
+        c = blurred(v_uv, px, pc.blur);
+    } else {
+        c = pc.post.x > 0.5 ? antialiased(v_uv, px) : at(v_uv);
+        if (pc.post.y > 0.0) c = sharpened(c, v_uv, px, pc.post.y);
+    }
+    out_color = vec4(c * pc.post.z, pc.post.w);
 }

@@ -25,9 +25,11 @@ constexpr Button BUTTONS[] = {
 
 struct Settings {
     // the game: what the recompiled port needs, and where saves go; decomp,
-    // a folder with the decomp's decomp.bin and decomp.txt, or none
+    // a folder with the decomp's decomp.bin and decomp.txt, or none; layouts,
+    // the single screen's scenes (scenes.h), else single-screen.toml beside
+    // the player
     struct {
-        std::string exheader, code, library, game, update, user, decomp;
+        std::string exheader, code, library, game, update, user, decomp, layouts;
     } game;
     struct {
         bool fullscreen = false;
@@ -36,7 +38,9 @@ struct Settings {
         bool between = false;    // a frame drawn between each two of the game's (30 Hz scenes shown at 60)
         // and as many more as the display's refresh rate shows (120, 144 Hz...)
         bool between_display = false;
-        std::string layout = "both"; // both screens stacked, or "top" alone
+        // both screens stacked, "top" alone, or "single": the top one with
+        // the bottom one as a panel on a button
+        std::string layout = "both";
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
         std::string aspect = "original";

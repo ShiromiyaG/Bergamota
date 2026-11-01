@@ -70,9 +70,9 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("60 FPS (frames drawn between the game's)", &s.video.between);
             if (s.video.between) moved |= ImGui::Checkbox("Up to the display's rate (120, 144 Hz)", &s.video.between_display);
             moved |= ImGui::Checkbox("Vertical sync (can cost speed)", &s.video.vsync);
-            int layout = s.video.layout == "top" ? 1 : 0;
-            if (ImGui::Combo("Screens", &layout, "Both, stacked\0Top only\0")) {
-                s.video.layout = layout ? "top" : "both";
+            int layout = s.video.layout == "top" ? 1 : s.video.layout == "single" ? 2 : 0;
+            if (ImGui::Combo("Screens", &layout, "Both, stacked\0Top only\0Single screen (Tab: the bottom one)\0")) {
+                s.video.layout = layout == 1 ? "top" : layout == 2 ? "single" : "both";
                 moved = true;
             }
             int aspect = s.video.aspect == "16:9" ? 1 : s.video.aspect == "21:9" ? 2 : 0;
