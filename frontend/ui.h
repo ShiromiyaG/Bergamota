@@ -35,6 +35,8 @@ public:
     // draws it; changed is set when a setting the player applies live moved
     void draw(Settings &settings, const Stats &stats, const std::filesystem::path &file, bool &changed);
     bool open = false;
+    // the single screen's scene and its layout, shown in the Video tab
+    std::string scene;
     // the overlay wants the keyboard (the game gets none)
     bool keyboard() const;
 

@@ -1,6 +1,7 @@
 // A game on the runtime, in a window: both screens for now (the ports put
 // their own layout on top, Solstice its single screen), the keyboard, a
-// gamepad, and the mouse on the bottom screen as the stylus. Sound through
+// gamepad, and the mouse (or the right stick as a pointer, R3 to touch) on
+// the bottom screen as the stylus. Sound through
 // SDL3.
 //
 //   player [--config <file>] [--setup]
@@ -15,6 +16,7 @@
 // The game runs on a thread of its own and the GPU on another (AsyncGpu);
 // this one shows the frames the GPU hands over, one a vertical blank.
 
+#include "layouts.h"
 #include "scenes.h"
 #include "settings.h"
 #include "ui.h"
@@ -73,67 +75,6 @@ int between_parts(const Settings &s, SDL_Window *window) {
     const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
     float hz = mode && mode->refresh_rate > 0 ? mode->refresh_rate : 60.0f;
     return std::clamp(int(std::lround(hz / 60.0f)), 1, 4);
-}
-
-// the single screen (video.layout "single"): the top screen fills the
-// canvas, the bottom one a panel in a corner (video.panel_corner, as large
-// as video.panel_size) that slides in from its side (shown, 0 to 1) on a
-// button (Tab, the left stick's click (L3)), so the game's own bottom screen
-// is there to see and touch when it is wanted
-void place_single(VulkanPresenter::View &view, float shown, const Settings &s) {
-    using Placement = VulkanPresenter::Placement;
-    view.canvas[0] = view.top, view.canvas[1] = 240;
-    Placement top;
-    top.to[2] = view.top, top.to[3] = 240;
-    view.placements = {top};
-    if (shown <= 0) return;
-    const float margin = 6, w = 320 * s.video.panel_size, h = 240 * s.video.panel_size;
-    const bool left = s.video.panel_corner.find("left") != std::string::npos;
-    const bool high = s.video.panel_corner.rfind("top", 0) == 0;
-    // eased, in from its side
-    float t = shown * shown * (3 - 2 * shown), away = (1 - t) * (w + margin);
-    Placement panel;
-    panel.screen = 1;
-    panel.to[0] = left ? margin - away : view.top - margin - w + away;
-    panel.to[1] = high ? margin : 240 - margin - h;
-    panel.to[2] = panel.to[0] + w;
-    panel.to[3] = panel.to[1] + h;
-    view.placements.push_back(panel);
-}
-
-// a scene made for both screens (a movie, a cutscene) on one: both stacked,
-// as the two-screen view has them, on a canvas as wide as the window's
-// shape, its sides filled with the top screen blurred and dimmed
-void place_stacked(VulkanPresenter::View &view) {
-    using Placement = VulkanPresenter::Placement;
-    float shape = view.height ? float(view.width) / float(view.height) : 1.0f;
-    float w = std::max(view.top, 480 * shape), h = 480;
-    view.canvas[0] = w, view.canvas[1] = h;
-    // the fill covers the canvas, the top screen's shape kept
-    float fw = std::max(w, h * view.top / 240), fh = fw * 240 / view.top;
-    Placement fill;
-    fill.to[0] = (w - fw) / 2, fill.to[1] = (h - fh) / 2, fill.to[2] = fill.to[0] + fw, fill.to[3] = fill.to[1] + fh;
-    fill.brightness = 0.4f;
-    fill.blur = 6;
-    Placement top;
-    top.to[0] = (w - view.top) / 2, top.to[2] = top.to[0] + view.top, top.to[3] = 240;
-    Placement bottom;
-    bottom.screen = 1;
-    bottom.to[0] = (w - 320) / 2, bottom.to[1] = 240, bottom.to[2] = bottom.to[0] + 320, bottom.to[3] = 480;
-    view.placements = {fill, top, bottom};
-}
-
-// the placements in the window's own pixels (the canvas fitted), so two
-// layouts with canvases of their own can be mixed
-void in_window(VulkanPresenter::View &view) {
-    VulkanPresenter::place_screens(view);
-    float scale, x0, y0;
-    VulkanPresenter::fit(view, scale, x0, y0);
-    for (VulkanPresenter::Placement &p : view.placements) {
-        p.to[0] = x0 + p.to[0] * scale, p.to[1] = y0 + p.to[1] * scale;
-        p.to[2] = x0 + p.to[2] * scale, p.to[3] = y0 + p.to[3] * scale;
-    }
-    view.canvas[0] = float(view.width), view.canvas[1] = float(view.height);
 }
 
 // from one layout to another: each screen moves and grows from where it
@@ -296,9 +237,39 @@ void feed_sound(SDL_AudioStream *sound, std::vector<int16_t> &out, std::atomic<u
     out.clear();
 }
 
+// the right stick as a pointer on the bottom screen, for the single screen
+// (no touch screen): the stick moves it (slowly near the middle, a screen's
+// width a second at the edge), its click (R3) held touches there. Drawn
+// while it moves or touches, gone three seconds after
+struct Pointer {
+    float x = 160, y = 120;
+    bool touching = false, moved = false;
+    float idle = 1e9f; // seconds since it last moved or touched
+
+    void update(SDL_Gamepad *pad, float seconds) {
+        moved = false;
+        touching = pad && SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_RIGHT_STICK);
+        if (pad) {
+            float sx = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTX) / 32767.0f;
+            float sy = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHTY) / 32767.0f;
+            float m = std::hypot(sx, sy);
+            if (m > 0.2f) {
+                float k = std::min((m - 0.2f) / 0.8f, 1.0f), speed = 40 + 320 * k * k;
+                x = std::clamp(x + sx / m * speed * seconds, 0.0f, 319.0f);
+                y = std::clamp(y + sy / m * speed * seconds, 0.0f, 239.0f);
+                moved = true;
+            }
+        }
+        idle = moved || touching ? 0 : idle + seconds;
+    }
+    bool shown() const { return idle < 3; }
+};
+
 // the input, from the keyboard and the gamepad together, and the mouse on
-// the bottom screen, wherever the view last shown places it, as the stylus
-Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *window, const VulkanPresenter::View &shown) {
+// the bottom screen, wherever the view last shown places it, as the stylus,
+// else the pointer's touch where the view shows it
+Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *window, const VulkanPresenter::View &shown,
+                 const Pointer &pointer) {
     Input now;
     const bool *keys = SDL_GetKeyboardState(nullptr);
     float circle[4] = {}; // up, down, left, right
@@ -324,6 +295,8 @@ Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *win
     float density = SDL_GetWindowPixelDensity(window);
     if ((mouse & SDL_BUTTON_LMASK) && VulkanPresenter::on_bottom(shown, mx * density, my * density, bx, by)) {
         now.touch = std::make_pair(uint16_t(std::clamp(bx, 0.0f, 319.0f)), uint16_t(std::clamp(by, 0.0f, 239.0f)));
+    } else if (float wx, wy; pointer.touching && VulkanPresenter::from_bottom(shown, pointer.x, pointer.y, wx, wy)) {
+        now.touch = std::make_pair(uint16_t(pointer.x), uint16_t(pointer.y));
     }
     return now;
 }
@@ -565,6 +538,8 @@ int main(int argc, char **argv) {
     std::deque<Frame> waiting;
     Frame showing;
     auto shown_at = std::chrono::steady_clock::now();
+    Pointer pointer;
+    auto pointer_at = std::chrono::steady_clock::now();
     while (!quit) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -593,8 +568,15 @@ int main(int argc, char **argv) {
                 SDL_free(pads);
             }
         }
+        {
+            auto at = std::chrono::steady_clock::now();
+            pointer.update(overlay.open ? nullptr : gamepad, std::chrono::duration<float>(at - pointer_at).count());
+            pointer_at = at;
+            // pointing wants the bottom screen: the panel comes out
+            if (pointer.moved && settings.video.layout == "single") panel_wanted = true;
+        }
         // none while the overlay is open
-        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view);
+        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer);
         {
             std::lock_guard g(input_lock);
             input = now;
@@ -633,7 +615,18 @@ int main(int argc, char **argv) {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         bool changed = false;
+        overlay.scene = scene_shown ? scene_shown->name + " (" + scene_shown->layout + ")" : "none (panel)";
         overlay.draw(settings, tally.stats, config_file, changed);
+        // the pointer where the view last shown puts the bottom screen: a
+        // ring, filled while it touches
+        if (float wx, wy; pointer.shown() && !overlay.open && VulkanPresenter::from_bottom(shown_view, pointer.x, pointer.y, wx, wy)) {
+            const float density = SDL_GetWindowPixelDensity(window);
+            ImDrawList *draw = ImGui::GetForegroundDrawList();
+            ImVec2 at(wx / density, wy / density);
+            draw->AddCircle(at, 9, IM_COL32(0, 0, 0, 160), 0, 4);
+            draw->AddCircle(at, 9, IM_COL32(255, 255, 255, 255), 0, 2);
+            if (pointer.touching) draw->AddCircleFilled(at, 5, IM_COL32(255, 255, 255, 255));
+        }
         ImGui::Render();
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
@@ -668,11 +661,10 @@ int main(int argc, char **argv) {
                 scene_shown = scene;
                 std::fprintf(stderr, "scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
-            if (layout == "stacked") place_stacked(view);
-            else place_single(view, layout == "top" ? 0.0f : panel, settings);
+            frontend::place(view, layout, panel, settings.video.panel_size, settings.video.panel_corner);
         }
         // in the window's pixels, eased from the layout before
-        in_window(view);
+        frontend::in_window(view);
         transition.apply(view, layout);
         shown_view = view;
         // the resolution, once it held a moment (a window being resized

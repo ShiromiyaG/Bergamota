@@ -29,6 +29,13 @@
 //                           (RUNTIME_NO_INPUT=1: no A presses; RUNTIME_REPLAY: its input)
 //   RUNTIME_ASYNC=0         the GPU on the game's thread (on its own by default, as
 //                           in the player)
+//   RUNTIME_LAYOUT=name     each shot also composed as the player's single screen
+//                           shows it (<shot>-composed.ppm, a 16:9 window): panel,
+//                           stacked, top, or single (by the scene, as the player
+//                           picks it, from RUNTIME_LAYOUTS=file, a port's
+//                           single-screen.toml); RUNTIME_PANEL=1 the panel out,
+//                           RUNTIME_PANEL_SIZE=n (0.35), RUNTIME_PANEL_CORNER=c
+//                           (bottom-right). Scene changes printed as the player does
 
 #include "runtime/decomp.h"
 #include "runtime/fs.h"
@@ -43,8 +50,13 @@
 #include "runtime/services.h"
 #include "runtime/session.h"
 #include "runtime/system.h"
+#ifdef BOOT_LAYOUTS
+#include "../frontend/layouts.h"
+#include "../frontend/scenes.h"
+#endif
 
 #include <chrono>
+#include <mutex>
 #include <functional>
 #include <memory>
 #include <cstdio>
@@ -134,8 +146,14 @@ int main(int argc, char **argv) {
     Session::Files files{argv[1], argv[2], argv[3], argc > 5 ? argv[5] : "", argc > 6 ? argv[6] : "",
                          argc > 7 ? argv[7] : "user", env("RUNTIME_DECOMP") ? env("RUNTIME_DECOMP") : ""};
     std::string error;
-    auto told = [](const std::string &name, uint32_t base) {
+    // the modules loaded, for the single screen's scene
+    std::mutex modules_lock;
+    std::set<std::string> modules;
+    auto told = [&](const std::string &name, uint32_t base) {
         std::printf("module %s %s 0x%08X\n", name.c_str(), base ? "at" : "gone from", base);
+        std::lock_guard g(modules_lock);
+        if (base) modules.insert(name);
+        else modules.erase(name);
     };
     if (!session.open(files, config, error, told)) {
         std::fprintf(stderr, "%s\n", error.c_str());
@@ -220,6 +238,41 @@ int main(int argc, char **argv) {
         out << "P6\n" << p.width << " " << p.height << "\n255\n";
         for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
     };
+    // RUNTIME_LAYOUT: the shot as the player's single screen shows it, beside it
+    const std::string layout_wanted = env("RUNTIME_LAYOUT") ? env("RUNTIME_LAYOUT") : "";
+#ifdef BOOT_LAYOUTS
+    frontend::Scenes scenes;
+    if (env("RUNTIME_LAYOUTS") && !scenes.read(env("RUNTIME_LAYOUTS"), error)) std::fprintf(stderr, "%s\n", error.c_str());
+    const frontend::Scene *scene_shown = nullptr;
+    bool scene_told = false;
+    auto save_composed = [&](const std::string &name, const Picture &top, const Picture &bottom) {
+        if (layout_wanted.empty() || top.rgba.empty()) return;
+        std::string layout = layout_wanted;
+        if (layout == "single") {
+            const frontend::Scene *scene;
+            {
+                std::lock_guard g(modules_lock);
+                scene = scenes.pick(modules);
+            }
+            layout = scene ? scene->layout : "panel";
+            if (scene != scene_shown || !scene_told) {
+                scene_shown = scene, scene_told = true;
+                std::printf("scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
+            }
+        }
+        VulkanPresenter::View view;
+        view.width = 1920, view.height = 1080;
+        view.top = float(top.width);
+        frontend::place(view, layout, env("RUNTIME_PANEL") ? 1.0f : 0.0f,
+                        env("RUNTIME_PANEL_SIZE") ? float(std::atof(env("RUNTIME_PANEL_SIZE"))) : 0.35f,
+                        env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right");
+        save(name, frontend::compose(view, top, bottom));
+    };
+#else
+    auto save_composed = [&](const std::string &, const Picture &, const Picture &) {
+        if (!layout_wanted.empty()) std::fprintf(stderr, "RUNTIME_LAYOUT: boot built without the player's layouts\n");
+    };
+#endif
     // the frames as the player gets them, a vertical blank each: the last
     // one, and with RUNTIME_SHOTS those due
     Frame latest;
@@ -237,6 +290,7 @@ int main(int argc, char **argv) {
                 std::snprintf(prefix, sizeof prefix, "%s/%06llu", shots_dir, (unsigned long long)next_shot_frame);
                 save(std::string(prefix) + "-top.ppm", f.screens[0]);
                 save(std::string(prefix) + "-bottom.ppm", f.screens[1]);
+                save_composed(std::string(prefix) + "-composed.ppm", f.screens[0], f.screens[1]);
                 next_shot_frame = f.number / shot_every * shot_every + shot_every;
                 // with frames between: the next few frames shown, to see one fall between two
 #ifdef RUNTIME_VULKAN
@@ -248,6 +302,8 @@ int main(int argc, char **argv) {
                 char name[512];
                 std::snprintf(name, sizeof name, "%s/%06llu-%d-shown-top.ppm", shots_dir, (unsigned long long)f.number, f.part);
                 save(name, f.screens[0]);
+                std::snprintf(name, sizeof name, "%s/%06llu-%d-shown-composed.ppm", shots_dir, (unsigned long long)f.number, f.part);
+                save_composed(name, f.screens[0], f.screens[1]);
                 trail_line += f.between ? " between" : " game";
                 if (!trail) std::printf("frames shown after %llu:%s\n", (unsigned long long)(next_shot_frame - shot_every), trail_line.c_str());
             }
@@ -323,6 +379,11 @@ int main(int argc, char **argv) {
                 char name[64];
                 std::snprintf(name, sizeof name, "build/shots/shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
                 save(name, latest.number ? latest.screens[screen] : screen_now(screen));
+            }
+            if (latest.number) {
+                char name[64];
+                std::snprintf(name, sizeof name, "build/shots/shot-%02d-composed.ppm", shots);
+                save_composed(name, latest.screens[0], latest.screens[1]);
             }
             shots++;
         }

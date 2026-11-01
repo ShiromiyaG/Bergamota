@@ -245,6 +245,22 @@ bool VulkanPresenter::on_bottom(const View &view, float x, float y, float &bx, f
     return false;
 }
 
+bool VulkanPresenter::from_bottom(const View &view, float bx, float by, float &x, float &y) {
+    float scale, x0, y0;
+    fit(view, scale, x0, y0);
+    if (scale <= 0) return false;
+    const float u = bx / 320, v = by / 240;
+    for (auto p = view.placements.rbegin(); p != view.placements.rend(); ++p) {
+        if (p->screen != 1 || p->opacity <= 0) continue;
+        const float *from = p->from, *to = p->to;
+        if (u < from[0] || u >= from[2] || v < from[1] || v >= from[3]) continue;
+        x = x0 + (to[0] + (u - from[0]) / (from[2] - from[0]) * (to[2] - to[0])) * scale;
+        y = y0 + (to[1] + (v - from[1]) / (from[3] - from[1]) * (to[3] - to[1])) * scale;
+        return true;
+    }
+    return false;
+}
+
 void VulkanPresenter::drop_swapchain() {
     VkDevice device = renderer_.impl_->device;
     for (VkImageView v : views_) vkDestroyImageView(device, v, nullptr);

@@ -58,6 +58,9 @@ public:
     // a point of the window (its pixels) on the bottom screen as the view
     // places it, the topmost placement first: false when it is on none
     static bool on_bottom(const View &view, float x, float y, float &bx, float &by);
+    // the other way: a point of the bottom screen (320 x 240) to the window's
+    // pixels, on the topmost placement showing it; false when none does
+    static bool from_bottom(const View &view, float bx, float by, float &x, float &y);
 
     // shows frame (null: the last one again) in the window, then overlay
     // records onto it (inside its rendering)

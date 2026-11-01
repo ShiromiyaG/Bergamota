@@ -87,6 +87,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                     moved = true;
                 }
                 moved |= ImGui::SliderFloat("Bottom screen's size", &s.video.panel_size, 0.25f, 1.0f, "%.2f");
+                ImGui::TextDisabled("Scene: %s; right stick: pointer, R3: touch", scene.c_str());
             }
             int aspect = s.video.aspect == "16:9" ? 1 : s.video.aspect == "21:9" ? 2 : 0;
             if (ImGui::Combo("Top screen", &aspect, "Original (5:3)\0Widescreen (16:9)\0Ultrawide (21:9)\0")) {
