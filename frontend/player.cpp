@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -53,17 +54,6 @@
 using namespace runtime;
 using frontend::Settings;
 
-// the top screen's shape for a port's widescreen override, which finds it by
-// name (Solstice's overrides/widescreen.c): width over height, 0 for the
-// 3DS's own
-extern "C" {
-#ifdef _WIN32
-__declspec(dllexport)
-#else
-__attribute__((visibility("default")))
-#endif
-volatile float runtime_top_aspect = 0;
-}
 
 namespace {
 
@@ -373,12 +363,22 @@ int main(int argc, char **argv) {
     std::mutex input_lock;
     Input input;
     std::atomic<bool> quit{false};
+    // the top screen's shape for the port's widescreen (a game's code that
+    // has port_top_aspect frames its 3D wider, Solstice's native/widescreen.c):
+    // the shape the player shows it at, 0 for the 3DS's own, written into the
+    // game's memory on its thread
+    std::atomic<float> top_aspect{0};
+    uint32_t top_aspect_at = 0;
+    if (session.decomp) {
+        if (auto it = session.decomp->symbols.find("port_top_aspect"); it != session.decomp->symbols.end()) top_aspect_at = it->second;
+    }
     std::thread game([&] {
         system.run([&] {
             {
                 std::lock_guard g(input_lock);
                 handlers.input = input;
             }
+            if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
             handlers.tick(system);
             feed_sound(sound, handlers.audio.output, tally.starved);
             return quit.load(std::memory_order_relaxed);
@@ -452,7 +452,7 @@ int main(int argc, char **argv) {
         view.both = both;
         view.smooth = settings.video.smooth;
         view.top = top_width(settings);
-        runtime_top_aspect = view.top > 400 ? view.top / 240 : 0;
+        top_aspect = view.top > 400 ? view.top / 240 : 0;
         vulkan.top_wide = view.top / 400;
         view.vsync = settings.video.vsync;
         view.antialias = settings.video.antialias;
