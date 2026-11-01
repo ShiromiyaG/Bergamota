@@ -356,23 +356,14 @@ struct VulkanRenderer::Impl {
 
     static uint32_t op_target(const Op &op);
 
-    // where a draw of the frame before went, among those to the same target
-    // made of the same (vertex count, textures, combiners): the one that
-    // samples the same part of its first texture (the same thing, moved) and
-    // moved the least, as pieces repeated (a curb's, a row of tiles) sample
-    // the same part each; else, near its place in the order, the first that
-    // moved little. paired by order alone, one piece added or gone shifted
-    // the rest onto their neighbors and opened cracks between them
-    // a port can tell: a game's draws tagged with what they are, in a PICA
-    // register nothing uses (Solstice's overrides/draw_tags.c, a model's
-    // mesh), pair with the draw of the same tag
-    struct Matching {
-        size_t from = 0;
-        std::vector<bool> used;
-        uint64_t tagged = 0, disagreed = 0; // draws tagged, and where the guess was another
-    };
-    static int guess(const std::vector<Op> &list, const Matching &m, const Op &op);
-    static const Op *match(const std::vector<Op> &list, Matching &m, const Op &op);
+    // each of the frame's draws paired with the one of the frame before it
+    // is, among those to the same target made of the same (vertex count or
+    // inputs, textures, combiners): the frame's pairs as a whole, the
+    // likeliest first (between.cpp). A port can tell what a draw is: tagged
+    // in a PICA register nothing uses (Solstice's native/draw_tags.c, a
+    // model's mesh), two meshes never pair
+    std::vector<const Op *> pairs; // by place in ops_now
+    void pair_frame();
 
     static float moved(const std::vector<Vertex> &before, const std::vector<Vertex> &now);
 

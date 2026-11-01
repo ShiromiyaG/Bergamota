@@ -52,10 +52,9 @@ public:
         uint64_t reused_draws = 0;
         // draws with a fragment shader made for their state's shape
         uint64_t specialized_draws = 0;
-        // draws between paired by a tag the game's draws carry (a port's
-        // override), and of them where the guess from the draws alone was
-        // another or none
-        uint64_t tagged_draws = 0, tags_disagreed = 0;
+        // draws between paired with one of the same tag (a port's code
+        // tags the game's draws)
+        uint64_t tagged_draws = 0;
         // draws asking for what the renderer does not do: gas (Azahar has
         // none either), a geometry shader mode past the three there are
         uint64_t lacking[2]{};

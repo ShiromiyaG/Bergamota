@@ -59,79 +59,74 @@ static bool alike(const Impl::Op &before, const Impl::Op &op) {
     return !before.gpu && before.vertices.size() == op.vertices.size();
 }
 
-// the guess from the draws alone (match): its index in list, or -1
-int Impl::guess(const std::vector<Op> &list, const Matching &m, const Op &op) {
-    if (op.gpu) {
-        // shaded on the GPU: the one with the same inputs and program whose
-        // uniforms differ the least (quads alike in all but where they go)
-        int best = -1;
-        float least = 0;
-        for (size_t i = 0; i < list.size(); i++) {
-            const Op &before = list[i];
-            if (m.used[i] || !alike(before, op)) continue;
-            float d = 0;
-            const float *a = &before.gpu->unit.f[0][0], *b = &op.gpu->unit.f[0][0];
-            for (int k = 0; k < 96 * 4; k++) d += std::abs(a[k] - b[k]);
-            if (best < 0 || d < least) best = int(i), least = d;
-        }
-        return best;
+// how unlike a draw of the frame before one of this frame's is, to pair
+// them (pair_frame), lower the likelier; below 0 not a pair at all. Shaded
+// on the GPU: how far their uniforms are apart (alike in all but where
+// they go). On the CPU: how far its vertices moved, those that sample the
+// same part of their first texture first (the same thing, moved; a curb's
+// pieces each sample their own), up to half the screen, else a quarter.
+// Tags of two meshes never pair; the same tag is likelier
+static float unlike(const Impl::Op &before, const Impl::Op &now) {
+    if (!alike(before, now)) return -1;
+    uint32_t tag = now.regs[DRAW_TAG], was = before.regs[DRAW_TAG];
+    if (tag && was && tag != was) return -1;
+    float score;
+    if (now.gpu) {
+        score = 0;
+        const float *a = &before.gpu->unit.f[0][0], *b = &now.gpu->unit.f[0][0];
+        for (int k = 0; k < 96 * 4; k++) score += std::abs(a[k] - b[k]);
+    } else {
+        const bool same = before.uvs == now.uvs;
+        float d = Impl::moved(before.vertices, now.vertices);
+        if (d >= (same ? 0.5f : 0.25f)) return -1;
+        score = d + (same ? 0.0f : 1.0f);
     }
-    int same = -1;
-    float least = 0.5f; // past it, a jump
-    for (size_t i = 0; i < list.size(); i++) {
-        const Op &before = list[i];
-        if (m.used[i] || before.uvs != op.uvs || !alike(before, op)) continue;
-        if (float d = moved(before.vertices, op.vertices); d < least) least = d, same = int(i);
-    }
-    int best = same;
-    if (best < 0) {
-        size_t start = m.from > 8 ? m.from - 8 : 0, end = std::min(list.size(), m.from + 48);
-        float nearest = 0.25f; // an eighth of the screen
-        int in_order = -1;
-        for (size_t i = start; i < end; i++) {
-            const Op &before = list[i];
-            if (m.used[i] || !alike(before, op)) continue;
-            float d = moved(before.vertices, op.vertices);
-            if (d >= 0.25f) continue;
-            if (in_order < 0 && i >= m.from) in_order = int(i);
-            if (d < nearest) nearest = d, best = int(i);
-        }
-        if (in_order >= 0) best = in_order;
-    }
-    return best;
+    return tag && tag == was ? score * 0.5f : score;
 }
 
-const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &op) {
-    if (m.used.size() != list.size()) m.used.assign(list.size(), false);
-    int best = guess(list, m, op);
-    // a draw the game tagged with its model's mesh (DRAW_TAG): the next of
-    // that mesh's draws the frame before, the guess counted against it; a
-    // mesh not drawn before has none. A tag is a draw tag's address, which
-    // a model made after another was let go can take over (NPCs come and go
-    // as the field scrolls): where the two disagree, the pair that moved
-    // the least, and a tagged one the guess found none for only if it moved
-    // little, as the guess asks (else a shadow drawn between two NPCs
-    // flashes up halfway)
-    if (uint32_t tag = op.regs[DRAW_TAG]) {
-        int tagged = -1;
-        for (size_t i = 0; i < list.size() && tagged < 0; i++) {
-            if (!m.used[i] && list[i].regs[DRAW_TAG] == tag && alike(list[i], op)) tagged = int(i);
-        }
-        m.tagged++;
-        if (tagged != best) {
-            m.disagreed++;
-            if (tagged >= 0) {
-                float by_tag = distance(list[tagged], op);
-                if (best < 0 ? by_tag < 0.25f : by_tag <= distance(list[best], op)) best = tagged;
-            } else {
-                best = -1;
+// each of the frame's draws paired with the one of the frame before it is
+// (pairs, by its place in ops_now; null for none), for the frame as a
+// whole: of all the pairs a target's draws could make, the likeliest first,
+// each draw taken once. Paired one at a time in the game's order, a
+// character coming in (drawn before another of its model) took the other's
+// draw of the frame before, was drawn halfway from it, and flashed; the
+// other went unpaired. A draw is tried against those near its place in the
+// order (64 either way, scaled) when there are many alike
+void Impl::pair_frame() {
+    pairs.assign(ops_now.size(), nullptr);
+    std::map<uint32_t, std::vector<size_t>> by_target;
+    for (size_t i = 0; i < ops_now.size(); i++) {
+        if (ops_now[i].kind == Op::Draw) by_target[op_target(ops_now[i])].push_back(i);
+    }
+    struct Candidate {
+        float score;
+        size_t now, before;
+    };
+    std::vector<Candidate> candidates;
+    std::vector<bool> taken;
+    for (auto &[target, now] : by_target) {
+        auto last = draws_before.find(target);
+        if (last == draws_before.end()) continue;
+        const std::vector<Op> &list = last->second;
+        candidates.clear();
+        for (size_t k = 0; k < now.size(); k++) {
+            const Op &op = ops_now[now[k]];
+            size_t at = list.size() * k / now.size(), from = at > 64 ? at - 64 : 0, to = std::min(list.size(), at + 65);
+            if (now.size() * list.size() <= 64 * 64) from = 0, to = list.size();
+            for (size_t j = from; j < to; j++) {
+                float score = unlike(list[j], op);
+                if (score >= 0) candidates.push_back({score, now[k], j});
             }
         }
+        std::stable_sort(candidates.begin(), candidates.end(), [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
+        taken.assign(list.size(), false);
+        for (const Candidate &c : candidates) {
+            if (pairs[c.now] || taken[c.before]) continue;
+            pairs[c.now] = &list[c.before];
+            taken[c.before] = true;
+            if (ops_now[c.now].regs[DRAW_TAG]) self.stats.tagged_draws++;
+        }
     }
-    if (best < 0) return nullptr;
-    m.used[best] = true;
-    m.from = size_t(best) + 1;
-    return &list[best];
 }
 
 // how large a draw is on the screen, in halves of it as moved counts: the
@@ -328,8 +323,8 @@ void Impl::draw_between(float t) {
     auto tables = p.light_tables;
     uint64_t tables_version = p.tables_version;
     replaying = true;
-    std::map<uint32_t, Matching> matched;
-    for (Op &op : ops_now) {
+    for (size_t index = 0; index < ops_now.size(); index++) {
+        Op &op = ops_now[index];
         if (op.kind == Op::Fill) {
             fill(op.fill[0], op.fill[1], op.fill[2], op.fill[3]);
             continue;
@@ -338,9 +333,7 @@ void Impl::draw_between(float t) {
             transfer(op.transfer);
             continue;
         }
-        const Op *before = nullptr;
-        auto last = draws_before.find(op_target(op));
-        if (last != draws_before.end()) before = match(last->second, matched[op_target(op)], op);
+        const Op *before = index < pairs.size() ? pairs[index] : nullptr;
         triangles = op.vertices;
         if (op.gpu) {
             // the GPU's shader runs both and puts each vertex between, those
@@ -395,7 +388,6 @@ void Impl::draw_between(float t) {
     end_rendering();
     forced_views = nullptr;
     replaying = false;
-    for (auto &[target, m] : matched) self.stats.tagged_draws += m.tagged, self.stats.tags_disagreed += m.disagreed;
     p.regs = regs;
     p.light_tables = tables;
     p.tables_version = tables_version;
@@ -457,15 +449,13 @@ static float scale_change(const std::vector<Vertex> &before, const std::vector<V
 // the new one, a picture of neither that flashes up; a cut gets no frames
 // between at all
 bool Impl::survey() {
-    std::map<uint32_t, Matching> matched;
+    pair_frame();
     std::vector<float> moves, scales;
     size_t far = 0;
-    for (const Op &op : ops_now) {
-        if (op.kind != Op::Draw) continue;
-        auto last = draws_before.find(op_target(op));
-        if (last == draws_before.end()) continue;
-        const Op *before = match(last->second, matched[op_target(op)], op);
-        if (!before) continue;
+    for (size_t index = 0; index < ops_now.size(); index++) {
+        const Op &op = ops_now[index];
+        const Op *before = pairs[index];
+        if (op.kind != Op::Draw || !before) continue;
         float d = distance(*before, op);
         if (d < 0.002f) continue;
         moves.push_back(d);
