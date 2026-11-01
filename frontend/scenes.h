@@ -2,7 +2,7 @@
 // from a port's file (Solstice's single-screen.toml), by the modules (CROs)
 // the game has loaded. A layout:
 //   "panel"   the top screen fills the window, the bottom one a panel on a
-//             button (Tab, the right stick's click)
+//             button (Tab, the left stick's click (L3))
 //   "stacked" both screens one over the other, as the two-screen view has
 //             them, the window's sides filled with the top one blurred:
 //             cutscenes and movies made for both

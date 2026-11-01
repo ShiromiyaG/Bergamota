@@ -77,7 +77,7 @@ int between_parts(const Settings &s, SDL_Window *window) {
 
 // the single screen (video.layout "single"): the top screen fills the
 // canvas, the bottom one a panel at its lower right corner that slides in
-// (shown, 0 to 1) on a button (Tab, the right stick's click), so the game's
+// (shown, 0 to 1) on a button (Tab, the left stick's click (L3)), so the game's
 // own bottom screen is there to see and touch when it is wanted
 void place_single(VulkanPresenter::View &view, float shown) {
     using Placement = VulkanPresenter::Placement;
@@ -567,7 +567,7 @@ int main(int argc, char **argv) {
                 SDL_SetWindowFullscreen(window, settings.video.fullscreen);
             }
             if ((event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_TAB && !event.key.repeat) ||
-                (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+                (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK)) {
                 panel_wanted = !panel_wanted;
             }
             overlay.event(event);
