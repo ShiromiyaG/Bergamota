@@ -237,6 +237,10 @@ int main(int argc, char **argv) {
     });
 
     const bool print_stats = SDL_getenv("RUNTIME_STATS") != nullptr;
+    // RUNTIME_DUMP=folder: the first RUNTIME_DUMP_COUNT (600) top screens shown, as
+    // <frame>-<game|between>.ppm, to look at what the player showed
+    const char *dump = SDL_getenv("RUNTIME_DUMP");
+    int dump_left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
     auto second = std::chrono::steady_clock::now(), last_shown = second;
     frontend::Stats stats, counting;
     double busy_before = 0, idle_before = 0;
@@ -298,6 +302,16 @@ int main(int argc, char **argv) {
         if (fresh) {
             showing = std::move(waiting.front());
             waiting.pop_front();
+            if (dump && dump_left > 0 && !showing.screens[0].rgba.empty()) {
+                dump_left--;
+                char name[512];
+                std::snprintf(name, sizeof name, "%s/%06llu-%s.ppm", dump, (unsigned long long)showing.number,
+                              showing.between ? "between" : "game");
+                const Picture &p = showing.screens[0];
+                std::ofstream out(frontend::path_of(name), std::ios::binary);
+                out << "P6\n" << p.width << " " << p.height << "\n255\n";
+                for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
+            }
             for (uint32_t s = 0; s < 2; s++) {
                 const Picture &p = showing.screens[s];
                 if (!p.rgba.empty()) SDL_UpdateTexture(screens[s], nullptr, p.rgba.data(), int(p.width * 4));

@@ -212,6 +212,11 @@ struct VulkanRenderer::Impl {
     uint64_t blanks = 0, top_blank = 0; // vertical blanks so far, and at the last frame for the top screen
     uint64_t top_frames = 0, top_frames_shown = 0;
     uint32_t top_output = 0, top_shown = 0; // the buffer the last frame went to, the one the top screen showed
+    // the newest picture in each buffer (a counter of the transfers and
+    // writes into it), and the buffer each screen showed
+    std::unordered_map<uint32_t, uint64_t> picture_in;
+    uint64_t pictures = 0;
+    uint32_t showing[2] = {};
     bool new_before = false;
     bool between_ready = false; // the last frame was drawn between, into the buffer at between_address
     uint32_t between_address = 0;
@@ -410,7 +415,19 @@ struct VulkanRenderer::Impl {
         // row (a scene at 60) show the game's. a new frame shows when the
         // screen moves to another buffer (a blank or more after its transfer),
         // or when the buffer it shows got one
-        uint32_t top = p.screens[0].address;
+        // a game that falls behind (the intro's movie, on a slow computer)
+        // skips drawing a frame but still flips, to a buffer whose picture is
+        // older than the one shown: the newer one stays, as the console,
+        // never behind, would show it
+        uint32_t address[2];
+        for (uint32_t screen = 0; screen < 2; screen++) {
+            uint32_t want = p.screens[screen].address, was = showing[screen];
+            auto now = picture_in.find(want), before = picture_in.find(was);
+            bool older = was && want != was && before != picture_in.end() &&
+                         now != picture_in.end() && now->second < before->second;
+            address[screen] = showing[screen] = older ? was : want;
+        }
+        uint32_t top = address[0];
         bool into_shown = top_frames != top_frames_shown && top_output == top;
         bool new_frame = top != top_shown || into_shown;
         top_frames_shown = top_frames;
@@ -422,12 +439,12 @@ struct VulkanRenderer::Impl {
         for (uint32_t screen = 0; screen < 2; screen++) {
             const Pica::Screen &at = p.screens[screen];
             uint32_t stride = at.stride ? at.stride : 240 * bytes_per_pixel(at.format);
-            Surface *fb = framebuffer(at.address, stride);
+            Surface *fb = framebuffer(address[screen], stride);
             shown.on_gpu[screen] = fb != nullptr;
             if (!fb) {
                 // drawn by the CPU, or not yet: memory has it
-                sync(at.address, stride * (screen ? 320 : 400), false);
-                shown.from_memory[screen] = read_screen(memory, screen, at.address, at.stride, at.format);
+                sync(address[screen], stride * (screen ? 320 : 400), false);
+                shown.from_memory[screen] = read_screen(memory, screen, address[screen], at.stride, at.format);
                 continue;
             }
             const Image &from = screen == 0 && use_between && fb->between.image ? fb->between : fb->image;
@@ -972,6 +989,7 @@ struct VulkanRenderer::Impl {
             if (write) { // memory has the newer one from now on
                 if (color_target == s.get() || depth_target == s.get()) end_rendering();
                 s->stale = true;
+                if (s->linear) picture_in[s->address] = ++pictures;
             }
         }
     }
@@ -1052,6 +1070,7 @@ struct VulkanRenderer::Impl {
     // own: a blit flips and halves (averaging) on the way
     bool transfer(const Backend::Transfer &t) {
         if (between && !replaying) ops_now.push_back(Op{Op::Transfer, {}, {}, {}, {}, 0, {}, t});
+        if (!replaying) picture_in[t.output] = ++pictures;
         // the input can start some rows into a buffer (a band of 8-row tiles):
         // games draw both screens into one and transfer each from its rows
         Surface *in = nullptr;

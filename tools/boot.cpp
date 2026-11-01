@@ -13,6 +13,8 @@
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
+//   RUNTIME_TRAIL=n         after each shot, the next n frames shown; on the host's
+//                           clock, the first n (RUNTIME_NO_INPUT=1: no A presses)
 //   RUNTIME_ASYNC=0         the GPU on the game's thread (on its own by default, as
 //                           in the player)
 
@@ -238,7 +240,9 @@ int main(int argc, char **argv) {
     // one, and with RUNTIME_SHOTS those due
     Frame latest;
     uint64_t next_shot_frame = shot_every;
-    int trail = 0;
+    // on the host's clock with RUNTIME_SHOTS: the first RUNTIME_TRAIL frames
+    // shown, every one (the intro as the player plays it)
+    int trail = !frames && shots_dir && env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 0;
     std::string trail_line;
     auto take_frames = [&] {
         Frame f;
@@ -291,9 +295,10 @@ int main(int argc, char **argv) {
             // seconds given with RUNTIME_FRAMES: a hung run still stops and says where it is
             return handlers.vblanks >= frames || (argc > 4 && seconds > 0 && now >= until);
         }
-        // A pressed for a tenth of each second, to get past the title as the bots do
+        // A pressed for a tenth of each second, to get past the title as the bots
+        // do; RUNTIME_NO_INPUT=1 leaves the game alone
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-        handlers.input.buttons = ms % 1000 < 100 ? 1 : 0;
+        handlers.input.buttons = ms % 1000 < 100 && !env("RUNTIME_NO_INPUT") ? 1 : 0;
         handlers.tick(system);
         take_frames();
         // both screens to a picture every five seconds
