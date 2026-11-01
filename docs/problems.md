@@ -58,6 +58,21 @@ Found after, by looking at what the player showed (2026-11-01):
   and moves are measured on the vertices in front of the eye and on or
   near the screen (`moved`).
 
+Where the game's CPU time goes (2026-11-01, `boot` with `RUNTIME_SAMPLE`,
+on the host's clock):
+
+- The intro's movie: `Library::lookup` was 31% of the game's thread, a
+  binary search on every indirect jump; cached, 4%. What is left is the
+  game's own code, nearly all on one thread (priority 0x31): the Mobiclip
+  decoder (`MovieLib`) and the movie player polling its counters
+  (`mwmomobiclipDecoderGetNbPushedFrame`, `DemuxerStreamAt`, the critical
+  sections), which is its wait between frames. It decodes at the movie's
+  30 frames a second.
+- The field, walking: the game's thread idle 82% of the time (the game
+  draws at about 30 frames a second, as USUM does); its code does not
+  reach the top of the samples. The GPU's thread is the busy one: 21.8 s
+  of 92 in the vertex stage (performance 4).
+
 To look at what the player shows: `RUNTIME_DUMP=<folder>` in the player;
 `boot` with `RUNTIME_REPLAY`, `RUNTIME_TRAIL` and `RUNTIME_TRAIL_FROM` on the
 host's clock, as the player runs.
