@@ -65,7 +65,7 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
     auto t = clock::now();
     const auto &r = p.regs;
     const uint32_t fog = r[0x0E0] & 7, operation = r[COLOR_OPERATION] & 3;
-    lacking[0] += fog == 5;
+    lacking[0] += !(r[DEPTHMAP_ENABLE] & 1) && (r[DEPTH_COLOR_MASK] & 0x1001);
     lacking[1] += fog == 7 || operation == 1;
     lacking[2] += (r[TEXTURE_CONFIG] >> 10) & 1;
     lacking[3] += (r[GEOSTAGE_CONFIG] & 3) == 2;

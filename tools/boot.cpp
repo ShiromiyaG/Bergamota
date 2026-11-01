@@ -401,7 +401,7 @@ int main(int argc, char **argv) {
         std::printf("vertex programs: %llu translated, %llu from the cache, %llu failed; %llu draws with them, %llu between reused\n",
                     (unsigned long long)compiled, (unsigned long long)loaded, (unsigned long long)failed,
                     (unsigned long long)vulkan->translated_draws, (unsigned long long)vulkan->reused_draws);
-        std::printf("draws the renderer lacks: fog %llu, gas %llu, procedural textures %llu, geometry shader %llu, shadow %llu\n",
+        std::printf("draws the renderer lacks: w buffer %llu, gas %llu, procedural textures %llu, geometry shader %llu, shadow %llu\n",
                     (unsigned long long)vulkan->lacking[0], (unsigned long long)vulkan->lacking[1],
                     (unsigned long long)vulkan->lacking[2], (unsigned long long)vulkan->lacking[3],
                     (unsigned long long)vulkan->lacking[4]);

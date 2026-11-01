@@ -41,6 +41,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <fstream>
 #include <iterator>
@@ -277,6 +278,7 @@ int main(int argc, char **argv) {
     int dump_left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
     auto second = std::chrono::steady_clock::now(), last_shown = second;
     frontend::Stats stats, counting;
+    bool told[5]{};
     double busy_before = 0, idle_before = 0, host_gpu_before = 0;
     std::deque<Frame> waiting;
     Frame showing;
@@ -386,6 +388,19 @@ int main(int argc, char **argv) {
             counting.gpu_ms = (showing.busy - busy_before) * 1000;
             counting.idle_ms = (system.idle - idle_before) * 1000;
             stats = counting;
+            // the first draw of a session asking for what the renderer does
+            // not do yet, noted beside the config: any session tells
+            static constexpr const char *LACKING[5] = {"w buffer", "gas", "procedural textures", "geometry shader", "shadow"};
+            for (int i = 0; i < 5; i++) {
+                if (!vulkan.lacking[i] || told[i]) continue;
+                told[i] = true;
+                std::time_t now = std::time(nullptr);
+                char when[32];
+                std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+                std::ofstream(config_file.parent_path() / "renderer-lacks.txt", std::ios::app)
+                    << when << ": " << LACKING[i] << ", frame " << showing.number << "\n";
+                if (print_stats) std::printf("the renderer lacks %s (frame %llu)\n", LACKING[i], (unsigned long long)showing.number);
+            }
             if (print_stats) {
                 std::printf("shown %d, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms\n", stats.shown,
                             stats.worst_ms, stats.gpu_ms, stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000);
