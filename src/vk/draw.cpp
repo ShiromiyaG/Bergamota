@@ -166,11 +166,7 @@ void Impl::render(Pica &p) {
     Surface *color = surface(color_address, w, h, (r[COLOR_BUFFER_FORMAT] >> 16) & 7, false);
     Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
     if (!color) return;
-    if (between && !replaying) {
-        keep_start(*color);
-        if (depth) keep_start(*depth);
-        note_draw(p, views);
-    }
+    if (between && !replaying) note_draw(p, views);
     // a texture that is this pass's target cannot be read inside it
     if (rendering && (color_target != color || depth_target != depth || shadow_pass != shadow)) end_cause = 0, end_rendering();
 

@@ -46,26 +46,6 @@ void Impl::note_draw(Pica &p, const VkImageView *views) {
     ops_now.push_back(std::move(op));
 }
 
-// a buffer as it was before the frame first drew into it. A frame between
-// started from what the frame left in it, and a buffer the frame did not
-// clear first (a shadow map, its clear in no op of the frame) took the frame
-// between's draws over the frame's own: a shadow map written nearest-first
-// kept the nearer of the two, and a character turning fell into its own
-// shadow on the half that came nearer the light, dark, for a frame
-void Impl::keep_start(Surface &s) {
-    if (s.start_ops == ops_epoch) return;
-    s.start_ops = ops_epoch;
-    end_rendering();
-    if (s.start.image && (s.start.width != s.image.width || s.start.height != s.image.height)) let_go(s.start), s.start = {};
-    if (!s.start.image) s.start = image(s.image.width, s.image.height, s.depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s.depth);
-    VkImageCopy c{};
-    c.srcSubresource = c.dstSubresource = {
-        VkImageAspectFlags(s.depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
-    c.extent = {s.image.width, s.image.height, 1};
-    vkCmdCopyImage(cmd, s.image.image, VK_IMAGE_LAYOUT_GENERAL, s.start.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
-    barrier();
-}
-
 uint32_t Impl::op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
 // a draw of the frame before the same as op could be: shaded on the GPU,
@@ -330,8 +310,8 @@ bool Impl::jumps(const Op &before, const Op &now) {
 void Impl::draw_between(float t) {
     Pica &p = *last_pica;
     end_rendering();
-    // each buffer's between image starts from what the game's held before
-    // the frame drew into it (keep_start), its depth and stencil too
+    // each buffer's between image starts from what the game's holds, its
+    // depth and stencil too
     struct Kept {
         bool dirty, stale;
         uint64_t version, converted;
@@ -357,8 +337,7 @@ void Impl::draw_between(float t) {
         c.srcSubresource = c.dstSubresource = {
             VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
         c.extent = {s->image.width, s->image.height, 1};
-        const Image &from = s->start_ops == ops_epoch && s->start.image ? s->start : s->image;
-        vkCmdCopyImage(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        vkCmdCopyImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         between_views[s->image.view] = s->between.view;
         std::swap(s->image, s->between);
     }
@@ -519,7 +498,6 @@ void Impl::frame_end(uint32_t output) {
 
 void Impl::drop_ops() {
     ops_now.clear();
-    ops_epoch++;
     dead.insert(dead.end(), dead_held.begin(), dead_held.end());
     dead_held.clear();
     // the buffers let go of during the frame, drawn between by now
@@ -527,7 +505,6 @@ void Impl::drop_ops() {
         let_go(s->image);
         if (s->as_color.image) let_go(s->as_color);
         if (s->between.image) let_go(s->between);
-        if (s->start.image) let_go(s->start);
     }
     retired.clear();
 }

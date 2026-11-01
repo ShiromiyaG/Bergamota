@@ -148,10 +148,6 @@ struct Surface {
     // the same buffer in a frame drawn between the game's (interpolation):
     // swapped in for image while the frame is drawn again
     Image between;
-    // what it held before the frame's first draw into it (start_ops: the
-    // frame it was kept for, Impl::ops_epoch): a frame between starts there
-    Image start;
-    uint64_t start_ops = ~0ull;
     uint32_t offset(uint32_t x, uint32_t y, uint32_t bpp) const {
         return linear ? (y * width + x) * bpp : tiled_offset(x, y, width, bpp);
     }
@@ -397,8 +393,6 @@ struct VulkanRenderer::Impl {
     void frame_end(uint32_t output);
 
     void drop_ops();
-    uint64_t ops_epoch = 0; // counts the frames' ops let go of (drop_ops)
-    void keep_start(Surface &s);
 
     void let_go(const Image &i);
 
