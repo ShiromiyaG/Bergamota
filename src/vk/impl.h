@@ -251,7 +251,15 @@ struct VulkanRenderer::Impl {
     VkShaderModule vert_gpu = VK_NULL_HANDLE;
     // the outputs of the game's draws, for the frames between: two halves,
     // a game frame each in turn (output_turn), so the frame before's stay
-    static constexpr VkDeviceSize OUTPUT_HALF = 64u << 20;
+    static constexpr VkDeviceSize OUTPUT_HALF = 128u << 20;
+    // a frame between takes its draws' positions one way for all: from the
+    // outputs the game's draws kept, or each draw run again when any of them
+    // has none (the room ran out, a pair's target not drawn the frame
+    // before). The two ways differ in the last bits, and a character drawn
+    // twice (a base, its lighting over it where the depths are equal) showed
+    // the base through, dark, for a frame
+    bool outputs_full = false; // the room ran out this frame
+    bool run_all = false;      // the frame between being drawn runs every draw
     VkBuffer outputs = VK_NULL_HANDLE;
     VkDeviceMemory outputs_memory = VK_NULL_HANDLE;
     VkDeviceSize output_at = 0;
@@ -371,19 +379,15 @@ struct VulkanRenderer::Impl {
     // on the CPU
     static std::vector<Vertex> sample_positions(const GpuDraw &d);
 
-    // scene: how far the frame's things moved as a rule (survey)
-    static bool jumps(const Op &before, const Op &now, float scene = 0);
+    static bool jumps(const Op &before, const Op &now);
 
-    static float distance(const Op &before, const Op &now);
-    static float extent(const std::vector<Vertex> &vertices);
     static float jump_limit(const std::vector<Vertex> &before, const std::vector<Vertex> &now);
 
     void draw_between(float t);
 
     bool keep_between(uint32_t output, int slot);
 
-    float scene_motion = 0;
-    bool survey();
+
 
     void frame_end(uint32_t output);
 

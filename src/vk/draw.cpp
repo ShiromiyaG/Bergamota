@@ -174,7 +174,8 @@ void Impl::render(Pica &p) {
     VkDeviceSize in_size = 0, index_size = 0, before_size = 0;
     // a frame between whose draws both kept their outputs takes them, and
     // runs nothing; a draw of the game's with frames between keeps its own
-    const bool from_outputs = on_gpu && replaying && gpu_draw->outputs != ~0u && gpu_draw->output_turn == output_turn &&
+    const bool from_outputs = on_gpu && replaying && !run_all && gpu_draw->outputs != ~0u &&
+                              gpu_draw->output_turn == output_turn &&
                               (!gpu_before || (gpu_before->outputs != ~0u && gpu_before->output_turn + 1 == output_turn));
     uint32_t store = ~0u;
     if (on_gpu && between && !replaying && store_outputs && gpu_draw->stride) {
@@ -182,6 +183,8 @@ void Impl::render(Pica &p) {
         if (output_at + need <= OUTPUT_HALF) {
             store = uint32_t(((output_turn & 1) * OUTPUT_HALF + output_at) / sizeof(float));
             output_at += need;
+        } else {
+            outputs_full = true;
         }
         // the frame between's copy of this draw, made just before, learns where
         if (!ops_now.empty() && ops_now.back().gpu && ops_now.back().kind == Op::Draw) {

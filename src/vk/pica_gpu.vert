@@ -345,18 +345,10 @@ void place() {
     }
 }
 
-// a vertex between two frames: its position, and texture 0's coordinates
-// with it (values 12, 13 and its w, 16), from the frame before's (was) at
-// t (between_t). A shadow map is drawn between too, where things are
-// halfway: looked up with this frame's coordinates, a character fell into
-// its own shadow, dark, for a frame. Coordinates that moved half a texture
-// or more scrolled round (water): those stay this frame's
+// a vertex between two frames: its position from the frame before's (was)
+// at t (between_t), the rest this frame's
 void mix_between(float was[24], float t) {
     for (int k = 0; k < 4; k++) values[k] = mix(was[k], values[k], t);
-    vec3 a = vec3(was[12], was[13], was[16]), b = vec3(values[12], values[13], values[16]);
-    if (abs(a.x - b.x) < 0.5 && abs(a.y - b.y) < 0.5 && a.z * b.z > 0.0) {
-        values[12] = mix(a.x, b.x, t), values[13] = mix(a.y, b.y, t), values[16] = mix(a.z, b.z, t);
-    }
 }
 
 void main() {
