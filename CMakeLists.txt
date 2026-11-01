@@ -119,6 +119,9 @@ if(RUNTIME_VULKAN)
     add_executable(between_test tests/between_test.cpp)
     target_link_libraries(between_test PRIVATE recomp_runtime)
     add_test(NAME between COMMAND between_test)
+    add_executable(render_test tests/render_test.cpp)
+    target_link_libraries(render_test PRIVATE recomp_runtime)
+    add_test(NAME render COMMAND render_test)
 endif()
 
 # boots a game on the runtime and reports how far it gets

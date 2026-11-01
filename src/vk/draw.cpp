@@ -211,6 +211,22 @@ void Impl::render(Pica &p) {
                     uint32_t value = p.fog_table[e];
                     light_tables.fog[e] = {float((value >> 13) & 0x7FF) / 2048.0f, float(int32_t(value << 19) >> 19) / 2048.0f};
                 }
+                // the procedural texture's (Zakuro's proctex.rs): tables 0, 2
+                // and 3 a 0.12 value and a 12-bit signed step, 4 the colors,
+                // 5 their steps as halved signed bytes
+                static constexpr int MAPS[3] = {0, 2, 3};
+                for (int m = 0; m < 3; m++) {
+                    for (int e = 0; e < 128; e++) {
+                        uint32_t value = p.proctex_tables[MAPS[m]][e];
+                        light_tables.maps[m][e] = {float(value & 0xFFF) / 4095.0f, float(int32_t(value << 8) >> 20) / 4095.0f};
+                    }
+                }
+                for (int e = 0; e < 256; e++) {
+                    for (int c = 0; c < 4; c++) {
+                        light_tables.colors[e][c] = float((p.proctex_tables[4][e] >> (c * 8)) & 0xFF);
+                        light_tables.steps[e][c] = float(int8_t(p.proctex_tables[5][e] >> (c * 8))) * 2.0f;
+                    }
+                }
                 tables_decoded = p.tables_version;
             }
             tables_offset = take(uniforms, uniform_at, sizeof light_tables, 256);

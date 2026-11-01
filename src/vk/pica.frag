@@ -172,7 +172,125 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40;
+          FOG_COLOR = 40, PROCTEX = 41; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
+// where the tables are in t.entries, after lighting's 24 of 256
+const int FOG_TABLE = 24 * 256, PROCTEX_MAPS = FOG_TABLE + 128, PROCTEX_COLORS = PROCTEX_MAPS + 3 * 128,
+          PROCTEX_STEPS = PROCTEX_COLORS + 2 * 256;
+
+// the procedural texture, texture 3, made up from its coordinates (Zakuro's
+// raster.frag, as its software rasterizer has it)
+// a map read at a coordinate from 0 to 1
+precise float proctex_lookup(int map, float coordinate) {
+    float at = coordinate * 128.0;
+    int entry = min(int(max(at, 0.0)), 127);
+    vec2 value = t.entries[PROCTEX_MAPS + map * 128 + entry];
+    return value.x + (at - float(entry)) * value.y;
+}
+
+vec4 proctex_color(uint entry, int base) {
+    return vec4(t.entries[base + int(entry) * 2], t.entries[base + int(entry) * 2 + 1]);
+}
+
+// a pseudo-random value from -1 to 1 for a point of the noise's grid
+float proctex_random(uint x, uint y) {
+    const uint rows[16] = uint[16](0u, 4u, 10u, 8u, 4u, 9u, 7u, 12u, 5u, 15u, 13u, 14u, 11u, 15u, 2u, 11u);
+    const uint mixes[16] = uint[16](10u, 2u, 15u, 8u, 0u, 7u, 4u, 5u, 5u, 13u, 2u, 6u, 13u, 9u, 3u, 14u);
+    uint u = (((x % 9u + 2u) * 3u) & 0xFu) ^ rows[(x / 9u) & 0xFu];
+    uint v = (((y % 9u + 2u) * 3u) & 0xFu) ^ rows[(y / 9u) & 0xFu];
+    if ((u & 3u) == 1u) v += 4u;
+    v ^= (u & 1u) * 6u;
+    v += 10u + u;
+    v &= 0xFu;
+    v ^= mixes[u];
+    return -1.0 + float(v) * 2.0 / 15.0;
+}
+
+float proctex_shift(float other, uint mode, uint clamping) {
+    float amount = clamping == 3u ? 1.0 : 0.5;
+    int o = int(other);
+    if (mode == 1u) return amount * float((o / 2) % 2);
+    if (mode == 2u) return amount * float(((o + 1) / 2) % 2);
+    return 0.0;
+}
+
+precise float proctex_clamp(float c, uint mode) {
+    switch (mode) {
+    case 0u: return c > 1.0 ? 0.0 : c;
+    case 1u: return min(c, 1.0);
+    case 2u: return c - floor(c);
+    case 3u: {
+        int whole = int(c);
+        float part = c - float(whole);
+        return (whole % 2) == 0 ? part : 1.0 - part;
+    }
+    case 4u: return c <= 0.5 ? 0.0 : 1.0;
+    default: return clamp(c, 0.0, 1.0);
+    }
+}
+
+precise float proctex_combine(float u, float v, uint function) {
+    float len = sqrt(u * u + v * v);
+    switch (function) {
+    case 0u: return u;
+    case 1u: return u * u;
+    case 2u: return v;
+    case 3u: return v * v;
+    case 4u: return (u + v) * 0.5;
+    case 5u: return (u * u + v * v) * 0.5;
+    case 6u: return min(len, 1.0);
+    case 7u: return min(u, v);
+    case 8u: return max(u, v);
+    case 9u: return min(((u + v) * 0.5 + len) * 0.5, 1.0);
+    default: return 0.0;
+    }
+}
+
+precise vec4 procedural(vec2 uv) {
+    uint config = s.regs[PROCTEX >> 2][PROCTEX & 3];
+    uint noise_u = reg(PROCTEX + 1), noise_v = reg(PROCTEX + 2), lut = reg(PROCTEX + 4);
+    uvec2 clamps = uvec2(config & 7u, (config >> 3) & 7u);
+    float u = abs(uv.x);
+    float v = abs(uv.y);
+    vec2 shifts = vec2(proctex_shift(v, (config >> 16) & 3u, clamps.x), proctex_shift(u, (config >> 18) & 3u, clamps.y));
+    if ((config & (1u << 15)) != 0u) {
+        vec2 frequency = unpackHalf2x16(reg(PROCTEX + 3));
+        float x = 9.0 * frequency.x * abs(u + float(noise_u >> 16) / 4096.0);
+        float y = 9.0 * frequency.y * abs(v + float(noise_v >> 16) / 4096.0);
+        uint xi = uint(x);
+        uint yi = uint(y);
+        float xf = x - float(xi);
+        float yf = y - float(yi);
+        float g0 = proctex_random(xi, yi) * (xf + yf);
+        float g1 = proctex_random(xi + 1u, yi) * (xf + yf - 1.0);
+        float g2 = proctex_random(xi, yi + 1u) * (xf + yf - 1.0);
+        float g3 = proctex_random(xi + 1u, yi + 1u) * (xf + yf - 2.0);
+        float sx = proctex_lookup(0, xf);
+        float ty = proctex_lookup(0, yf);
+        float noise = mix(mix(g0, g1, sx), mix(g2, g3, sx), ty);
+        u = abs(u + noise * float(int(noise_u << 16) >> 16) / 4095.0);
+        v = abs(v + noise * float(int(noise_v << 16) >> 16) / 4095.0);
+    }
+    u = proctex_clamp(u + shifts.x, clamps.x);
+    v = proctex_clamp(v + shifts.y, clamps.y);
+
+    float coordinate = proctex_lookup(1, proctex_combine(u, v, (config >> 6) & 0xFu));
+    float width = float((lut >> 11) & 0xFFu);
+    float at = float(reg(PROCTEX + 5) & 0xFFu) + coordinate * max(width - 1.0, 0.0);
+    uint filtering = lut & 7u;
+    vec4 color;
+    if (filtering == 1u || filtering == 3u || filtering == 5u) {
+        uint entry = min(uint(max(at, 0.0)), 255u);
+        color = proctex_color(entry, PROCTEX_COLORS) + (at - float(entry)) * proctex_color(entry, PROCTEX_STEPS);
+    } else {
+        color = proctex_color(min(uint(max(round(at), 0.0)), 255u), PROCTEX_COLORS);
+    }
+    color = clamp(color / 255.0, 0.0, 1.0);
+    // alpha of its own skips the color table, the map gives it
+    if ((config & (1u << 14)) != 0u) {
+        color.a = clamp(proctex_lookup(2, proctex_combine(u, v, (config >> 10) & 0xFu)), 0.0, 1.0);
+    }
+    return color;
+}
 
 vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) / 255.0; }
 
@@ -265,7 +383,9 @@ void main() {
     tex[0] = texel(0, v_uv0);
     tex[1] = texel(1, v_uv1);
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
-    tex[3] = vec4(0.0); // procedural textures: not yet
+    // the procedural one reads coordinate set 0, 1 or 2
+    uint coordinates = min((reg(TEX_CONFIG) >> 8) & 3u, 2u);
+    tex[3] = (reg(TEX_CONFIG) & (1u << 10)) != 0u ? procedural(coordinates == 0u ? v_uv0 : coordinates == 1u ? v_uv1 : v_uv2) : vec4(0.0);
     vec4 primary = v_color;
     // without lighting the primary fragment color is the vertex's, and
     // there is no specular term
@@ -328,7 +448,7 @@ void main() {
         depth = clamp(depth, 0.0, 1.0);
         if ((fog & 0x10000u) != 0u) depth = 1.0 - depth;
         float index = depth * 128.0, entry = clamp(floor(index), 0.0, 127.0);
-        vec2 e = t.entries[24 * 256 + int(entry)];
+        vec2 e = t.entries[FOG_TABLE + int(entry)];
         float factor = clamp(e.x + e.y * (index - entry), 0.0, 1.0);
         previous.rgb = mix(unpack(reg(FOG_COLOR)).rgb, previous.rgb, factor);
     }
