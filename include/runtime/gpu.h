@@ -25,9 +25,15 @@ struct Picture {
 // drawn between two of them (VulkanRenderer::between)
 struct Frame {
     uint64_t number = 0; // the vertical blank
-    Picture screens[2];
+    Picture screens[2];  // when asked for (VulkanRenderer::cpu_pictures)
     bool between = false;
     double busy = 0; // the GPU's seconds of work so far, for the stats
+    // the same on the host's GPU, for a presenter there: which of the
+    // renderer's sets of screen images, the size of each screen in it (the
+    // framebuffer's, turned on its side), and the submission that fills it
+    int set = -1;
+    uint32_t size[2][2]{};
+    uint64_t ready = 0;
 };
 
 struct Gpu {

@@ -43,6 +43,10 @@ bool Impl::init() {
     ici.pApplicationInfo = &app;
     const char *validation = "VK_LAYER_KHRONOS_validation";
     if (std::getenv("RUNTIME_VK_VALIDATION")) ici.enabledLayerCount = 1, ici.ppEnabledLayerNames = &validation;
+    std::vector<const char *> wanted;
+    for (const std::string &e : instance_extensions) wanted.push_back(e.c_str());
+    ici.enabledExtensionCount = uint32_t(wanted.size());
+    ici.ppEnabledExtensionNames = wanted.data();
     if (VkResult r = vkCreateInstance(&ici, nullptr, &instance)) return fail("vkCreateInstance", r);
 
     uint32_t count = 0;
@@ -91,19 +95,25 @@ bool Impl::init() {
     VkPhysicalDeviceFeatures2 features{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
     features.features.vertexPipelineStoresAndAtomics = has.vertexPipelineStoresAndAtomics;
     store_outputs = has.vertexPipelineStoresAndAtomics;
+    VkPhysicalDeviceVulkan12Features v12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
+    v12.timelineSemaphore = VK_TRUE;
     VkPhysicalDeviceVulkan13Features v13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
     v13.dynamicRendering = VK_TRUE;
     v13.synchronization2 = VK_TRUE;
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
     eds.extendedDynamicState = VK_TRUE;
     v13.pNext = &eds;
-    const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
-    features.pNext = &v13;
+    // and the swapchain, for a window
+    can_present = !instance_extensions.empty();
+    const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
+                                VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    features.pNext = &v12;
+    v12.pNext = &v13;
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = 2;
+    dci.enabledExtensionCount = can_present ? 3 : 2;
     dci.ppEnabledExtensionNames = extensions;
     if (VkResult r = vkCreateDevice(physical, &dci, nullptr, &device)) return fail("vkCreateDevice", r);
     vkGetDeviceQueue(device, family, 0, &queue);
@@ -214,6 +224,14 @@ bool Impl::init() {
     // a vertex shader that writes needs the device's leave: the CPU's stage
     // without it
     if (!store_outputs) gpu_vertices = false;
+    {
+        VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
+        type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+        VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+        si.pNext = &type;
+        vkCreateSemaphore(device, &si, nullptr, &rendered);
+        vkCreateSemaphore(device, &si, nullptr, &presented);
+    }
     VkPipelineCacheCreateInfo pci_cache{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
     vkCreatePipelineCache(device, &pci_cache, nullptr, &pipeline_cache);
     smi.codeSize = sizeof FRAG_SPV;
@@ -450,10 +468,21 @@ void Impl::submit(bool wait) {
     if (timestamps) vkCmdWriteTimestamp2(cmd, VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT, timestamps, uint32_t(current) * QUERIES + 1);
     vkEndCommandBuffer(cmd);
     Slot &s = slots[current];
+    // the submission's serial on the rendered timeline, for a presenter
+    uint64_t serial = submitted + 1;
+    VkTimelineSemaphoreSubmitInfo ti{VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO};
+    ti.signalSemaphoreValueCount = 1;
+    ti.pSignalSemaphoreValues = &serial;
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.pNext = &ti;
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    vkQueueSubmit(queue, 1, &si, s.fence);
+    si.signalSemaphoreCount = 1;
+    si.pSignalSemaphores = &rendered;
+    {
+        std::lock_guard g(queue_lock);
+        vkQueueSubmit(queue, 1, &si, s.fence);
+    }
     s.pending = true;
     s.serial = ++submitted;
     s.staging.insert(s.staging.end(), staging.begin(), staging.end());
@@ -520,6 +549,9 @@ void Impl::shutdown() {
     }
     vkDestroyShaderModule(device, vert, nullptr);
     vkDestroyShaderModule(device, vert_gpu, nullptr);
+    vkDestroySemaphore(device, rendered, nullptr);
+    vkDestroySemaphore(device, presented, nullptr);
+    for (ScreenSet &set : sets) destroy(set.screens[0]), destroy(set.screens[1]);
     if (outputs) vkDestroyBuffer(device, outputs, nullptr), vkFreeMemory(device, outputs_memory, nullptr);
     if (timestamps) vkDestroyQueryPool(device, timestamps, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);

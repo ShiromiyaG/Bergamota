@@ -56,6 +56,25 @@ bool Impl::vblank(Pica &p) {
 
     end_rendering();
     int screens_part = gpu_open(3);
+    const bool to_cpu = self.cpu_pictures.load();
+    // a set for the presenter, once it let go of it
+    int set_index = -1;
+    if (can_present) {
+        set_index = next_set;
+        next_set = (next_set + 1) % SETS;
+        ScreenSet &set = sets[set_index];
+        if (uint64_t wait = set.wait.load()) {
+            VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
+            wi.semaphoreCount = 1;
+            wi.pSemaphores = &presented;
+            wi.pValues = &wait;
+            vkWaitSemaphores(device, &wi, 1000000000ull);
+        }
+        for (int s = 0; s < 2; s++) {
+            if (!set.screens[s].image) set.screens[s] = image(240, s ? 320 : 400, VK_FORMAT_R8G8B8A8_UNORM, false);
+        }
+        end_rendering();
+    }
     for (uint32_t screen = 0; screen < 2; screen++) {
         const Pica::Screen &at = p.screens[screen];
         uint32_t stride = at.stride ? at.stride : 240 * bytes_per_pixel(at.format);
@@ -64,14 +83,35 @@ bool Impl::vblank(Pica &p) {
         if (!fb) {
             // drawn by the CPU, or not yet: memory has it
             sync(address[screen], stride * (screen ? 320 : 400), false);
-            shown.from_memory[screen] = read_screen(memory, screen, address[screen], at.stride, at.format);
+            Picture picture = read_screen(memory, screen, address[screen], at.stride, at.format);
+            if (set_index >= 0 && picture.width) {
+                // to the set on its side, as a framebuffer is
+                uint32_t rows = screen ? 320 : 400;
+                std::vector<uint8_t> sideways(size_t(240) * rows * 4, 0);
+                for (uint32_t x = 0; x < picture.width && x < rows; x++) {
+                    for (uint32_t y = 0; y < picture.height && y < 240; y++) {
+                        std::memcpy(&sideways[(size_t(x) * 240 + (239 - y)) * 4], &picture.rgba[(size_t(y) * picture.width + x) * 4], 4);
+                    }
+                }
+                upload_color(sets[set_index].screens[screen], sideways.data(), sideways.size());
+                shown.size[screen][0] = 240, shown.size[screen][1] = rows;
+            }
+            shown.from_memory[screen] = std::move(picture);
             continue;
         }
         const Image &from = screen == 0 && use_between && fb->between.image ? fb->between : fb->image;
-        VkBufferImageCopy c{};
-        c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.imageExtent = {fb->width, fb->height, 1};
-        vkCmdCopyImageToBuffer(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, shown.buffers[screen].buffer, 1, &c);
+        if (to_cpu) {
+            VkBufferImageCopy c{};
+            c.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.imageExtent = {fb->width, fb->height, 1};
+            vkCmdCopyImageToBuffer(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, shown.buffers[screen].buffer, 1, &c);
+        }
+        if (set_index >= 0) {
+            VkImageCopy c{};
+            c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            c.extent = {std::min(fb->width, 240u), std::min(fb->height, screen ? 320u : 400u), 1};
+            vkCmdCopyImage(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, sets[set_index].screens[screen].image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+        }
         shown.size[screen][0] = fb->width, shown.size[screen][1] = fb->height;
     }
     barrier();
@@ -79,6 +119,8 @@ bool Impl::vblank(Pica &p) {
     shown.number = p.vblanks;
     shown.between = use_between;
     shown.pending = true;
+    shown.to_cpu = to_cpu;
+    shown.set = set_index;
     submit(false);
     shown.serial = submitted;
     return true;
@@ -89,12 +131,23 @@ bool Impl::vblank(Pica &p) {
 void Impl::finish_shown(Pica &p) {
     if (!shown.pending) return;
     shown.pending = false;
-    for (Slot &slot : slots) {
-        if (slot.pending && slot.serial <= shown.serial) retire(slot);
-    }
     Frame frame;
     frame.number = shown.number;
     frame.between = shown.between;
+    frame.set = shown.set;
+    frame.ready = shown.serial;
+    std::memcpy(frame.size, shown.size, sizeof frame.size);
+    if (!shown.to_cpu) {
+        // for a presenter on the GPU: nothing to wait for here
+        for (uint32_t screen = 0; screen < 2; screen++) {
+            if (!shown.on_gpu[screen]) frame.screens[screen] = std::move(shown.from_memory[screen]);
+        }
+        p.push_frame(std::move(frame));
+        return;
+    }
+    for (Slot &slot : slots) {
+        if (slot.pending && slot.serial <= shown.serial) retire(slot);
+    }
     for (uint32_t screen = 0; screen < 2; screen++) {
         Picture &out = frame.screens[screen];
         if (!shown.on_gpu[screen]) {

@@ -42,7 +42,7 @@ option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${V
 if(RUNTIME_VULKAN)
     set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${SHADER_OUT})
-    foreach(shader pica.vert pica_gpu.vert pica.frag)
+    foreach(shader pica.vert pica_gpu.vert pica.frag present.vert present.frag)
         add_custom_command(
             OUTPUT ${SHADER_OUT}/${shader}.inc
             COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/${shader}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/${shader}
@@ -63,8 +63,9 @@ if(RUNTIME_VULKAN)
         DEPENDS src/vk/depth.comp
         VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
-        src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/vk/translate.cpp src/pica/texture.cpp
+        src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/vk/translate.cpp src/vk/present.cpp src/pica/texture.cpp
         ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica_gpu.vert.txt ${SHADER_OUT}/pica.frag.inc
+        ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc
         ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     # the game's vertex programs compiled while it runs (shaderc, from the SDK, linked in)
@@ -138,9 +139,10 @@ if(RUNTIME_PLAYER)
         ${imgui_SOURCE_DIR}/imgui_tables.cpp
         ${imgui_SOURCE_DIR}/imgui_widgets.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
+        ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-    target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3-static Vulkan::Vulkan)
     add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp)
     target_link_libraries(player PRIVATE recomp_runtime SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
 endif()

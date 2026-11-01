@@ -119,9 +119,19 @@ they were 8.3 s), the same checks passing. `boot`'s shots are the
 same as with the CPU's stage; no validation errors. With an empty cache,
 90% of the draws already use the translated shaders.
 
-Left: performance 3 (presenting through the renderer's own Vulkan device)
-(off the game's thread: a frame of latency and a little CPU on the main
-thread).
+Presenting through the renderer's own device (performance 3, done
+2026-11-01, `src/vk/present.cpp`): at each vertical blank the GPU's thread
+copies the screens, on the GPU, into one of eight sets of images
+(`Frame::set`); the player's `VulkanPresenter` has a swapchain on the
+window and draws both screens from the set, letterboxed, turned and
+filtered in a shader, with Dear ImGui's Vulkan backend over them. Two
+timeline semaphores order it: the renderer's submissions (the set is
+filled) and the presenter's (the set can be filled again); the queue is
+shared under a lock. The pictures go to the CPU only when asked
+(`cpu_pictures`: `boot`'s shots, `RUNTIME_DUMP`). No validation errors;
+`boot`'s shots unchanged. The launcher keeps SDL's renderer.
+
+Nothing of the list is left.
 
 ## Flashes with "60 FPS" (frames between)
 

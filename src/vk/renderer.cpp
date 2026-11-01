@@ -6,7 +6,8 @@
 
 namespace runtime {
 
-VulkanRenderer::VulkanRenderer(Memory &memory) : impl_(std::make_unique<Impl>(*this, memory)) {
+VulkanRenderer::VulkanRenderer(Memory &memory, const std::vector<std::string> &instance_extensions)
+    : impl_(std::make_unique<Impl>(*this, memory, instance_extensions)) {
     if (!impl_->init()) return;
     // the CPU's accesses to what was drawn bring it down first (memory's guards)
     memory.gpu_sync = [this, &memory](uint32_t vaddr, uint32_t size, bool write) {

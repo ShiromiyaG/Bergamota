@@ -9,12 +9,15 @@
 #include <atomic>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace runtime {
 
 class VulkanRenderer : public pica::Backend {
 public:
-    explicit VulkanRenderer(Memory &memory);
+    // instance_extensions: what a window's presenter needs (SDL_Vulkan_GetInstanceExtensions);
+    // with them the device can present as well
+    explicit VulkanRenderer(Memory &memory, const std::vector<std::string> &instance_extensions = {});
     ~VulkanRenderer() override;
     // false when there is no Vulkan 1.3 device; error says why
     bool ready() const;
@@ -56,10 +59,14 @@ public:
     // so a scene at 30 shows at 60. 0 or 1; set from any thread, taken at
     // the next vertical blank
     std::atomic<int> between{0};
+    // the frames' pictures read back to the CPU (boot's shots, a dump):
+    // without, only the GPU's copies for a presenter
+    std::atomic<bool> cpu_pictures{true};
 
     struct Impl;
 
 private:
+    friend class VulkanPresenter;
     std::unique_ptr<Impl> impl_;
 };
 

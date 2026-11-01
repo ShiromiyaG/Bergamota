@@ -22,6 +22,7 @@
 #include "runtime/async_gpu.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
+#include "runtime/vulkan_presenter.h"
 #include "runtime/vulkan_renderer.h"
 #include "runtime/loader.h"
 #include "runtime/services.h"
@@ -31,6 +32,8 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
+#include <imgui_impl_vulkan.h>
+#include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
 #include <atomic>
@@ -108,7 +111,7 @@ int main(int argc, char **argv) {
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) return fail(std::string("SDL: ") + SDL_GetError());
     constexpr int SCALE = 2;
-    SDL_Window *window = SDL_CreateWindow("runtime", 400 * SCALE, 480 * SCALE, SDL_WINDOW_RESIZABLE);
+    SDL_Window *window = SDL_CreateWindow("runtime", 400 * SCALE, 480 * SCALE, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
     if (!window || !renderer) return fail(std::string("SDL: ") + SDL_GetError());
     frontend::ui_init(window, renderer);
@@ -165,13 +168,51 @@ int main(int argc, char **argv) {
     };
     load(system, exheader, code, decomp.get());
     if (!link_code(library, system.memory, decomp.get(), error)) return fail(error);
-    // the renderer
+    // the renderer, on a device that presents to the window as well: the
+    // launcher's SDL renderer and its overlay go
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    SDL_DestroyRenderer(renderer);
+    renderer = nullptr;
+    Uint32 extension_count = 0;
+    const char *const *extension_names = SDL_Vulkan_GetInstanceExtensions(&extension_count);
+    std::vector<std::string> extensions(extension_names, extension_names + extension_count);
     pica::Pica pica_gpu(system.memory);
-    VulkanRenderer vulkan(system.memory);
+    VulkanRenderer vulkan(system.memory, extensions);
     if (!vulkan.ready()) {
         return fail("the game needs Vulkan, which this computer's GPU or driver does not give (" + vulkan.error + ")");
     }
     pica_gpu.backend = &vulkan;
+    // the frames read back to the CPU only for RUNTIME_DUMP; the window
+    // shows them straight from the GPU
+    vulkan.cpu_pictures = SDL_getenv("RUNTIME_DUMP") != nullptr;
+    VulkanPresenter presenter(vulkan, [&](VkInstance instance, VkSurfaceKHR *surface) {
+        return SDL_Vulkan_CreateSurface(window, instance, nullptr, surface);
+    });
+    if (!presenter.ready()) return fail("the window cannot show Vulkan's pictures (" + presenter.error + ")");
+    // the overlay on the same device
+    ImGui_ImplSDL3_InitForVulkan(window);
+    VkFormat overlay_format = presenter.format();
+    ImGui_ImplVulkan_InitInfo overlay_info{};
+    overlay_info.Instance = presenter.instance();
+    overlay_info.PhysicalDevice = presenter.physical();
+    overlay_info.Device = presenter.device();
+    overlay_info.QueueFamily = presenter.family();
+    overlay_info.Queue = presenter.queue();
+    overlay_info.DescriptorPool = presenter.overlay_pool();
+    overlay_info.MinImageCount = 2;
+    overlay_info.ImageCount = 3;
+    overlay_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    overlay_info.UseDynamicRendering = true;
+    overlay_info.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
+    overlay_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    overlay_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &overlay_format;
+    ImGui_ImplVulkan_Init(&overlay_info);
+    {
+        // its font goes up through the queue the renderer shares
+        std::lock_guard g(presenter.queue_lock());
+        ImGui_ImplVulkan_CreateFontsTexture();
+    }
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
@@ -180,10 +221,6 @@ int main(int argc, char **argv) {
     if (!SDL_getenv("RUNTIME_SYNC_GPU")) async = std::make_unique<AsyncGpu>(pica_gpu, system.memory);
     handlers.gpu = async ? static_cast<Gpu *>(async.get()) : &pica_gpu;
 
-    SDL_Texture *screens[2] = {
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 400, 240),
-        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, 320, 240),
-    };
     SDL_Gamepad *gamepad = nullptr;
     // the DSP's frames as they come, at its own rate; SDL resamples
     SDL_AudioSpec spec{SDL_AUDIO_S16, 2, int(AUDIO_RATE)};
@@ -196,12 +233,7 @@ int main(int argc, char **argv) {
     auto apply = [&] {
         bindings.resolve(settings);
         SDL_SetWindowFullscreen(window, settings.video.fullscreen);
-        SDL_SetRenderVSync(renderer, settings.video.vsync ? 1 : 0);
-        for (SDL_Texture *t : screens) {
-            SDL_SetTextureScaleMode(t, settings.video.smooth ? SDL_SCALEMODE_LINEAR : SDL_SCALEMODE_NEAREST);
-        }
         both = settings.video.layout != "top";
-        SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
         vulkan.between = settings.video.between ? 1 : 0;
     };
@@ -285,7 +317,11 @@ int main(int argc, char **argv) {
             // the mouse on the bottom screen is the stylus
             float mx = 0, my = 0;
             SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
-            SDL_RenderCoordinatesFromWindow(renderer, mx, my, &mx, &my);
+            int ww = 0, wh = 0;
+            SDL_GetWindowSize(window, &ww, &wh);
+            float scale = 1, x0 = 0, y0 = 0;
+            VulkanPresenter::letterbox(float(ww), float(wh), both, scale, x0, y0);
+            mx = (mx - x0) / scale, my = (my - y0) / scale;
             if (both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 40 && mx < 360) {
                 now.touch = std::make_pair(uint16_t(mx - 40), uint16_t(my - 240));
             }
@@ -314,35 +350,29 @@ int main(int argc, char **argv) {
                 out << "P6\n" << p.width << " " << p.height << "\n255\n";
                 for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
             }
-            for (uint32_t s = 0; s < 2; s++) {
-                const Picture &p = showing.screens[s];
-                if (!p.rgba.empty()) SDL_UpdateTexture(screens[s], nullptr, p.rgba.data(), int(p.width * 4));
-            }
         } else if (!settings.video.vsync && !overlay.open) {
             // nothing new, and no refresh to wait for
             SDL_Delay(1);
             continue;
         }
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-        SDL_RenderClear(renderer);
-        for (uint32_t s = 0; s < (both ? 2u : 1u); s++) {
-            const Picture &p = showing.screens[s];
-            if (p.rgba.empty()) continue;
-            SDL_FRect at{s ? 40.0f : 0.0f, s ? 240.0f : 0.0f, float(p.width), 240.0f};
-            SDL_RenderTexture(renderer, screens[s], nullptr, &at);
-        }
-        // the overlay over them, at the window's own size
-        ImGui_ImplSDLRenderer3_NewFrame();
+        // the screens straight from the GPU, the overlay over them at the
+        // window's own size
+        ImGui_ImplVulkan_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         bool changed = false;
         overlay.draw(settings, stats, config_file, changed);
         ImGui::Render();
-        SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
-        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer);
-        SDL_SetRenderLogicalPresentation(renderer, 400, both ? 480 : 240, SDL_LOGICAL_PRESENTATION_LETTERBOX);
-        SDL_RenderPresent(renderer);
+        int pw = 0, ph = 0;
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        VulkanPresenter::View view;
+        view.width = uint32_t(pw), view.height = uint32_t(ph);
+        view.both = both;
+        view.smooth = settings.video.smooth;
+        view.vsync = settings.video.vsync;
+        presenter.present(fresh ? &showing : nullptr, view,
+                          [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });
         if (changed) apply();
 
         // how the second went
@@ -373,7 +403,10 @@ int main(int argc, char **argv) {
     // where the C had nothing, for the next recompile to take in
     if (save_hints(system.interpreted_at, exheader, error) < 0) std::fprintf(stderr, "hints: %s\n", error.c_str());
     frontend::save(config_file, settings, error);
-    frontend::ui_shutdown();
+    presenter.idle();
+    ImGui_ImplVulkan_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
     SDL_Quit();
     return 0;
 }

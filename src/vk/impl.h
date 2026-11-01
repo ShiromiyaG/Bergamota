@@ -21,6 +21,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <atomic>
+#include <mutex>
 #include <map>
 #include <unordered_map>
 
@@ -324,7 +326,8 @@ struct VulkanRenderer::Impl {
         bool on_gpu[2]{};
         Picture from_memory[2];
         uint64_t number = 0, serial = 0;
-        bool between = false, pending = false;
+        bool between = false, pending = false, to_cpu = true;
+        int set = -1;
     } shown;
 
     Surface *framebuffer(uint32_t address, uint32_t stride);
@@ -336,7 +339,24 @@ struct VulkanRenderer::Impl {
     // RUNTIME_VK_DEBUG, read once
     const bool debug = std::getenv("RUNTIME_VK_DEBUG") != nullptr;
 
-    Impl(VulkanRenderer &s, Memory &m) : self(s), memory(m) {}
+    Impl(VulkanRenderer &s, Memory &m, const std::vector<std::string> &extensions)
+        : self(s), memory(m), instance_extensions(extensions) {}
+    std::vector<std::string> instance_extensions;
+    bool can_present = false; // the device has the swapchain
+
+    // the screens copied on the GPU for a presenter (VulkanPresenter), a set
+    // a vertical blank in turn; one is used again once the presenter's
+    // timeline (presented) got past what it waited for
+    static constexpr int SETS = 8;
+    struct ScreenSet {
+        Image screens[2];
+        std::atomic<uint64_t> wait{0};
+    } sets[SETS];
+    int next_set = 0;
+    // the submissions done (rendered, the serial of each) and the
+    // presenter's (presented): timeline semaphores
+    VkSemaphore rendered = VK_NULL_HANDLE, presented = VK_NULL_HANDLE;
+    std::mutex queue_lock; // the queue: this thread's submits and the presenter's
 
     bool fail(const char *what, VkResult r);
 
