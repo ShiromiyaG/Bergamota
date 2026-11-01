@@ -1,8 +1,50 @@
 # Known problems and their causes (2026-10-31)
 
-What the player shows wrong today, found by reading the code, not yet fixed.
-Each entry: the symptom, the cause with where it is, how sure we are, and the
-fix. The order at the end is the order to fix them in.
+What the player showed wrong, found by reading the code. Each entry: the
+symptom, the cause with where it is, how sure we are, and the fix. The order
+at the end is the order they were fixed in; "Status" says what is done.
+
+## Status (2026-10-31)
+
+Fixed: flashes 1-6, performance 1, 2 and 5, sound 1 and 2. `boot` runs
+AsyncGpu by default. Checked with `boot` on a bot recording (1710 frames,
+"60 FPS" on): frames between and the game's alternate exactly, none of the
+frames shown stands out from both neighbors, and 324 of 329 moving frames
+fall between theirs (the rest are texture animations, which a frame between
+does not move); the player shows 60 frames a second with the game's thread
+idle 90% of the time.
+
+- Threads: `Kernel::live_` holds the threads not dead, which is all the
+  scheduler looks at; an ended thread's TLS goes back (`Hooks::free_tls`).
+- Sound: `Services::tick` makes one DSP frame a call and keeps the debt
+  (up to 0.1 s); the player keeps SDL's queue near 60 ms by playing up to
+  0.5% faster or slower.
+- Frames: each vertical blank is an item in the GPU's queue
+  (`Gpu::vblank`). On the GPU's thread, in order with the command lists,
+  `VulkanRenderer::vblank` copies what the screens show (the frame between
+  for the top one when it is due) and hands on the copy of the blank
+  before as a numbered `Frame` (`Gpu::next_frame`). Frames between are cut
+  at the display transfer into a top screen buffer (`frame_end`), so they
+  are whole; they are drawn only when the frame came two blanks or more
+  after the last one; draws match on vertex count, textures and combiners;
+  a vertex that jumps more than a quarter of the screen is drawn where it
+  lands; depth and stencil are seeded; a buffer read as a texture is read
+  from its between image; partial fills in a replay are skipped; images
+  let go mid-frame live until the frame is replayed. A frame between shows
+  on the blank the screen moves to the new buffer (the game swaps a blank
+  after its transfer), the game's own on the next.
+- Presenting: the player runs `System::run` on a thread of its own; the
+  main thread reads the input (handed over under a lock) and shows the
+  frames in order, two waiting at most.
+- Small costs: staging buffers reused (`staging_buffer`, `give_back`),
+  `RUNTIME_VK_DEBUG` read once, the per-draw timers and the shape counter
+  gone.
+
+Left: performance 3 (presenting through the renderer's own Vulkan device)
+and 4 (the vertex stage on the GPU). Both are now off the game's thread:
+3 costs a frame of latency and a little CPU on the main thread, 4 keeps
+the GPU's thread busy (about 45% of each second at the title screen), and
+the game waits for that thread when it reads back what it drew.
 
 ## Flashes with "60 FPS" (frames between)
 
@@ -125,6 +167,7 @@ presentation tick. Every cause below comes from that difference.
 ## Order
 
 1. Free dead threads (performance 2): small, alone, and it grows with time.
+   Done, as are 2, 4 and 5; 3 is left (`docs/organization.md`, 1).
 2. Make every missed DSP frame (sound 1): a few lines.
 3. Split `src/vk/renderer.cpp` (`docs/organization.md`) before touching the
    frames between.

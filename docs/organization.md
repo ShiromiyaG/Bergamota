@@ -20,16 +20,17 @@ One `Impl` struct holds everything. By what it does:
 
 `Impl` becomes a header private to `src/vk/`. While at it:
 
-- the shape counter goes (`note_shape`, `shapes_done`, `count_shapes`,
-  `frames_seen`, `draws_seen`, `draws_matched`, `draws_moved`,
-  `RUNTIME_SHAPES`): it measured whether frames between could work, and the
-  frames between replaced it;
-- the `RUNTIME_VK_*` variables read once at start into a `Debug` struct,
-  the `if (getenv(...))` blocks gone from the hot paths;
+- the shape counter goes (done);
+- the `RUNTIME_VK_*` variables read once at start (done for
+  `RUNTIME_VK_DEBUG`; `RUNTIME_VK_NO_PICTURE` is gone);
 - the counters and timers (`draws`, `time_vertices`, `part[]`,
   `write_back_causes`...) in one `Stats` struct, timed only when asked.
 
 ## 2. One place for the frames between and for presenting
+
+Done (2026-10-31): `Frame` and `Gpu::next_frame`, fed by
+`VulkanRenderer::vblank` on the GPU's thread; the player and `boot` both
+take frames, and the picking rules live in the renderer.
 
 The rule for which picture to show is in the player (`show_between`,
 `new_frame_before`) and copied into `boot` (`trail_new_before`); the
@@ -58,6 +59,9 @@ globals the player needs today (`library`, `services_ptr`, because
 
 ## 4. The player's `main`
 
+Half done: the game has its own thread and the loop is flat, but still one
+function.
+
 `frontend/player.cpp`'s `main` is one function with a 150-line lambda run
 on the game's thread. Once the game has its own thread
 (`docs/problems.md`, performance 1): `main` opens the session and starts
@@ -65,6 +69,9 @@ the game thread, then loops on events, input, sound and presenting, each a
 function of its own.
 
 ## 5. Zakuro's renderer out
+
+The player no longer has it (nor the `video.renderer` setting); `boot`,
+`ZakuroGpu` and `bridge/` still do.
 
 R3 made the runtime's renderer the only one. Left over from the bridge:
 `bridge/` (a Rust crate and its `Cargo.lock`), `ZakuroGpu` in

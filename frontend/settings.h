@@ -30,7 +30,6 @@ struct Settings {
         std::string exheader, code, library, game, update, user, decomp;
     } game;
     struct {
-        std::string renderer = "native"; // the runtime's own ("native") or Zakuro's ("zakuro"); a restart
         bool fullscreen = false;
         bool vsync = false;      // waits for the display, which the game, on the same thread, pays for
         bool smooth = true;      // the screens scaled up smoothly, or in sharp pixels
