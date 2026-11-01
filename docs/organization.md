@@ -7,6 +7,12 @@ changes no behavior, so `boot`'s shots stay the same before and after.
 
 ## 1. Split the renderer (`src/vk/renderer.cpp`, 1,543 lines)
 
+Done (2026-11-01): `Impl` is declared in `src/vk/impl.h` and its methods
+are in the files below; `renderer.cpp` keeps the public side. `boot`'s
+shots were the same before and after, byte for byte, with `RUNTIME_ASYNC=0`
+(with the GPU on its own thread a run differs a little from the next, as the
+interrupts come back at other points of the game's code).
+
 One `Impl` struct holds everything. By what it does:
 
 | File | What goes there |

@@ -54,7 +54,8 @@ if(RUNTIME_VULKAN)
         COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/depth.comp.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/depth.comp
         DEPENDS src/vk/depth.comp
         VERBATIM)
-    target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/pica/texture.cpp
+    target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
+        src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/pica/texture.cpp
         ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
