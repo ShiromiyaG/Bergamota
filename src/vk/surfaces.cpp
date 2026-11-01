@@ -149,8 +149,17 @@ Surface *Impl::surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format
             return s.get();
         }
     }
-    // a frame drawn again only uses the buffers the game's made
-    if (replaying) return nullptr;
+    // a frame drawn again only uses the buffers the game's made, those it
+    // let go of since included
+    if (replaying) {
+        for (auto &s : retired) {
+            if (s->address == address && s->width == w && s->height == h && s->format == format && s->depth == depth &&
+                s->linear == linear) {
+                return s.get();
+            }
+        }
+        return nullptr;
+    }
     // others over the same memory go back first, then away
     Surface fresh{address, w, h, format, depth, linear, {}};
     for (size_t i = 0; i < surfaces.size();) {
@@ -161,9 +170,14 @@ Surface *Impl::surface(uint32_t address, uint32_t w, uint32_t h, uint32_t format
         }
         if (s.dirty) write_back(s);
         if (color_target == &s || depth_target == &s) end_rendering();
-        let_go(s.image);
-        if (s.as_color.image) let_go(s.as_color);
-        if (s.between.image) let_go(s.between);
+        if (between) {
+            // the frame's frames between draw on it still
+            retired.push_back(std::move(surfaces[i]));
+        } else {
+            let_go(s.image);
+            if (s.as_color.image) let_go(s.as_color);
+            if (s.between.image) let_go(s.between);
+        }
         surfaces.erase(surfaces.begin() + i);
     }
     auto s = std::make_unique<Surface>(fresh);

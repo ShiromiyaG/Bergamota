@@ -564,6 +564,7 @@ void Impl::shutdown() {
         vkDestroyPipelineCache(device, pipeline_cache, nullptr);
     }
     for (auto &s : surfaces) destroy(s->image), destroy(s->as_color), destroy(s->between);
+    for (auto &s : retired) destroy(s->image), destroy(s->as_color), destroy(s->between);
     for (Image &i : dead_held) destroy(i);
     for (Image &i : dead) destroy(i);
     for (Buffer &b : spare) destroy(b);

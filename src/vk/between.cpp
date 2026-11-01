@@ -299,15 +299,19 @@ void Impl::draw_between(float t) {
     };
     std::vector<Kept> kept;
     between_views.clear();
+    // the buffers, those the frame let go of too (retired)
+    std::vector<Surface *> all;
+    for (auto &s : surfaces) all.push_back(s.get());
+    for (auto &s : retired) all.push_back(s.get());
     // a depth buffer read as color (an effect reading the depth): made
     // again from the between depth when a replayed draw reads it
     std::unordered_map<VkImageView, Surface *> depth_views;
     std::vector<Surface *> depth_redone;
-    for (auto &s : surfaces) {
-        if (s->as_color.image) depth_views[s->as_color.view] = s.get();
+    for (Surface *s : all) {
+        if (s->as_color.image) depth_views[s->as_color.view] = s;
     }
     int whole = gpu_open(2), seeding = gpu_open(1);
-    for (auto &s : surfaces) {
+    for (Surface *s : all) {
         kept.push_back({s->dirty, s->stale, s->version, s->converted});
         if (!s->between.image) s->between = image(s->image.width, s->image.height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
         VkImageCopy c{};
@@ -392,8 +396,8 @@ void Impl::draw_between(float t) {
     p.regs = regs;
     p.light_tables = tables;
     p.tables_version = tables_version;
-    for (size_t i = 0; i < surfaces.size(); i++) {
-        Surface &s = *surfaces[i];
+    for (size_t i = 0; i < all.size(); i++) {
+        Surface &s = *all[i];
         std::swap(s.image, s.between);
         s.dirty = kept[i].dirty, s.stale = kept[i].stale, s.version = kept[i].version, s.converted = kept[i].converted;
         // its color copy holds the between depth now: made again when the game reads it
@@ -498,6 +502,13 @@ void Impl::drop_ops() {
     ops_now.clear();
     dead.insert(dead.end(), dead_held.begin(), dead_held.end());
     dead_held.clear();
+    // the buffers let go of during the frame, drawn between by now
+    for (auto &s : retired) {
+        let_go(s->image);
+        if (s->as_color.image) let_go(s->as_color);
+        if (s->between.image) let_go(s->between);
+    }
+    retired.clear();
 }
 
 // an image let go: kept while a frame's ops may still draw with it

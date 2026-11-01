@@ -221,6 +221,12 @@ struct VulkanRenderer::Impl {
     std::vector<Image> dead;     // the same for images let go
 
     std::vector<std::unique_ptr<Surface>> surfaces;
+    // buffers another took the memory of while the frame's ops still draw
+    // on them (a cutscene's passes, sized each their own, over the same
+    // memory): kept for the frame's frames between, which draw them again,
+    // until the ops go (drop_ops). Gone at once, their draws were left out
+    // of the frames between, or drawn with no depth, and flashed
+    std::vector<std::unique_ptr<Surface>> retired;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures;
     Image blank; // a unit with no texture
 
