@@ -205,11 +205,16 @@ void Impl::render(Pica &p) {
         }
         if (tables_serial != submitted || tables_sent != p.tables_version) {
             if (tables_decoded != p.tables_version) {
-                pica::decode_light_tables(p.light_tables, light_tables);
+                pica::decode_light_tables(p.light_tables, light_tables.light);
+                // the fog's: the factor in 0.11 above the step, 13 bits with the sign on top
+                for (size_t e = 0; e < p.fog_table.size(); e++) {
+                    uint32_t value = p.fog_table[e];
+                    light_tables.fog[e] = {float((value >> 13) & 0x7FF) / 2048.0f, float(int32_t(value << 19) >> 19) / 2048.0f};
+                }
                 tables_decoded = p.tables_version;
             }
             tables_offset = take(uniforms, uniform_at, sizeof light_tables, 256);
-            std::memcpy(uniforms.mapped + tables_offset, light_tables.data(), sizeof light_tables);
+            std::memcpy(uniforms.mapped + tables_offset, &light_tables, sizeof light_tables);
             tables_sent = p.tables_version;
             tables_serial = submitted;
         }

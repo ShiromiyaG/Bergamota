@@ -48,6 +48,9 @@ public:
     uint64_t translated_draws = 0;
     // draws between taken from the outputs the game's draws kept
     uint64_t reused_draws = 0;
+    // draws asking for what the renderer does not do yet: fog, gas,
+    // procedural textures, a geometry shader, the shadow output
+    uint64_t lacking[5]{};
     void translation_counts(uint64_t &compiled, uint64_t &loaded, uint64_t &failed) const;
     // the translated shaders and the driver's pipelines kept in folder
     // across runs; before the game starts

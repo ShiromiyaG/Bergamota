@@ -136,6 +136,17 @@ shared under a lock. The pictures go to the CPU only when asked
 
 Nothing of the list is left.
 
+## What the renderer lacks (2026-11-01)
+
+`boot` counts the draws that ask for what the renderer does not do
+(`VulkanRenderer::lacking`, "draws the renderer lacks"). From the title to
+the field: fog in 48727 draws (about a third), none with gas, procedural
+textures, a geometry shader or the shadow output. Fog is done since (the
+table after the lighting tables, mixed in at the end of `pica.frag` as
+Zakuro's `fog.rs` does); the depth it reads is the w buffer's when
+`DEPTHMAP_ENABLE` is off. The renderer's own depth still ignores the w
+buffer. The rest waits for a scene that uses it: the counter tells.
+
 ## Flashes with "60 FPS" (frames between)
 
 The frames between work in `boot` and flash in the player. `boot` runs the

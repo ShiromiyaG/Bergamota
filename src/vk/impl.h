@@ -76,7 +76,7 @@ struct State {
 constexpr uint32_t STATE_REGS[] = {
     0x0C0, 0x0C1, 0x0C2, 0x0C3, 0x0C4, 0x0C8, 0x0C9, 0x0CA, 0x0CB, 0x0CC, 0x0D0, 0x0D1, 0x0D2, 0x0D3, 0x0D4,
     0x0D8, 0x0D9, 0x0DA, 0x0DB, 0x0DC, 0x0F0, 0x0F1, 0x0F2, 0x0F3, 0x0F4, 0x0F8, 0x0F9, 0x0FA, 0x0FB, 0x0FC,
-    0x0E0, 0x0FD, 0x104, 0x080, 0x083, 0x093, 0x09B, 0x081, 0x091, 0x099,
+    0x0E0, 0x0FD, 0x104, 0x080, 0x083, 0x093, 0x09B, 0x081, 0x091, 0x099, 0x0E1,
 };
 
 // a texture unit's registers: border color, then size, parameters, address
@@ -243,7 +243,12 @@ struct VulkanRenderer::Impl {
     pica::LightingBlock light_block{};
     VkDeviceSize light_offset = 0, tables_offset = 0;
     uint64_t light_serial = ~0ull, tables_serial = ~0ull;
-    pica::LightTables light_tables{};
+    // the tables as the fragment shader reads them: lighting's, then the
+    // fog's 128 (factor, step)
+    struct DecodedTables {
+        pica::LightTables light;
+        std::array<std::array<float, 2>, 128> fog;
+    } light_tables{};
     uint64_t tables_sent = ~0ull, tables_decoded = ~0ull; // Pica::tables_version of each
 
     // -- frames between the game's ----------------------------------------------

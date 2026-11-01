@@ -171,7 +171,8 @@ void light(vec4 tex[4], out vec4 primary, out vec4 secondary) {
 
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
-const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37;
+const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
+          FOG_COLOR = 40;
 
 vec4 unpack(uint c) { return vec4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) / 255.0; }
 
@@ -315,5 +316,21 @@ void main() {
     // the alpha test, against an 8-bit reference
     uint test = reg(ALPHA_TEST);
     if ((test & 1u) != 0u && !compare((test >> 4) & 7u, round(previous.a * 255.0), float((test >> 8) & 0xFFu))) discard;
+
+    // fog (mode 5, under the combiner buffer's update): the fog's color
+    // mixed in by the fragment's depth through its table, from the far end
+    // with bit 16. the depth as the depth buffer gets it (times w for the w
+    // buffer), screen-linear (Zakuro's fog.rs)
+    uint fog = reg(TEV_UPDATE);
+    if ((fog & 7u) == 5u) {
+        float depth = gl_FragCoord.z;
+        if (s.depth.z == 0.0) depth /= gl_FragCoord.w; // the w buffer: DEPTHMAP_ENABLE off
+        depth = clamp(depth, 0.0, 1.0);
+        if ((fog & 0x10000u) != 0u) depth = 1.0 - depth;
+        float index = depth * 128.0, entry = clamp(floor(index), 0.0, 127.0);
+        vec2 e = t.entries[24 * 256 + int(entry)];
+        float factor = clamp(e.x + e.y * (index - entry), 0.0, 1.0);
+        previous.rgb = mix(unpack(reg(FOG_COLOR)).rgb, previous.rgb, factor);
+    }
     out_color = previous;
 }
