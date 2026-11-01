@@ -50,6 +50,8 @@ public:
     bool settled();
     // seconds the game's thread waited for the GPU
     double waited = 0;
+    // its thread, for the sampler
+    void *native_thread() { return thread_.native_handle(); }
 
 private:
     void push(uint8_t interrupt, std::function<void()> work);

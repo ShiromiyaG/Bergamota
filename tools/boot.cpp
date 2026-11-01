@@ -16,6 +16,7 @@
 //   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
 //                           it was found in most, sampled every millisecond
 //   RUNTIME_SAMPLE_FROM=s   sampled from s seconds in (on the host's clock)
+//   RUNTIME_SAMPLE_GPU=1    the GPU's thread sampled as well
 //   RUNTIME_TRAIL=n         after each shot, the next n frames shown; on the host's
 //                           clock, the first n from frame RUNTIME_TRAIL_FROM
 //                           (RUNTIME_NO_INPUT=1: no A presses; RUNTIME_REPLAY: its input)
@@ -277,7 +278,7 @@ int main(int argc, char **argv) {
     };
 
     auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
-    Sampler sampler;
+    Sampler sampler, gpu_sampler;
     const size_t sample_count = env("RUNTIME_SAMPLE") ? std::stoul(env("RUNTIME_SAMPLE")) : 0;
     auto sample_from = std::chrono::steady_clock::now() +
                        std::chrono::duration<double>(env("RUNTIME_SAMPLE_FROM") ? std::atof(env("RUNTIME_SAMPLE_FROM")) : 0);
@@ -291,6 +292,7 @@ int main(int argc, char **argv) {
         if (sample_count && !sampling && now >= sample_from) {
             sampling = true;
             sampler.start_here();
+            if (async && env("RUNTIME_SAMPLE_GPU")) gpu_sampler.start(async->native_thread());
         }
         if (frames) {
             // a frame at a time: the recording's input for it, the screens
@@ -345,6 +347,11 @@ int main(int argc, char **argv) {
         sampler.stop();
         std::printf("the game's thread, %llu samples:\n", (unsigned long long)sampler.samples());
         for (const std::string &line : sampler.report(library, sample_count)) std::printf("  %s\n", line.c_str());
+        gpu_sampler.stop();
+        if (gpu_sampler.samples()) {
+            std::printf("the GPU's thread, %llu samples:\n", (unsigned long long)gpu_sampler.samples());
+            for (const std::string &line : gpu_sampler.report(library, sample_count)) std::printf("  %s\n", line.c_str());
+        }
     }
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);

@@ -22,8 +22,10 @@ class Sampler {
 public:
     Sampler();
     ~Sampler();
-    // samples the thread that calls it, until stop()
+    // samples the thread that calls it, or the one whose native handle is
+    // given (std::thread::native_handle), until stop()
     void start_here();
+    void start(void *thread);
     void stop();
     // the functions where the samples fell, most first, as "share% name"
     // lines; at most count

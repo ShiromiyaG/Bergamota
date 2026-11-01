@@ -34,6 +34,19 @@ void Sampler::start_here() {
 #endif
 }
 
+void Sampler::start(void *thread) {
+#ifdef _WIN32
+    HANDLE copy = nullptr;
+    DuplicateHandle(GetCurrentProcess(), thread, GetCurrentProcess(), &copy,
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, 0);
+    thread_ = copy;
+    stop_ = false;
+    sampler_ = std::thread([this] { run(); });
+#else
+    (void)thread;
+#endif
+}
+
 void Sampler::stop() {
     stop_ = true;
     if (sampler_.joinable()) sampler_.join();
