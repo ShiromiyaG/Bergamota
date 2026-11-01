@@ -111,12 +111,6 @@ bool launcher(SDL_Window *window, SDL_Renderer *renderer, Settings &s, const std
         }
 
         ImGui::SeparatorText("Video");
-#ifdef RUNTIME_ZAKURO_GPU
-        int which = s.video.renderer == "zakuro" ? 1 : 0;
-        if (ImGui::Combo("Renderer", &which, "The runtime's (Vulkan)\0Zakuro's (Vulkan, through its bridge)\0")) {
-            s.video.renderer = which ? "zakuro" : "native";
-        }
-#endif
         ImGui::Checkbox("Fullscreen", &s.video.fullscreen);
         ImGui::TextDisabled("The rest (filter, layout, volume, controls) is in the overlay: F1 in the game.");
 
