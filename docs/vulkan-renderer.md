@@ -72,7 +72,7 @@ draws right from the intro to the field, lit; the player runs it at about
 
 1. **Front end.** (done) Command lists, registers, shader and table uploads, fixed
    attributes and immediate mode, and the fill, transfer and copy engines on
-   memory. Draws counted, not drawn. Selectable beside the Zakuro bridge.
+   memory. Draws counted, not drawn.
 2. **Vertex stage.** (done; 16 vertices at a time, across the CPU's cores) Attribute loading, the shader interpreter, the geometry
    stage's absence checked, primitive assembly, clipping left to Vulkan.
 3. **First pixels.** (done; fills and display transfers on the GPU, a

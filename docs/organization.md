@@ -76,8 +76,8 @@ function of its own.
 
 ## 5. Zakuro's renderer out
 
-The player no longer has it (nor the `video.renderer` setting); `boot`,
-`ZakuroGpu` and `bridge/` still do.
+Done (2026-11-01): `bridge/`, `ZakuroGpu`, the `RUNTIME_ZAKURO_GPU` option
+and `boot`'s `gpu` struct of functions are gone.
 
 R3 made the runtime's renderer the only one. Left over from the bridge:
 `bridge/` (a Rust crate and its `Cargo.lock`), `ZakuroGpu` in

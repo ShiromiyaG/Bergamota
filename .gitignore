@@ -1,5 +1,4 @@
 build/
-bridge/zakuro-gpu-c/target/
 
 # boot's shots of the game
 *.ppm

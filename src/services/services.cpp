@@ -444,7 +444,11 @@ void Services::tick(System &system) {
     // console; past a tenth of a second behind, the rest is let go
     constexpr uint64_t MOST_BEHIND = DSP_FRAME_TICKS * 20;
     dsp_.next_frame += DSP_FRAME_TICKS;
-    if (now > dsp_.next_frame + MOST_BEHIND) dsp_.next_frame = now - MOST_BEHIND;
+    if (now > dsp_.next_frame + MOST_BEHIND) {
+        dsp_dropped += (now - MOST_BEHIND - dsp_.next_frame) / DSP_FRAME_TICKS;
+        dsp_.next_frame = now - MOST_BEHIND;
+    }
+    dsp_frames++;
     audio.tick(system.memory);
     dsp_signal(system);
 }

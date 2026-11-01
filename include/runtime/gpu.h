@@ -11,8 +11,6 @@
 
 #include "runtime/memory.h"
 
-struct ZGpu; // bridge/zakuro-gpu.h
-
 namespace runtime {
 
 // a screen's picture as it shows now, upright RGBA (400x240 or 320x240)
@@ -89,37 +87,6 @@ private:
 // its side, in one of five formats
 Picture read_screen(Memory &memory, uint32_t screen, uint32_t address, uint32_t stride, uint32_t format);
 
-#ifdef RUNTIME_ZAKURO_GPU
-// Zakuro's renderer (software), through bridge/zakuro-gpu.h
-class ZakuroGpu : public Gpu {
-public:
-    // hardware: on the host GPU through Vulkan, else in software
-    // title: its compiled pipelines kept on disk (0 for none)
-    ZakuroGpu(Memory &memory, bool hardware, uint64_t title = 0);
-    bool hardware = false;
-    ~ZakuroGpu() override;
-    void write_register(uint32_t offset, uint32_t value) override;
-    uint32_t read_register(uint32_t offset) override;
-    void command_list(uint32_t paddr, uint32_t size) override;
-    void memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) override;
-    void display_transfer(uint32_t input, uint32_t output, uint32_t input_size, uint32_t output_size,
-                          uint32_t flags) override;
-    void texture_copy(uint32_t input, uint32_t output, uint32_t size, uint32_t input_gap,
-                      uint32_t output_gap) override;
-    void framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
-                     uint32_t format) override;
-    void sync(uint32_t paddr, uint32_t size) override;
-    // what a screen shows now
-    Picture screen(uint32_t screen);
-    // time spent drawing and transferring, in seconds, and command lists run
-    double busy = 0;
-    uint64_t lists = 0;
-
-private:
-    Memory &memory_;
-    ::ZGpu *gpu_;
-};
-#endif
 
 } // namespace runtime
 

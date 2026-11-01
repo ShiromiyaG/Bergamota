@@ -30,8 +30,7 @@ renderer, at full speed on a desktop GPU.
 ## Building
 
 Needs CMake 3.25+, Ninja, clang (or MSVC), the [Vulkan SDK](https://vulkan.lunarg.com/)
-(for `glslc` and the headers). Rust only with `-DRUNTIME_ZAKURO_GPU=ON`, which also
-builds Zakuro's renderer to compare against (off by default).
+(for `glslc` and the headers).
 SDL3, Dear ImGui and toml++ are fetched by CMake at configure time.
 
 ```sh
@@ -42,9 +41,7 @@ ctest --test-dir build
 
 Builds are optimized unless a build type is given (a Debug runtime runs the
 games several times slower). Options: `RUNTIME_VULKAN` (the runtime's
-renderer), `RUNTIME_ZAKURO_GPU` (Zakuro's, through `bridge/`, needs cargo and
-a [Zakuro](https://github.com/fearkov/zakuro) checkout beside this one),
-`RUNTIME_PLAYER` (the window).
+renderer), `RUNTIME_PLAYER` (the window).
 
 A port adds it with `add_subdirectory(../runtime runtime)` and links
 `recomp_runtime`.

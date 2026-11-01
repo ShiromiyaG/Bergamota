@@ -79,26 +79,6 @@ if(WIN32)
     target_link_libraries(recomp_runtime PUBLIC winmm dbghelp)
 endif()
 
-# Zakuro's renderer, a Rust static library (bridge/zakuro-gpu-c, built with
-# cargo), kept only to compare against: the runtime's own draws the games
-option(RUNTIME_ZAKURO_GPU "also draw with Zakuro's renderer, to compare (needs cargo)" OFF)
-if(RUNTIME_ZAKURO_GPU)
-    set(ZGPU_DIR ${CMAKE_CURRENT_SOURCE_DIR}/bridge/zakuro-gpu-c)
-    set(ZGPU_LIB ${ZGPU_DIR}/target/release/${CMAKE_STATIC_LIBRARY_PREFIX}zakuro_gpu_c${CMAKE_STATIC_LIBRARY_SUFFIX})
-    add_custom_target(zakuro_gpu_c
-        COMMAND cargo build --release --manifest-path ${ZGPU_DIR}/Cargo.toml
-        BYPRODUCTS ${ZGPU_LIB}
-        WORKING_DIRECTORY ${ZGPU_DIR})
-    add_dependencies(recomp_runtime zakuro_gpu_c)
-    target_compile_definitions(recomp_runtime PUBLIC RUNTIME_ZAKURO_GPU)
-    target_include_directories(recomp_runtime PRIVATE bridge)
-    target_link_libraries(recomp_runtime PUBLIC ${ZGPU_LIB})
-    if(WIN32)
-        # what Rust's standard library needs from Windows
-        target_link_libraries(recomp_runtime PUBLIC ws2_32 userenv ntdll bcrypt advapi32 kernel32 synchronization ole32 oleaut32 shell32)
-    endif()
-endif()
-
 enable_testing()
 add_executable(kernel_test tests/kernel_test.cpp)
 target_link_libraries(kernel_test PRIVATE recomp_runtime)

@@ -263,6 +263,7 @@ int main(int argc, char **argv) {
     std::mutex input_lock;
     Input input;
     std::atomic<bool> quit{false};
+    std::atomic<uint64_t> starved{0}; // sound queued at under 5 ms when more came
     std::thread game([&] {
         system.run([&] {
             {
@@ -278,6 +279,8 @@ int main(int argc, char **argv) {
                 // most, the rest is late
                 constexpr int BYTES_PER_SECOND = int(AUDIO_RATE) * 4, TARGET = BYTES_PER_SECOND * 60 / 1000;
                 int queued = SDL_GetAudioStreamQueued(sound);
+                // nearly out before this came: heard as a gap
+                if (queued < BYTES_PER_SECOND / 200) starved++;
                 float off = std::clamp(float(queued - TARGET) / TARGET, -1.0f, 1.0f);
                 SDL_SetAudioStreamFrequencyRatio(sound, 1.0f + 0.005f * off);
                 if (queued < BYTES_PER_SECOND / 4) SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
@@ -297,7 +300,7 @@ int main(int argc, char **argv) {
     frontend::Stats stats, counting;
     bool told[5]{};
     double busy_before = 0, idle_before = 0, host_gpu_before = 0;
-    uint64_t pictures_before = 0;
+    uint64_t pictures_before = 0, dsp_before = 0, dropped_before = 0;
     std::deque<Frame> waiting;
     Frame showing;
     while (!quit) {
@@ -422,9 +425,14 @@ int main(int argc, char **argv) {
                 if (print_stats) std::printf("the renderer lacks %s (frame %llu)\n", LACKING[i], (unsigned long long)showing.number);
             }
             if (print_stats) {
-                std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms\n",
+                std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms; "
+                            "sound: %llu DSP frames, %llu let go, starved %llu times\n",
                             stats.shown, (unsigned long long)(handlers.pictures - pictures_before), stats.worst_ms, stats.gpu_ms,
-                            stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000);
+                            stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000,
+                            (unsigned long long)(handlers.dsp_frames - dsp_before), (unsigned long long)(handlers.dsp_dropped - dropped_before),
+                            (unsigned long long)starved.exchange(0));
+                dsp_before = handlers.dsp_frames;
+                dropped_before = handlers.dsp_dropped;
                 host_gpu_before = vulkan.gpu_seconds;
                 pictures_before = handlers.pictures;
                 std::fflush(stdout);

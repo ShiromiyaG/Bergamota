@@ -172,33 +172,16 @@ int main(int argc, char **argv) {
         std::fprintf(stderr, "%s\n", error.c_str());
         return 1;
     }
-    // the runtime's own renderer (docs/vulkan-renderer.md); RUNTIME_RENDERER=zakuro
-    // Zakuro's, when built with it, to compare
-    struct {
-        std::function<Picture(uint32_t)> screen;
-        std::function<double()> busy;
-        std::function<uint64_t()> lists;
-    } gpu;
-    // RUNTIME_RENDERER=sketch: the same, its draws filled flat on canvases saved with the shots
+    // the runtime's own renderer (docs/vulkan-renderer.md); RUNTIME_RENDERER=sketch:
+    // its draws filled flat on canvases saved with the shots instead
     const std::string renderer = env("RUNTIME_RENDERER") ? env("RUNTIME_RENDERER") : "";
-    const bool native = renderer != "zakuro";
     std::unique_ptr<pica::Sketch> sketch;
 #ifdef RUNTIME_VULKAN
     std::unique_ptr<VulkanRenderer> vulkan;
 #endif
     std::unique_ptr<pica::Pica> pica_gpu;
     std::unique_ptr<AsyncGpu> async;
-#ifdef RUNTIME_ZAKURO_GPU
-    std::unique_ptr<ZakuroGpu> zakuro_gpu;
-    if (!native) {
-        zakuro_gpu = std::make_unique<ZakuroGpu>(system.memory, true);
-        std::printf("drawing with Zakuro's renderer %s\n", zakuro_gpu->hardware ? "on the GPU (Vulkan)" : "in software");
-        handlers.gpu = zakuro_gpu.get();
-        gpu = {[&](uint32_t s) { return zakuro_gpu->screen(s); }, [&] { return zakuro_gpu->busy; },
-               [&] { return zakuro_gpu->lists; }};
-    }
-#endif
-    if (!handlers.gpu) {
+    {
         pica_gpu = std::make_unique<pica::Pica>(system.memory);
         if (renderer == "sketch") {
             sketch = std::make_unique<pica::Sketch>();
@@ -218,8 +201,6 @@ int main(int argc, char **argv) {
 #endif
         std::printf("drawing with the runtime's renderer\n");
         handlers.gpu = pica_gpu.get();
-        gpu = {[&](uint32_t s) { return pica_gpu->screen(s); }, [&] { return pica_gpu->busy; },
-               [&] { return pica_gpu->lists; }};
         // the GPU on a thread of its own, as the player runs it; RUNTIME_ASYNC=0
         // keeps it on the game's
         if (!(env("RUNTIME_ASYNC") && *env("RUNTIME_ASYNC") == '0')) {
@@ -231,13 +212,15 @@ int main(int argc, char **argv) {
                 async->locked([] {});
                 return true;
             };
-            gpu.screen = [&](uint32_t s) {
-                Picture p;
-                async->locked([&] { p = pica_gpu->screen(s); });
-                return p;
-            };
         }
     }
+    // what a screen shows now, the GPU's thread held meanwhile
+    auto screen_now = [&](uint32_t s) {
+        Picture p;
+        if (async) async->locked([&] { p = pica_gpu->screen(s); });
+        else p = pica_gpu->screen(s);
+        return p;
+    };
 
     auto save = [](const std::string &name, const Picture &p) {
         std::ofstream out(name, std::ios::binary);
@@ -336,7 +319,7 @@ int main(int argc, char **argv) {
             for (uint32_t screen = 0; screen < 2; screen++) {
                 char name[64];
                 std::snprintf(name, sizeof name, "shot-%02d-%s.ppm", shots, screen ? "bottom" : "top");
-                save(name, latest.number ? latest.screens[screen] : gpu.screen(screen));
+                save(name, latest.number ? latest.screens[screen] : screen_now(screen));
             }
             shots++;
         }
@@ -358,7 +341,7 @@ int main(int argc, char **argv) {
     std::printf("%s after %.1f s\n", system.kernel.exited() ? "ended" : went_on ? "running" : "stopped", seconds);
     std::printf("%llu pictures in %llu vertical blanks\n", (unsigned long long)handlers.pictures, (unsigned long long)handlers.vblanks);
     if (async) std::printf("the game waited %.1f s for the GPU's thread\n", async->waited);
-    std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", gpu.busy(), (unsigned long long)gpu.lists(), system.idle);
+    std::printf("gpu busy %.1f s, %llu command lists; host idle %.1f s\n", pica_gpu->busy, (unsigned long long)pica_gpu->lists, system.idle);
     {
         int peak = 0;
         for (int16_t s : handlers.audio.output) peak = std::max(peak, std::abs(int(s)));

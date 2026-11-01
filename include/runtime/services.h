@@ -88,6 +88,9 @@ public:
     Audio audio;
     // pictures the game handed the top screen, and vertical blanks
     uint64_t pictures = 0, vblanks = 0;
+    // the DSP's audio frames made, and let go when more than a tenth of a
+    // second behind
+    uint64_t dsp_frames = 0, dsp_dropped = 0;
 
     // what the hardware does on its own as time passes: the DSP's audio
     // frames; called often from the loop
