@@ -72,11 +72,6 @@ float top_width(const Settings &s) {
     return s.video.aspect == "16:9" ? 240.0f * 16 / 9 : s.video.aspect == "21:9" ? 240.0f * 21 / 9 : 400.0f;
 }
 
-std::vector<uint8_t> read_file(const std::string &path) {
-    std::ifstream in(frontend::path_of(path), std::ios::binary);
-    return {std::istreambuf_iterator<char>(in), {}};
-}
-
 // the bindings, resolved from their names: a scancode and a gamepad button
 // for each of the settings' buttons
 struct Bindings {
@@ -99,26 +94,186 @@ int fail(const std::string &message) {
     return 1;
 }
 
-} // namespace
-
-int main(int argc, char **argv) {
-    std::filesystem::path config_file = frontend::default_path();
-    bool setup = false;
+// the command line: --config, --setup, or the game's six files as before
+// the settings; the settings read from the config file
+void read_settings(int argc, char **argv, Settings &settings, std::filesystem::path &config_file, bool &setup) {
+    config_file = frontend::default_path();
     std::vector<std::string> positional;
     for (int i = 1; i < argc; i++) {
         if (!std::strcmp(argv[i], "--config") && i + 1 < argc) config_file = frontend::path_of(argv[++i]);
         else if (!std::strcmp(argv[i], "--setup")) setup = true;
         else positional.push_back(argv[i]);
     }
-    Settings settings;
     std::string error;
     if (!frontend::load(config_file, settings, error)) {
         std::fprintf(stderr, "%s: %s (the defaults instead)\n", frontend::utf8(config_file).c_str(), error.c_str());
     }
     if (positional.size() >= 6) {
-        // the game's files on the command line, as before the settings
         settings.game = {positional[0], positional[1], positional[2], positional[3], positional[4], positional[5]};
     }
+}
+
+// the overlay (Dear ImGui) on the presenter's device
+void start_overlay(SDL_Window *window, VulkanPresenter &presenter) {
+    ImGui_ImplSDL3_InitForVulkan(window);
+    VkFormat format = presenter.format();
+    ImGui_ImplVulkan_InitInfo info{};
+    info.Instance = presenter.instance();
+    info.PhysicalDevice = presenter.physical();
+    info.Device = presenter.device();
+    info.QueueFamily = presenter.family();
+    info.Queue = presenter.queue();
+    info.DescriptorPool = presenter.overlay_pool();
+    info.MinImageCount = 2;
+    info.ImageCount = 3;
+    info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    info.UseDynamicRendering = true;
+    info.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
+    info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+    info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &format;
+    ImGui_ImplVulkan_Init(&info);
+    // its font goes up through the queue the renderer shares
+    std::lock_guard g(presenter.queue_lock());
+    ImGui_ImplVulkan_CreateFontsTexture();
+}
+
+// the DSP's frames made since, to the sound card: the queue kept near 60 ms
+// by playing a little faster or slower (half a percent at most, not heard),
+// as the DSP's clock and the sound card's drift apart; a quarter of a
+// second queued at most, the rest is late
+void feed_sound(SDL_AudioStream *sound, std::vector<int16_t> &out, std::atomic<uint64_t> &starved) {
+    if (!sound || out.empty()) return;
+    constexpr int BYTES_PER_SECOND = int(AUDIO_RATE) * 4, TARGET = BYTES_PER_SECOND * 60 / 1000;
+    int queued = SDL_GetAudioStreamQueued(sound);
+    // nearly out before this came: heard as a gap
+    if (queued < BYTES_PER_SECOND / 200) starved++;
+    float off = std::clamp(float(queued - TARGET) / TARGET, -1.0f, 1.0f);
+    SDL_SetAudioStreamFrequencyRatio(sound, 1.0f + 0.005f * off);
+    if (queued < BYTES_PER_SECOND / 4) SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
+    out.clear();
+}
+
+// the input, from the keyboard and the gamepad together, and the mouse on
+// the bottom screen as the stylus
+Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *window, const Settings &settings, bool both) {
+    Input now;
+    const bool *keys = SDL_GetKeyboardState(nullptr);
+    float circle[4] = {}; // up, down, left, right
+    for (size_t i = 0; i < std::size(frontend::BUTTONS); i++) {
+        bool held = bindings.keys[i] != SDL_SCANCODE_UNKNOWN && keys[bindings.keys[i]];
+        if (gamepad && bindings.pad[i] != SDL_GAMEPAD_BUTTON_INVALID) held |= SDL_GetGamepadButton(gamepad, bindings.pad[i]);
+        if (!held) continue;
+        if (frontend::BUTTONS[i].bit) now.buttons |= frontend::BUTTONS[i].bit;
+        else circle[i - 12] = 1;
+    }
+    float cx = circle[3] - circle[2], cy = circle[0] - circle[1];
+    if (gamepad) {
+        float gx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0f;
+        float gy = -SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
+        if (std::abs(gx) > std::abs(cx)) cx = gx;
+        if (std::abs(gy) > std::abs(cy)) cy = gy;
+    }
+    now.circle_x = cx;
+    now.circle_y = cy;
+    float mx = 0, my = 0;
+    SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
+    int ww = 0, wh = 0;
+    SDL_GetWindowSize(window, &ww, &wh);
+    float scale = 1, x0 = 0, y0 = 0, top = top_width(settings);
+    VulkanPresenter::letterbox(float(ww), float(wh), both, top, scale, x0, y0);
+    mx = (mx - x0) / scale - (top - 320) / 2, my = (my - y0) / scale;
+    if (both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 0 && mx < 320) {
+        now.touch = std::make_pair(uint16_t(mx), uint16_t(my - 240));
+    }
+    return now;
+}
+
+// RUNTIME_DUMP=folder: the first RUNTIME_DUMP_COUNT (600) top screens shown,
+// as <frame>-<game|between>.ppm, to look at what the player showed
+struct Dump {
+    const char *folder = SDL_getenv("RUNTIME_DUMP");
+    int left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
+
+    void take(const Frame &f) {
+        if (!folder || left <= 0 || f.screens[0].rgba.empty()) return;
+        left--;
+        char name[512];
+        std::snprintf(name, sizeof name, "%s/%06llu-%s.ppm", folder, (unsigned long long)f.number, f.between ? "between" : "game");
+        const Picture &p = f.screens[0];
+        std::ofstream out(frontend::path_of(name), std::ios::binary);
+        out << "P6\n" << p.width << " " << p.height << "\n255\n";
+        for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
+    }
+};
+
+// how each second went: for the overlay's corner, RUNTIME_STATS's line, and
+// the first draw of a session asking for what the renderer does not do yet,
+// noted beside the config so any session tells
+class Tally {
+public:
+    Tally(const std::filesystem::path &config_file) : lacks_(config_file.parent_path() / "renderer-lacks.txt") {}
+    frontend::Stats stats; // the last second's
+    std::atomic<uint64_t> starved{0}; // sound queued at under 5 ms when more came
+
+    void shown(std::chrono::steady_clock::time_point at) {
+        counting_.worst_ms = std::max(counting_.worst_ms, std::chrono::duration<double, std::milli>(at - last_shown_).count());
+        last_shown_ = at;
+        counting_.shown++;
+    }
+
+    void tick(std::chrono::steady_clock::time_point at, const Frame &showing, System &system, Services &services,
+              VulkanRenderer &vulkan) {
+        if (at - second_ < std::chrono::seconds(1)) return;
+        counting_.gpu_ms = (showing.busy - busy_before_) * 1000;
+        counting_.idle_ms = (system.idle - idle_before_) * 1000;
+        stats = counting_;
+        static constexpr const char *LACKING[4] = {"w buffer", "gas", "geometry shader modes", "shadow"};
+        for (int i = 0; i < 4; i++) {
+            if (!vulkan.lacking[i] || told_[i]) continue;
+            told_[i] = true;
+            std::time_t now = std::time(nullptr);
+            char when[32];
+            std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
+            std::ofstream(lacks_, std::ios::app) << when << ": " << LACKING[i] << ", frame " << showing.number << "\n";
+            if (print_) std::printf("the renderer lacks %s (frame %llu)\n", LACKING[i], (unsigned long long)showing.number);
+        }
+        if (print_) {
+            std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms; "
+                        "sound: %llu DSP frames, %llu let go, starved %llu times\n",
+                        stats.shown, (unsigned long long)(services.pictures - pictures_before_), stats.worst_ms, stats.gpu_ms,
+                        stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before_) * 1000,
+                        (unsigned long long)(services.dsp_frames - dsp_before_),
+                        (unsigned long long)(services.dsp_dropped - dropped_before_), (unsigned long long)starved.exchange(0));
+            std::fflush(stdout);
+        }
+        dsp_before_ = services.dsp_frames;
+        dropped_before_ = services.dsp_dropped;
+        host_gpu_before_ = vulkan.gpu_seconds;
+        pictures_before_ = services.pictures;
+        counting_ = {};
+        second_ = at;
+        busy_before_ = showing.busy;
+        idle_before_ = system.idle;
+    }
+
+private:
+    std::filesystem::path lacks_;
+    const bool print_ = SDL_getenv("RUNTIME_STATS") != nullptr;
+    frontend::Stats counting_;
+    std::chrono::steady_clock::time_point second_ = std::chrono::steady_clock::now(), last_shown_ = second_;
+    bool told_[4]{};
+    double busy_before_ = 0, idle_before_ = 0, host_gpu_before_ = 0;
+    uint64_t pictures_before_ = 0, dsp_before_ = 0, dropped_before_ = 0;
+};
+
+} // namespace
+
+int main(int argc, char **argv) {
+    Settings settings;
+    std::filesystem::path config_file;
+    bool setup = false;
+    read_settings(argc, argv, settings, config_file, setup);
+    std::string error;
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) return fail(std::string("SDL: ") + SDL_GetError());
     constexpr int SCALE = 2;
@@ -141,7 +296,6 @@ int main(int argc, char **argv) {
     if (!session.title.empty()) SDL_SetWindowTitle(window, session.title.c_str());
     System &system = *session.system;
     Services &handlers = *session.services;
-    const ExHeader &exheader = session.exheader;
     // the renderer, on a device that presents to the window as well: the
     // launcher's SDL renderer and its overlay go
     ImGui_ImplSDLRenderer3_Shutdown();
@@ -164,29 +318,7 @@ int main(int argc, char **argv) {
         return SDL_Vulkan_CreateSurface(window, instance, nullptr, surface);
     });
     if (!presenter.ready()) return fail("the window cannot show Vulkan's pictures (" + presenter.error + ")");
-    // the overlay on the same device
-    ImGui_ImplSDL3_InitForVulkan(window);
-    VkFormat overlay_format = presenter.format();
-    ImGui_ImplVulkan_InitInfo overlay_info{};
-    overlay_info.Instance = presenter.instance();
-    overlay_info.PhysicalDevice = presenter.physical();
-    overlay_info.Device = presenter.device();
-    overlay_info.QueueFamily = presenter.family();
-    overlay_info.Queue = presenter.queue();
-    overlay_info.DescriptorPool = presenter.overlay_pool();
-    overlay_info.MinImageCount = 2;
-    overlay_info.ImageCount = 3;
-    overlay_info.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    overlay_info.UseDynamicRendering = true;
-    overlay_info.PipelineRenderingCreateInfo = {VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR};
-    overlay_info.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
-    overlay_info.PipelineRenderingCreateInfo.pColorAttachmentFormats = &overlay_format;
-    ImGui_ImplVulkan_Init(&overlay_info);
-    {
-        // its font goes up through the queue the renderer shares
-        std::lock_guard g(presenter.queue_lock());
-        ImGui_ImplVulkan_CreateFontsTexture();
-    }
+    start_overlay(window, presenter);
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
@@ -213,13 +345,13 @@ int main(int argc, char **argv) {
     };
     apply();
     frontend::Overlay overlay;
+    Tally tally(config_file);
 
     // the game on a thread of its own; this one keeps the window, reads the
     // input and shows the frames, so none of it stops the game
     std::mutex input_lock;
     Input input;
     std::atomic<bool> quit{false};
-    std::atomic<uint64_t> starved{0}; // sound queued at under 5 ms when more came
     std::thread game([&] {
         system.run([&] {
             {
@@ -227,36 +359,13 @@ int main(int argc, char **argv) {
                 handlers.input = input;
             }
             handlers.tick(system);
-            auto &out = handlers.audio.output;
-            if (sound && !out.empty()) {
-                // the queue kept near 60 ms by playing a little faster or slower
-                // (half a percent at most, not heard): the DSP's clock and the
-                // sound card's drift apart; a quarter of a second queued at
-                // most, the rest is late
-                constexpr int BYTES_PER_SECOND = int(AUDIO_RATE) * 4, TARGET = BYTES_PER_SECOND * 60 / 1000;
-                int queued = SDL_GetAudioStreamQueued(sound);
-                // nearly out before this came: heard as a gap
-                if (queued < BYTES_PER_SECOND / 200) starved++;
-                float off = std::clamp(float(queued - TARGET) / TARGET, -1.0f, 1.0f);
-                SDL_SetAudioStreamFrequencyRatio(sound, 1.0f + 0.005f * off);
-                if (queued < BYTES_PER_SECOND / 4) SDL_PutAudioStreamData(sound, out.data(), int(out.size() * 2));
-                out.clear();
-            }
+            feed_sound(sound, handlers.audio.output, tally.starved);
             return quit.load(std::memory_order_relaxed);
         });
         quit = true;
     });
 
-    const bool print_stats = SDL_getenv("RUNTIME_STATS") != nullptr;
-    // RUNTIME_DUMP=folder: the first RUNTIME_DUMP_COUNT (600) top screens shown, as
-    // <frame>-<game|between>.ppm, to look at what the player showed
-    const char *dump = SDL_getenv("RUNTIME_DUMP");
-    int dump_left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
-    auto second = std::chrono::steady_clock::now(), last_shown = second;
-    frontend::Stats stats, counting;
-    bool told[5]{};
-    double busy_before = 0, idle_before = 0, host_gpu_before = 0;
-    uint64_t pictures_before = 0, dsp_before = 0, dropped_before = 0;
+    Dump dump;
     std::deque<Frame> waiting;
     Frame showing;
     while (!quit) {
@@ -270,41 +379,8 @@ int main(int argc, char **argv) {
             }
             overlay.event(event);
         }
-
-        // the input, from the keyboard and the gamepad together; none while
-        // the overlay is open
-        Input now;
-        if (!overlay.open) {
-            const bool *keys = SDL_GetKeyboardState(nullptr);
-            float circle[4] = {}; // up, down, left, right
-            for (size_t i = 0; i < std::size(frontend::BUTTONS); i++) {
-                bool held = bindings.keys[i] != SDL_SCANCODE_UNKNOWN && keys[bindings.keys[i]];
-                if (gamepad && bindings.pad[i] != SDL_GAMEPAD_BUTTON_INVALID) held |= SDL_GetGamepadButton(gamepad, bindings.pad[i]);
-                if (!held) continue;
-                if (frontend::BUTTONS[i].bit) now.buttons |= frontend::BUTTONS[i].bit;
-                else circle[i - 12] = 1;
-            }
-            float cx = circle[3] - circle[2], cy = circle[0] - circle[1];
-            if (gamepad) {
-                float gx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX) / 32767.0f;
-                float gy = -SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY) / 32767.0f;
-                if (std::abs(gx) > std::abs(cx)) cx = gx;
-                if (std::abs(gy) > std::abs(cy)) cy = gy;
-            }
-            now.circle_x = cx;
-            now.circle_y = cy;
-            // the mouse on the bottom screen is the stylus
-            float mx = 0, my = 0;
-            SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
-            int ww = 0, wh = 0;
-            SDL_GetWindowSize(window, &ww, &wh);
-            float scale = 1, x0 = 0, y0 = 0, top = top_width(settings);
-            VulkanPresenter::letterbox(float(ww), float(wh), both, top, scale, x0, y0);
-            mx = (mx - x0) / scale - (top - 320) / 2, my = (my - y0) / scale;
-            if (both && (mouse & SDL_BUTTON_LMASK) && my >= 240 && my < 480 && mx >= 0 && mx < 320) {
-                now.touch = std::make_pair(uint16_t(mx), uint16_t(my - 240));
-            }
-        }
+        // none while the overlay is open
+        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, settings, both);
         {
             std::lock_guard g(input_lock);
             input = now;
@@ -319,16 +395,7 @@ int main(int argc, char **argv) {
         if (fresh) {
             showing = std::move(waiting.front());
             waiting.pop_front();
-            if (dump && dump_left > 0 && !showing.screens[0].rgba.empty()) {
-                dump_left--;
-                char name[512];
-                std::snprintf(name, sizeof name, "%s/%06llu-%s.ppm", dump, (unsigned long long)showing.number,
-                              showing.between ? "between" : "game");
-                const Picture &p = showing.screens[0];
-                std::ofstream out(frontend::path_of(name), std::ios::binary);
-                out << "P6\n" << p.width << " " << p.height << "\n255\n";
-                for (size_t i = 0; i < p.rgba.size(); i += 4) out.write(reinterpret_cast<const char *>(&p.rgba[i]), 3);
-            }
+            dump.take(showing);
         } else if (!settings.video.vsync && !overlay.open) {
             // nothing new, and no refresh to wait for
             SDL_Delay(1);
@@ -341,7 +408,7 @@ int main(int argc, char **argv) {
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         bool changed = false;
-        overlay.draw(settings, stats, config_file, changed);
+        overlay.draw(settings, tally.stats, config_file, changed);
         ImGui::Render();
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
@@ -356,53 +423,14 @@ int main(int argc, char **argv) {
                           [](VkCommandBuffer cmd) { ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd); });
         if (changed) apply();
 
-        // how the second went
         auto done = std::chrono::steady_clock::now();
-        if (fresh) {
-            counting.worst_ms = std::max(counting.worst_ms, std::chrono::duration<double, std::milli>(done - last_shown).count());
-            last_shown = done;
-            counting.shown++;
-        }
-        if (done - second >= std::chrono::seconds(1)) {
-            counting.gpu_ms = (showing.busy - busy_before) * 1000;
-            counting.idle_ms = (system.idle - idle_before) * 1000;
-            stats = counting;
-            // the first draw of a session asking for what the renderer does
-            // not do yet, noted beside the config: any session tells
-            static constexpr const char *LACKING[4] = {"w buffer", "gas", "geometry shader modes", "shadow"};
-            for (int i = 0; i < 4; i++) {
-                if (!vulkan.lacking[i] || told[i]) continue;
-                told[i] = true;
-                std::time_t now = std::time(nullptr);
-                char when[32];
-                std::strftime(when, sizeof when, "%Y-%m-%d %H:%M:%S", std::localtime(&now));
-                std::ofstream(config_file.parent_path() / "renderer-lacks.txt", std::ios::app)
-                    << when << ": " << LACKING[i] << ", frame " << showing.number << "\n";
-                if (print_stats) std::printf("the renderer lacks %s (frame %llu)\n", LACKING[i], (unsigned long long)showing.number);
-            }
-            if (print_stats) {
-                std::printf("shown %d, the game's pictures %llu, worst gap %.0f ms, gpu %.0f ms, idle %.0f ms, the host's GPU %.0f ms; "
-                            "sound: %llu DSP frames, %llu let go, starved %llu times\n",
-                            stats.shown, (unsigned long long)(handlers.pictures - pictures_before), stats.worst_ms, stats.gpu_ms,
-                            stats.idle_ms, (vulkan.gpu_seconds - host_gpu_before) * 1000,
-                            (unsigned long long)(handlers.dsp_frames - dsp_before), (unsigned long long)(handlers.dsp_dropped - dropped_before),
-                            (unsigned long long)starved.exchange(0));
-                dsp_before = handlers.dsp_frames;
-                dropped_before = handlers.dsp_dropped;
-                host_gpu_before = vulkan.gpu_seconds;
-                pictures_before = handlers.pictures;
-                std::fflush(stdout);
-            }
-            counting = {};
-            second = done;
-            busy_before = showing.busy;
-            idle_before = system.idle;
-        }
+        if (fresh) tally.shown(done);
+        tally.tick(done, showing, system, handlers, vulkan);
     }
     game.join();
     if (!system.error().empty()) std::fprintf(stderr, "stopped: %s\n", system.error().c_str());
     // where the C had nothing, for the next recompile to take in
-    if (save_hints(system.interpreted_at, exheader, error) < 0) std::fprintf(stderr, "hints: %s\n", error.c_str());
+    if (save_hints(system.interpreted_at, session.exheader, error) < 0) std::fprintf(stderr, "hints: %s\n", error.c_str());
     frontend::save(config_file, settings, error);
     presenter.idle();
     ImGui_ImplVulkan_Shutdown();

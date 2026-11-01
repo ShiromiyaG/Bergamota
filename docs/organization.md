@@ -69,8 +69,10 @@ globals the player needs today (`library`, `services_ptr`, because
 
 ## 4. The player's `main`
 
-Half done: the game has its own thread and the loop is flat, but still one
-function.
+Done (2026-11-01): `main` reads the settings, opens the session, the
+renderer and the presenter, starts the game's thread and loops; the parts
+are functions of their own (`read_settings`, `start_overlay`,
+`feed_sound`, `read_input`, `Dump`, `Tally` for each second's numbers).
 
 `frontend/player.cpp`'s `main` is one function with a 150-line lambda run
 on the game's thread. Once the game has its own thread
