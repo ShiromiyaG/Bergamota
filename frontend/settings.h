@@ -41,6 +41,13 @@ struct Settings {
         // both screens stacked, "top" alone, or "single": the top one with
         // the bottom one as a panel on a button
         std::string layout = "both";
+        // the single screen's panel: its size (of the bottom screen's own,
+        // the top screen's height being 240) and the corner it sits in
+        float panel_size = 0.55f;
+        std::string panel_corner = "bottom-right"; // or bottom-left, top-right, top-left
+        // the bloom's ghosting (a trail behind what moves outside) left out,
+        // through the port's code (port_no_ghosting)
+        bool no_ghosting = false;
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
         std::string aspect = "original";

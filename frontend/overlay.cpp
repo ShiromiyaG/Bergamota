@@ -71,9 +71,21 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             if (s.video.between) moved |= ImGui::Checkbox("Up to the display's rate (120, 144 Hz)", &s.video.between_display);
             moved |= ImGui::Checkbox("Vertical sync (can cost speed)", &s.video.vsync);
             int layout = s.video.layout == "top" ? 1 : s.video.layout == "single" ? 2 : 0;
-            if (ImGui::Combo("Screens", &layout, "Both, stacked\0Top only\0Single screen (Tab: the bottom one)\0")) {
+            if (ImGui::Combo("Screens", &layout, "Both, stacked\0Top only\0Single screen (Tab, L3: the bottom one)\0")) {
                 s.video.layout = layout == 1 ? "top" : layout == 2 ? "single" : "both";
                 moved = true;
+            }
+            if (s.video.layout == "single") {
+                static const char *CORNERS[] = {"bottom-right", "bottom-left", "top-right", "top-left"};
+                int corner = 0;
+                for (int c = 0; c < 4; c++) {
+                    if (s.video.panel_corner == CORNERS[c]) corner = c;
+                }
+                if (ImGui::Combo("Bottom screen's corner", &corner, "Bottom right\0Bottom left\0Top right\0Top left\0")) {
+                    s.video.panel_corner = CORNERS[corner];
+                    moved = true;
+                }
+                moved |= ImGui::SliderFloat("Bottom screen's size", &s.video.panel_size, 0.25f, 1.0f, "%.2f");
             }
             int aspect = s.video.aspect == "16:9" ? 1 : s.video.aspect == "21:9" ? 2 : 0;
             if (ImGui::Combo("Top screen", &aspect, "Original (5:3)\0Widescreen (16:9)\0Ultrawide (21:9)\0")) {
@@ -91,6 +103,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 moved = true;
             }
             moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
+            moved |= ImGui::Checkbox("No bloom ghosting (the trail behind what moves outside)", &s.video.no_ghosting);
             int outlines = s.video.outlines == "thin" ? 1 : s.video.outlines == "none" ? 2 : 0;
             if (ImGui::Combo("Outlines", &outlines, "As the game draws them\0Thin\0None\0")) {
                 s.video.outlines = outlines == 1 ? "thin" : outlines == 2 ? "none" : "original";

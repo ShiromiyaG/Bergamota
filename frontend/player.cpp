@@ -76,23 +76,26 @@ int between_parts(const Settings &s, SDL_Window *window) {
 }
 
 // the single screen (video.layout "single"): the top screen fills the
-// canvas, the bottom one a panel at its lower right corner that slides in
-// (shown, 0 to 1) on a button (Tab, the left stick's click (L3)), so the game's
-// own bottom screen is there to see and touch when it is wanted
-void place_single(VulkanPresenter::View &view, float shown) {
+// canvas, the bottom one a panel in a corner (video.panel_corner, as large
+// as video.panel_size) that slides in from its side (shown, 0 to 1) on a
+// button (Tab, the left stick's click (L3)), so the game's own bottom screen
+// is there to see and touch when it is wanted
+void place_single(VulkanPresenter::View &view, float shown, const Settings &s) {
     using Placement = VulkanPresenter::Placement;
     view.canvas[0] = view.top, view.canvas[1] = 240;
     Placement top;
     top.to[2] = view.top, top.to[3] = 240;
     view.placements = {top};
     if (shown <= 0) return;
-    const float margin = 6, w = 320 * 0.55f, h = 240 * 0.55f;
-    // eased, in from the right edge
-    float t = shown * shown * (3 - 2 * shown);
+    const float margin = 6, w = 320 * s.video.panel_size, h = 240 * s.video.panel_size;
+    const bool left = s.video.panel_corner.find("left") != std::string::npos;
+    const bool high = s.video.panel_corner.rfind("top", 0) == 0;
+    // eased, in from its side
+    float t = shown * shown * (3 - 2 * shown), away = (1 - t) * (w + margin);
     Placement panel;
     panel.screen = 1;
-    panel.to[0] = view.top - margin - w + (1 - t) * (w + margin);
-    panel.to[1] = 240 - margin - h;
+    panel.to[0] = left ? margin - away : view.top - margin - w + away;
+    panel.to[1] = high ? margin : 240 - margin - h;
     panel.to[2] = panel.to[0] + w;
     panel.to[3] = panel.to[1] + h;
     view.placements.push_back(panel);
@@ -525,9 +528,12 @@ int main(int argc, char **argv) {
     // the shape the player shows it at, 0 for the 3DS's own, written into the
     // game's memory on its thread
     std::atomic<float> top_aspect{0};
-    uint32_t top_aspect_at = 0;
+    // and no bloom ghosting (Solstice's native/ghosting.c: port_no_ghosting)
+    std::atomic<uint32_t> no_ghosting{0};
+    uint32_t top_aspect_at = 0, no_ghosting_at = 0;
     if (session.decomp) {
         if (auto it = session.decomp->symbols.find("port_top_aspect"); it != session.decomp->symbols.end()) top_aspect_at = it->second;
+        if (auto it = session.decomp->symbols.find("port_no_ghosting"); it != session.decomp->symbols.end()) no_ghosting_at = it->second;
     }
     std::thread game([&] {
         system.run([&] {
@@ -536,6 +542,7 @@ int main(int argc, char **argv) {
                 handlers.input = input;
             }
             if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
+            if (no_ghosting_at) system.memory.write32(no_ghosting_at, no_ghosting.load());
             handlers.tick(system);
             feed_sound(sound, handlers.audio.output, tally.starved);
             return quit.load(std::memory_order_relaxed);
@@ -562,6 +569,10 @@ int main(int argc, char **argv) {
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) quit = true;
             if (event.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
+            if (event.type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
+                SDL_CloseGamepad(gamepad);
+                gamepad = nullptr;
+            }
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && !event.key.repeat) {
                 settings.video.fullscreen = !settings.video.fullscreen;
                 SDL_SetWindowFullscreen(window, settings.video.fullscreen);
@@ -571,6 +582,15 @@ int main(int argc, char **argv) {
                 panel_wanted = !panel_wanted;
             }
             overlay.event(event);
+        }
+        // a gamepad there already, or plugged in while the setup screen took
+        // the events: the first one
+        if (!gamepad) {
+            int count = 0;
+            if (SDL_JoystickID *pads = SDL_GetGamepads(&count)) {
+                if (count > 0) gamepad = SDL_OpenGamepad(pads[0]);
+                SDL_free(pads);
+            }
         }
         // none while the overlay is open
         Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view);
@@ -622,6 +642,7 @@ int main(int argc, char **argv) {
         view.smooth = settings.video.smooth;
         view.top = top_width(settings);
         top_aspect = view.top > 400 ? view.top / 240 : 0;
+        no_ghosting = settings.video.no_ghosting ? 1 : 0;
         vulkan.top_wide = view.top / 400;
         view.vsync = settings.video.vsync;
         view.antialias = settings.video.antialias;
@@ -647,7 +668,7 @@ int main(int argc, char **argv) {
                 std::fprintf(stderr, "scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
             if (layout == "stacked") place_stacked(view);
-            else place_single(view, layout == "top" ? 0.0f : panel);
+            else place_single(view, layout == "top" ? 0.0f : panel, settings);
         }
         // in the window's pixels, eased from the layout before
         in_window(view);

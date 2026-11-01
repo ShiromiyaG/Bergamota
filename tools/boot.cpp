@@ -10,6 +10,8 @@
 //   RUNTIME_REPLAY=file     the input a Zakuro recording holds, frame by frame
 //   RUNTIME_SHOTS=folder    both screens every RUNTIME_SHOT_EVERY frames (100)
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
+//   RUNTIME_PORT=name=n,... words of the decomp's port_ variables set once it loads
+//                           (port_no_ghosting=1), as the player sets them
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=n       frames drawn between the game's, n pictures a blank: 1 as
@@ -142,6 +144,20 @@ int main(int argc, char **argv) {
     const ExHeader &exheader = session.exheader;
     Library &library = session.library;
     System &system = *session.system;
+    // RUNTIME_PORT: the port's variables, as the player's overlay sets them
+    if (const char *port = env("RUNTIME_PORT"); port && session.decomp) {
+        std::string list = port;
+        for (size_t at = 0; at < list.size();) {
+            size_t end = std::min(list.find(',', at), list.size()), eq = list.find('=', at);
+            if (eq < end) {
+                std::string name = list.substr(at, eq - at);
+                auto it = session.decomp->symbols.find(name);
+                if (it != session.decomp->symbols.end()) system.memory.write32(it->second, uint32_t(std::stoul(list.substr(eq + 1, end - eq - 1))));
+                else std::printf("RUNTIME_PORT: no %s in the decomp\n", name.c_str());
+            }
+            at = end + 1;
+        }
+    }
     Services &handlers = *session.services;
     std::printf("program %016llX, %zu functions, %zu modules, %u MiB\n", (unsigned long long)exheader.program_id,
                 library.entry_count(), library.module_count(), exheader.app_bytes >> 20);
