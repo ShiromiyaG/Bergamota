@@ -51,8 +51,9 @@ public:
         // draws between taken from the outputs the game's draws kept
         uint64_t reused_draws = 0;
         // draws asking for what the renderer does not do yet: the w buffer, gas,
-        // a geometry shader in a mode other than 0, the shadow output
-        uint64_t lacking[4]{};
+        // a geometry shader in a mode other than 0, the shadow output, and
+        // texture 0 as a cube map, a shadow map (2D or cube) or projected
+        uint64_t lacking[7]{};
         // write-backs by cause: the CPU (guards), the front end, a fill, a texture
         uint64_t write_back_causes[4]{};
     } stats;

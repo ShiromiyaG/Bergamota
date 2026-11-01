@@ -176,6 +176,7 @@ struct VulkanRenderer::Impl {
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, depth_module = VK_NULL_HANDLE;
+    VkShaderModule frag_wbuffer = VK_NULL_HANDLE; // pica.frag with W_BUFFER
     VkDescriptorSetLayout depth_set = VK_NULL_HANDLE;
     VkPipelineLayout depth_layout = VK_NULL_HANDLE;
     VkPipeline depth_pipeline = VK_NULL_HANDLE;

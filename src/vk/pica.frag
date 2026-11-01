@@ -380,7 +380,8 @@ bool compare(uint func, float a, float b) {
 void main() {
     // texture 2 reads coordinate set 1 or 2
     vec4 tex[4];
-    tex[0] = texel(0, v_uv0);
+    // texture 0 projected (its type, 3): the coordinates over their w
+    tex[0] = texel(0, ((reg(TEX_PARAMS) >> 28) & 7u) == 3u ? v_uv0 / v_w0 : v_uv0);
     tex[1] = texel(1, v_uv1);
     tex[2] = texel(2, (reg(TEX_CONFIG) & (1u << 13)) != 0u ? v_uv1 : v_uv2);
     // the procedural one reads coordinate set 0, 1 or 2
@@ -453,4 +454,9 @@ void main() {
         previous.rgb = mix(unpack(reg(FOG_COLOR)).rgb, previous.rgb, factor);
     }
     out_color = previous;
+#ifdef W_BUFFER
+    // the w buffer (DEPTHMAP_ENABLE off): the depth map times w, which
+    // the rasterizer cannot give
+    gl_FragDepth = clamp(gl_FragCoord.z / gl_FragCoord.w, 0.0, 1.0);
+#endif
 }

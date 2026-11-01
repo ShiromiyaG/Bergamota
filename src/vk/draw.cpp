@@ -18,10 +18,11 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
 // for the GPU's shader (key bit 41). touches nothing of the renderer's, so
 // the translator's thread makes them too
 VkPipeline Impl::make_pipeline(uint64_t key, bool has_depth, VkShaderModule vertex) const {
-    bool on_gpu = (key >> 41) & 1;
+    bool on_gpu = (key >> 41) & 1, w_buffer = (key >> 42) & 1;
     VkPipelineShaderStageCreateInfo stages[2] = {
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vertex, "main", nullptr},
-        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, w_buffer ? frag_wbuffer : frag,
+         "main", nullptr},
     };
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription attributes[8] = {
@@ -263,7 +264,8 @@ void Impl::render(Pica &p) {
     bool blend = (r[COLOR_OPERATION] >> 8) & 1;
     uint32_t color_mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
     uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
-                   uint64_t(depth != nullptr) << 40 | uint64_t(on_gpu) << 41;
+                   uint64_t(depth != nullptr) << 40 | uint64_t(on_gpu) << 41 |
+                   uint64_t(depth != nullptr && !(r[DEPTHMAP_ENABLE] & 1)) << 42;
     // the program's own shader once it is made, the interpreter until then
     VkPipeline pipe = VK_NULL_HANDLE;
     if (on_gpu && translator) {

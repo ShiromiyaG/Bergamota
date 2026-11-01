@@ -17,7 +17,7 @@ using namespace runtime::pica;
 
 namespace {
 
-constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, SIZE = 64;
+constexpr uint32_t LIST = 0x20000000, COLOR = 0x20100000, DEPTH = 0x20200000, TEXTURE = 0x20300000, SIZE = 64;
 
 // a float as the PICA's 24-bit one (1.7.16)
 uint32_t to_f24(float f) {
@@ -202,5 +202,66 @@ int main() {
     for (auto &p : pixels) covered += std::abs(p[0] - 128) <= 1;
     std::printf("  %d of %d pixels grey\n", covered, SIZE * SIZE);
     check("a geometry shader's triangle is drawn", covered == SIZE * SIZE);
+
+    // the w buffer: a quad at z/w 0.2 with w 2 keeps 0.2 in a depth buffer
+    // and 0.4 (the depth times w) in a w buffer
+    auto depth_of = [&](bool w_buffer) {
+        List l = base;
+        table(l, 4, std::vector<uint32_t>(256, 0xFF808080));
+        l.put(DEPTH_BUFFER_FORMAT, 3); // 24 bits of depth, 8 of stencil
+        l.put(DEPTH_BUFFER_ADDRESS, DEPTH >> 3);
+        l.put(DEPTH_COLOR_MASK, 1 | 1 << 4 | 0xF00 | 1 << 12); // tested always, written
+        l.put(DEPTH_STENCIL_WRITE, 3);
+        l.put(DEPTH_RANGE, to_f24(1));
+        l.put(DEPTH_NEAR, 0);
+        l.put(DEPTHMAP_ENABLE, w_buffer ? 0 : 1);
+        l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+        const float corners[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
+        for (auto &c : corners) {
+            l.put4(FIXED_ATTRIBUTE_DATA, c[0] * 2, c[1] * 2, 0.4f, 2);
+            l.put4(FIXED_ATTRIBUTE_DATA, 0.5f, 0.5f, 0, 0);
+        }
+        l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        b.draw(l);
+        b.renderer.sync(DEPTH, SIZE * SIZE * 4, false);
+        const uint8_t *p = b.memory.host(DEPTH, SIZE * SIZE * 4) + tiled_offset(SIZE / 2, SIZE / 2, SIZE, 4);
+        return float(p[0] | p[1] << 8 | p[2] << 16) / 0xFFFFFF;
+    };
+    float z = depth_of(false), w = depth_of(true);
+    std::printf("  depth %.3f, w buffer %.3f\n", z, w);
+    check("the w buffer keeps the depth times w", std::abs(z - 0.2f) < 0.01f && std::abs(w - 0.4f) < 0.01f);
+
+    // a projected texture (type 3): texture 0, 8 texels wide and growing by
+    // 32 a texel across u, read at its coordinates over w. the quad's
+    // coordinates are twice what is read, its w 2: at a quarter of the way
+    // across, texel 2 (64), where read as they are it would be texel 4 (128)
+    auto projected = [&](uint32_t type) {
+        uint8_t *texels = b.memory.host(TEXTURE, 8 * 8 * 4);
+        for (uint32_t y = 0; y < 8; y++) {
+            for (uint32_t x = 0; x < 8; x++) {
+                uint8_t *p = texels + tiled_offset(x, y, 8, 4);
+                p[0] = 255, p[1] = p[2] = p[3] = uint8_t(x * 32); // A, B, G, R
+            }
+        }
+        List l = base;
+        l.put(TEV_STAGE0, 3 | 3 << 16); // texture 0
+        l.put(TEXTURE_CONFIG, 1);
+        l.put(0x082, 8 | 8 << 16);      // 8 by 8
+        l.put(0x083, type << 28);       // nearest, clamped
+        l.put(0x085, TEXTURE >> 3);
+        l.put(0x08E, 0);                // RGBA8
+        l.put(OUTPUT_MAP + 1, 0x1F100D0C); // o1: u, v, the w of texture 0
+        l.put(FIXED_ATTRIBUTE_INDEX, 0xF);
+        const float corners[6][2] = {{-1, -1}, {1, -1}, {1, 1}, {-1, -1}, {1, 1}, {-1, 1}};
+        for (auto &c : corners) {
+            l.put4(FIXED_ATTRIBUTE_DATA, c[0], c[1], 0, 1);
+            l.put4(FIXED_ATTRIBUTE_DATA, 0.5f, (c[1] + 1) / 2 * 2, 2, 0);
+        }
+        l.put(FIXED_ATTRIBUTE_INDEX, 0);
+        return int(b.draw(l)[(SIZE / 2) * SIZE + SIZE / 2][0]);
+    };
+    int flat_read = projected(0), over_w = projected(3);
+    std::printf("  read as they are %d, over w %d\n", flat_read, over_w);
+    check("a projected texture reads its coordinates over w", flat_read == 128 && over_w == 64);
     return failed ? 1 : 0;
 }

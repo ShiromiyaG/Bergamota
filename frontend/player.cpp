@@ -227,8 +227,9 @@ public:
         counting_.gpu_ms = (showing.busy - busy_before_) * 1000;
         counting_.idle_ms = (system.idle - idle_before_) * 1000;
         stats = counting_;
-        static constexpr const char *LACKING[4] = {"w buffer", "gas", "geometry shader modes", "shadow"};
-        for (int i = 0; i < 4; i++) {
+        static constexpr const char *LACKING[7] = {"w buffer",  "gas",           "geometry shader modes", "shadow",
+                                                   "cube maps", "shadow textures", "projected textures"};
+        for (int i = 0; i < 7; i++) {
             if (!vulkan.stats.lacking[i] || told_[i]) continue;
             told_[i] = true;
             std::time_t now = std::time(nullptr);
@@ -261,7 +262,7 @@ private:
     const bool print_ = SDL_getenv("RUNTIME_STATS") != nullptr;
     frontend::Stats counting_;
     std::chrono::steady_clock::time_point second_ = std::chrono::steady_clock::now(), last_shown_ = second_;
-    bool told_[4]{};
+    bool told_[7]{};
     double busy_before_ = 0, idle_before_ = 0, host_gpu_before_ = 0;
     uint64_t pictures_before_ = 0, dsp_before_ = 0, dropped_before_ = 0;
 };

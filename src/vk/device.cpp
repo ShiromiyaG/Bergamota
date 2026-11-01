@@ -15,6 +15,9 @@ const uint32_t VERT_GPU_SPV[] = {
 const uint32_t FRAG_SPV[] = {
 #include "pica.frag.inc"
 };
+const uint32_t FRAG_WBUFFER_SPV[] = {
+#include "pica_wbuffer.frag.inc"
+};
 const uint32_t DEPTH_SPV[] = {
 #include "depth.comp.inc"
 };
@@ -237,6 +240,9 @@ bool Impl::init() {
     smi.codeSize = sizeof FRAG_SPV;
     smi.pCode = FRAG_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &frag);
+    smi.codeSize = sizeof FRAG_WBUFFER_SPV;
+    smi.pCode = FRAG_WBUFFER_SPV;
+    vkCreateShaderModule(device, &smi, nullptr, &frag_wbuffer);
 
     // depth read as color (depth.comp)
     VkDescriptorSetLayoutBinding db[3] = {
@@ -555,6 +561,7 @@ void Impl::shutdown() {
     if (outputs) vkDestroyBuffer(device, outputs, nullptr), vkFreeMemory(device, outputs_memory, nullptr);
     if (timestamps) vkDestroyQueryPool(device, timestamps, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
+    vkDestroyShaderModule(device, frag_wbuffer, nullptr);
     vkDestroyShaderModule(device, depth_module, nullptr);
     vkDestroyPipeline(device, depth_pipeline, nullptr);
     vkDestroyPipelineLayout(device, depth_layout, nullptr);
