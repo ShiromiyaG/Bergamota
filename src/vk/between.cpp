@@ -77,22 +77,6 @@ bool Impl::projected_lookup(const uint32_t *regs) {
     return type == 2 || type == 3 || type == 4;
 }
 
-// the buffers a draw reads that the frame has not drawn into yet
-void Impl::note_reads(const VkImageView *views) {
-    for (auto &s : surfaces) {
-        if (s->start_ops == ops_epoch || s->read_first) continue;
-        for (int u = 0; u < 3; u++) {
-            if (views[u] == s->image.view || (s->as_color.image && views[u] == s->as_color.view)) s->read_first = true;
-        }
-    }
-}
-
-void Impl::let_go_ends(Surface &s) {
-    for (Image &i : s.ends) let_go(i);
-    s.ends.clear();
-    s.ends_ops = ~0ull;
-}
-
 uint32_t Impl::op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
 // a draw of the frame before the same as op could be: shaded on the GPU,
@@ -354,7 +338,7 @@ bool Impl::jumps(const Op &before, const Op &now) {
 
 // the game frame just drawn, drawn again at t (0 the frame before, 1
 // this one) into the between images
-void Impl::draw_between(float t, int picture) {
+void Impl::draw_between(float t) {
     Pica &p = *last_pica;
     end_rendering();
     // each buffer's between image starts from what the game's held before
@@ -384,14 +368,7 @@ void Impl::draw_between(float t, int picture) {
         c.srcSubresource = c.dstSubresource = {
             VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
         c.extent = {s->image.width, s->image.height, 1};
-        // one this frame read before drawing into it: as the frame before's
-        // frame between at this picture left it. The game draws a frame's
-        // shadow map in the frame before (before that one's transfer); kept
-        // as the game's frame left it, a character drawn between looked it
-        // up where it had moved and fell into its own shadow
-        const bool carried = s->read_first && s->ends_ops + 1 == ops_epoch && size_t(picture) < s->ends.size() &&
-                             s->ends[picture].width == s->image.width && s->ends[picture].height == s->image.height;
-        const Image &from = carried ? s->ends[picture] : s->start_ops == ops_epoch && s->start.image ? s->start : s->image;
+        const Image &from = s->start_ops == ops_epoch && s->start.image ? s->start : s->image;
         vkCmdCopyImage(cmd, from.image, VK_IMAGE_LAYOUT_GENERAL, s->between.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
         between_views[s->image.view] = s->between.view;
         std::swap(s->image, s->between);
@@ -479,21 +456,6 @@ void Impl::draw_between(float t, int picture) {
         gpu_t = 1, gpu_jump = 1e9f;
     }
     end_rendering();
-    // the buffers the next frame may read before drawing into them, as this
-    // picture left them
-    for (auto &s : surfaces) {
-        if (!s->read_first && !s->read_first_before) continue;
-        if (s->ends.size() <= size_t(picture)) s->ends.resize(size_t(picture) + 1);
-        Image &to = s->ends[picture];
-        if (to.image && (to.width != s->image.width || to.height != s->image.height)) let_go(to), to = {};
-        if (!to.image) to = image(s->image.width, s->image.height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
-        VkImageCopy c{};
-        c.srcSubresource = c.dstSubresource = {
-            VkImageAspectFlags(s->depth ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT), 0, 0, 1};
-        c.extent = {to.width, to.height, 1};
-        vkCmdCopyImage(cmd, s->image.image, VK_IMAGE_LAYOUT_GENERAL, to.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
-    }
-    barrier();
     forced_views = nullptr;
     replaying = false;
     p.regs = regs;
@@ -549,19 +511,13 @@ void Impl::frame_end(uint32_t output) {
         bool kept = true;
         between_list ^= 1;
         for (int k = 1; k < pictures; k++) {
-            draw_between(self.between_still.load() ? 1.0f : float(k) / float(pictures), k - 1);
+            draw_between(self.between_still.load() ? 1.0f : float(k) / float(pictures));
             kept = keep_between(output, k - 1) && kept;
         }
         between_ready = kept;
         between_address = output;
         between_count = pictures - 1;
         between_blanks = span;
-    }
-    for (auto &s : surfaces) {
-        if (drew && pictures > 1 && last_pica && !s->ends.empty()) s->ends_ops = ops_epoch;
-        if (!s->read_first && !s->read_first_before && !s->ends.empty()) let_go_ends(*s);
-        s->read_first_before = s->read_first;
-        s->read_first = false;
     }
     // the next frame's outputs go to the other half; this one's stay as
     // the frame before's
@@ -588,7 +544,6 @@ void Impl::drop_ops() {
         if (s->as_color.image) let_go(s->as_color);
         if (s->between.image) let_go(s->between);
         if (s->start.image) let_go(s->start);
-        let_go_ends(*s);
     }
     retired.clear();
 }

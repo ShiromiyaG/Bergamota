@@ -167,7 +167,6 @@ void Impl::render(Pica &p) {
     Surface *depth = use_depth ? surface(depth_address, w, h, r[DEPTH_BUFFER_FORMAT] & 3, true) : nullptr;
     if (!color) return;
     if (between && !replaying) {
-        note_reads(views);
         keep_start(*color);
         if (depth) keep_start(*depth);
         note_draw(p, views);
