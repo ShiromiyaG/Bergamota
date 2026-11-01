@@ -12,7 +12,8 @@
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
-//   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
+//   RUNTIME_BETWEEN=n       frames drawn between the game's, n pictures a blank: 1 as
+//                           "60 FPS" in the player, 2 as 120 Hz (shots <frame>-<part>-shown)
 //   RUNTIME_SCALE=n         the buffers drawn n times as large each way (2.25: 1080p)
 //   RUNTIME_RESCALE=f:n     and changed to n at frame f, as the player may
 //   RUNTIME_SAMPLE=n        where the game's thread spent its time: the n functions
@@ -162,8 +163,8 @@ int main(int argc, char **argv) {
             vulkan = std::make_unique<VulkanRenderer>(system.memory);
             if (vulkan->ready()) pica_gpu->backend = vulkan.get();
             else std::printf("no Vulkan: %s\n", vulkan->error.c_str());
-            // RUNTIME_BETWEEN=1: a frame drawn between each two of the game's;
-            // the shots' trail says which of the frames shown were
+            // RUNTIME_BETWEEN=n: frames drawn between the game's, n pictures
+            // a blank; the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
             // RUNTIME_SCALE=n: the buffers drawn n times as large each way (the shots stay the console's size)
             if (env("RUNTIME_SCALE")) vulkan->scale = float(std::atof(env("RUNTIME_SCALE")));
@@ -225,7 +226,7 @@ int main(int argc, char **argv) {
             } else if (trail > 0 && f.number >= trail_from) {
                 trail--;
                 char name[512];
-                std::snprintf(name, sizeof name, "%s/%06llu-shown-top.ppm", shots_dir, (unsigned long long)f.number);
+                std::snprintf(name, sizeof name, "%s/%06llu-%d-shown-top.ppm", shots_dir, (unsigned long long)f.number, f.part);
                 save(name, f.screens[0]);
                 trail_line += f.between ? " between" : " game";
                 if (!trail) std::printf("frames shown after %llu:%s\n", (unsigned long long)(next_shot_frame - shot_every), trail_line.c_str());

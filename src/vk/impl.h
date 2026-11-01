@@ -333,6 +333,14 @@ struct VulkanRenderer::Impl {
     bool new_before = false;
     bool between_ready = false; // the last frame was drawn between, into the buffer at between_address
     uint32_t between_address = 0;
+    // the top screen's buffer as each frame between drew it, in order
+    // (frame_end): how many, over how many blanks, and how many of them the
+    // blanks since the frame showed have shown (vblank, `between` a blank).
+    // two lists, a frame each in turn: the next frame often ends before the
+    // last of this one's are shown
+    std::vector<Image> between_pictures[2];
+    int between_list = 0, between_count = 0, between_blanks = 0;
+    int sequence = 0, sequence_list = 0, sequence_at = 0;
 
     void note_draw(Pica &p, const VkImageView *views);
 
@@ -361,6 +369,8 @@ struct VulkanRenderer::Impl {
 
     void draw_between(float t);
 
+    bool keep_between(uint32_t output, int slot);
+
     void frame_end(uint32_t output);
 
     void drop_ops();
@@ -370,6 +380,9 @@ struct VulkanRenderer::Impl {
     // -- the screens, a frame each vertical blank ------------------------------
     // what each screen shows is copied at a blank and read at the next, when
     // the GPU is long done with it, then handed on as a Frame
+    // a picture each of the parts of a blank: `between` of them (120 Hz
+    // and up), PARTS at most
+    static constexpr int PARTS = 4;
     struct Shown {
         Buffer buffers[2];
         uint32_t image_size[2][2]; // the images copied into buffers, as large as they are
@@ -378,14 +391,15 @@ struct VulkanRenderer::Impl {
         Picture from_memory[2];
         uint64_t number = 0, serial = 0;
         bool between = false, pending = false, to_cpu = true;
-        int set = -1;
-    } shown;
+        int set = -1, part = 0;
+    } shown[PARTS];
 
     Surface *framebuffer(uint32_t address, uint32_t stride);
 
     bool vblank(Pica &p);
 
     void finish_shown(Pica &p);
+    void finish_shown(Pica &p, Shown &sh);
 
     // RUNTIME_VK_DEBUG, read once
     const bool debug = std::getenv("RUNTIME_VK_DEBUG") != nullptr;
@@ -398,7 +412,7 @@ struct VulkanRenderer::Impl {
     // the screens copied on the GPU for a presenter (VulkanPresenter), a set
     // a vertical blank in turn; one is used again once the presenter's
     // timeline (presented) got past what it waited for
-    static constexpr int SETS = 8;
+    static constexpr int SETS = 16;
     struct ScreenSet {
         Image screens[2];
         std::atomic<uint64_t> wait{0};

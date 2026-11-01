@@ -391,7 +391,7 @@ void Pica::push_frame(Frame frame) {
     std::lock_guard g(frames_lock_);
     frames_.push_back(std::move(frame));
     // nobody taking them (a run without a window): the oldest go
-    while (frames_.size() > 4) frames_.pop_front();
+    while (frames_.size() > 8) frames_.pop_front();
 }
 
 bool Pica::next_frame(Frame &out) {

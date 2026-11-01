@@ -1,5 +1,6 @@
 // Frames drawn between the game's: each frame's draws kept and drawn again
-// with every vertex halfway between the frame before and this one. (impl.h)
+// with every vertex between the frame before and this one, as many times as
+// the blanks it took have pictures. (impl.h)
 
 #include "impl.h"
 
@@ -291,20 +292,51 @@ void Impl::draw_between(float t) {
     gpu_close(whole);
 }
 
+// the top screen's buffer at output as the frame between just drew it,
+// kept as picture slot for the blanks to show
+bool Impl::keep_between(uint32_t output, int slot) {
+    Surface *fb = nullptr;
+    for (auto &s : surfaces) {
+        if (s->linear && !s->depth && s->address == output && s->between.image) fb = s.get();
+    }
+    if (!fb) return false;
+    auto &list = between_pictures[between_list];
+    if (list.size() <= size_t(slot)) list.resize(size_t(slot) + 1);
+    Image &to = list[slot];
+    if (to.image && (to.width != fb->between.width || to.height != fb->between.height)) let_go(to), to = {};
+    if (!to.image) to = image(fb->between.width, fb->between.height, VK_FORMAT_R8G8B8A8_UNORM, false);
+    VkImageCopy c{};
+    c.srcSubresource = c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    c.extent = {to.width, to.height, 1};
+    vkCmdCopyImage(cmd, fb->between.image, VK_IMAGE_LAYOUT_GENERAL, to.image, VK_IMAGE_LAYOUT_GENERAL, 1, &c);
+    barrier();
+    return true;
+}
+
 // a frame for the top screen ended in a transfer into output: drawn
-// between when it came two blanks or more after the one before (a scene
-// at 60 needs none), then kept as the frame before
+// between as many times as the blanks since the one before show pictures
+// (`between` a blank, the last the game's own: one for a scene at 30 shown
+// at 60, none for one at 60 unless more than 60), then kept as the frame
+// before
 void Impl::frame_end(uint32_t output) {
     top_frames++;
     top_output = output;
-    bool slow = blanks - top_blank >= 2;
+    const int span = int(std::min<uint64_t>(blanks - top_blank, 3));
     top_blank = blanks;
     between_ready = false;
     bool drew = std::any_of(ops_now.begin(), ops_now.end(), [](const Op &op) { return op.kind == Op::Draw; });
-    if (drew && slow && last_pica) {
-        draw_between(0.5f);
-        between_ready = true;
+    const int pictures = span * std::clamp(between, 0, PARTS);
+    if (drew && pictures > 1 && last_pica) {
+        bool kept = true;
+        between_list ^= 1;
+        for (int k = 1; k < pictures; k++) {
+            draw_between(float(k) / float(pictures));
+            kept = keep_between(output, k - 1) && kept;
+        }
+        between_ready = kept;
         between_address = output;
+        between_count = pictures - 1;
+        between_blanks = span;
     }
     // the next frame's outputs go to the other half; this one's stay as
     // the frame before's

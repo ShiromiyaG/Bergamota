@@ -152,7 +152,9 @@ bool Impl::init() {
         s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
     }
-    for (Buffer &b : shown.buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    for (Shown &sh : shown) {
+        for (Buffer &b : sh.buffers) b = buffer(400 * 240 * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    }
     cmd = slots[0].cmd;
     vertices = slots[0].vertices;
     uniforms = slots[0].uniforms;
@@ -570,7 +572,9 @@ void Impl::shutdown() {
     for (auto &[k, pipe] : pipelines) vkDestroyPipeline(device, pipe, nullptr);
     for (auto &[k, s] : samplers) vkDestroySampler(device, s, nullptr);
     for (Buffer &b : staging) destroy(b);
-    for (Buffer &b : shown.buffers) destroy(b);
+    for (Shown &sh : shown) {
+        for (Buffer &b : sh.buffers) destroy(b);
+    }
     for (Slot &s : slots) {
         s.pending = true;
         vkResetFences(device, 1, &s.fence);

@@ -25,6 +25,9 @@ struct Frame {
     uint64_t number = 0; // the vertical blank
     Picture screens[2];  // when asked for (VulkanRenderer::cpu_pictures)
     bool between = false;
+    // which of the pictures its blank shows, in order (more than one at
+    // 120 Hz and up: VulkanRenderer::between)
+    int part = 0;
     double busy = 0; // the GPU's seconds of work so far, for the stats
     // the same on the host's GPU, for a presenter there: which of the
     // renderer's sets of screen images, the size of each screen in it (the

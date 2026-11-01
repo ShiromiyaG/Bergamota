@@ -61,9 +61,10 @@ public:
     // across runs; before the game starts
     void cache_in(const std::string &folder);
     // frames drawn between two of the game's, its logic untouched: each
-    // draw's vertices placed halfway between the frame before and this one,
-    // so a scene at 30 shows at 60. 0 or 1; set from any thread, taken at
-    // the next vertical blank
+    // draw's vertices placed between where the frame before and this one
+    // put them. the pictures each vertical blank shows: 0 none drawn, 1 (a
+    // scene at 30 shown at 60), 2 (at 120, a scene at 60 too), up to 4. set
+    // from any thread, taken at the next vertical blank
     std::atomic<int> between{0};
     // the resolution: how many of the host's pixels each of the PICA's is,
     // each way (fractions too: 4.5 makes the top screen 1080 rows tall). its

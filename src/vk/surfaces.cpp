@@ -206,14 +206,20 @@ void Impl::rescale(float to) {
         s->image = fresh;
     }
     barrier();
+    for (auto &list : between_pictures) {
+        for (Image &i : list) let_go(i);
+        list.clear();
+    }
     drop_ops();
     draws_before.clear();
     between_ready = false;
     // the read-back buffers as large as the screens now are
     submit();
-    for (Buffer &b : shown.buffers) {
-        destroy(b);
-        b = buffer(VkDeviceSize(scaled(240)) * scaled(400) * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+    for (Shown &sh : shown) {
+        for (Buffer &b : sh.buffers) {
+            destroy(b);
+            b = buffer(VkDeviceSize(scaled(240)) * scaled(400) * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, true);
+        }
     }
 }
 

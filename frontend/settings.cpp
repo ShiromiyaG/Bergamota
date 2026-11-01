@@ -81,6 +81,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "vsync", s.video.vsync);
     get(t, "video", "smooth", s.video.smooth);
     get(t, "video", "between", s.video.between);
+    get(t, "video", "between_display", s.video.between_display);
     get(t, "video", "layout", s.video.layout);
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
@@ -115,6 +116,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"vsync", s.video.vsync},
                               {"smooth", s.video.smooth},
                               {"between", s.video.between},
+                              {"between_display", s.video.between_display},
                               {"layout", s.video.layout},
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},

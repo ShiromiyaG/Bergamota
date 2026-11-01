@@ -68,6 +68,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("Fullscreen (F11)", &s.video.fullscreen);
             moved |= ImGui::Checkbox("Smooth scaling", &s.video.smooth);
             moved |= ImGui::Checkbox("60 FPS (frames drawn between the game's)", &s.video.between);
+            if (s.video.between) moved |= ImGui::Checkbox("Up to the display's rate (120, 144 Hz)", &s.video.between_display);
             moved |= ImGui::Checkbox("Vertical sync (can cost speed)", &s.video.vsync);
             int layout = s.video.layout == "top" ? 1 : 0;
             if (ImGui::Combo("Screens", &layout, "Both, stacked\0Top only\0")) {

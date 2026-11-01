@@ -72,6 +72,17 @@ float top_width(const Settings &s) {
     return s.video.aspect == "16:9" ? 240.0f * 16 / 9 : s.video.aspect == "21:9" ? 240.0f * 21 / 9 : 400.0f;
 }
 
+// the pictures a vertical blank shows (VulkanRenderer::between): one, or
+// with the display's rate as many as its refreshes in a blank, rounded
+// (two at 120 and 144 Hz, three at 165 and 180)
+int between_parts(const Settings &s, SDL_Window *window) {
+    if (!s.video.between) return 0;
+    if (!s.video.between_display) return 1;
+    const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+    float hz = mode && mode->refresh_rate > 0 ? mode->refresh_rate : 60.0f;
+    return std::clamp(int(std::lround(hz / 60.0f)), 1, 4);
+}
+
 // how many of the host's pixels a 3DS pixel is drawn as, each way: as many
 // as fill the resolution asked for (a size, or the window's) with the
 // screens shown, both stacked (480 rows) or the top one alone (240)
@@ -199,7 +210,7 @@ Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *win
 }
 
 // RUNTIME_DUMP=folder: the first RUNTIME_DUMP_COUNT (600) top screens shown,
-// as <frame>-<game|between>.ppm, to look at what the player showed
+// as <frame>-<part>-<game|between>.ppm, to look at what the player showed
 struct Dump {
     const char *folder = SDL_getenv("RUNTIME_DUMP");
     int left = SDL_getenv("RUNTIME_DUMP_COUNT") ? std::atoi(SDL_getenv("RUNTIME_DUMP_COUNT")) : 600;
@@ -208,7 +219,7 @@ struct Dump {
         if (!folder || left <= 0 || f.screens[0].rgba.empty()) return;
         left--;
         char name[512];
-        std::snprintf(name, sizeof name, "%s/%06llu-%s.ppm", folder, (unsigned long long)f.number, f.between ? "between" : "game");
+        std::snprintf(name, sizeof name, "%s/%06llu-%d-%s.ppm", folder, (unsigned long long)f.number, f.part, f.between ? "between" : "game");
         const Picture &p = f.screens[0];
         std::ofstream out(frontend::path_of(name), std::ios::binary);
         out << "P6\n" << p.width << " " << p.height << "\n255\n";
@@ -351,7 +362,6 @@ int main(int argc, char **argv) {
         SDL_SetWindowFullscreen(window, settings.video.fullscreen);
         both = settings.video.layout != "top";
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
-        vulkan.between = settings.video.between ? 1 : 0;
         vulkan.outlines = settings.video.outlines == "thin" ? 1 : settings.video.outlines == "none" ? 2 : 0;
     };
     apply();
@@ -381,6 +391,7 @@ int main(int argc, char **argv) {
     auto scale_since = std::chrono::steady_clock::now();
     std::deque<Frame> waiting;
     Frame showing;
+    auto shown_at = std::chrono::steady_clock::now();
     while (!quit) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
@@ -399,11 +410,22 @@ int main(int argc, char **argv) {
             input = now;
         }
 
-        // the frames the GPU finished, one a vertical blank, shown in order;
-        // two waiting at most (a screen refreshing slower than the game's 59.83
-        // Hz), the older ones skipped
+        // the frames the GPU finished, a vertical blank's pictures each
+        // blank, shown in order; two blanks' waiting at most (a screen
+        // refreshing slower than the game's 59.83 Hz), the older ones skipped
+        const int parts = between_parts(settings, window);
+        vulkan.between = parts;
         for (Frame f; handlers.gpu->next_frame(f);) waiting.push_back(std::move(f));
-        while (waiting.size() > 2) waiting.pop_front();
+        while (waiting.size() > 2 * size_t(std::max(parts, 1))) waiting.pop_front();
+        // without the display's refreshes to wait for, a blank's later
+        // pictures each a part of a blank after the one before
+        if (!waiting.empty() && waiting.front().part > 0 && !settings.video.vsync) {
+            auto due = shown_at + std::chrono::duration<double>(1.0 / (59.83 * std::max(parts, 1)));
+            if (std::chrono::steady_clock::now() < due) {
+                SDL_Delay(0);
+                continue;
+            }
+        }
         bool fresh = !waiting.empty();
         if (fresh) {
             showing = std::move(waiting.front());
@@ -448,7 +470,7 @@ int main(int argc, char **argv) {
         if (changed) apply();
 
         auto done = std::chrono::steady_clock::now();
-        if (fresh) tally.shown(done);
+        if (fresh) tally.shown(done), shown_at = done;
         tally.tick(done, showing, system, handlers, vulkan);
     }
     game.join();

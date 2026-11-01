@@ -34,6 +34,8 @@ struct Settings {
         bool vsync = false;      // waits for the display, which the game, on the same thread, pays for
         bool smooth = true;      // the screens scaled up smoothly, or in sharp pixels
         bool between = false;    // a frame drawn between each two of the game's (30 Hz scenes shown at 60)
+        // and as many more as the display's refresh rate shows (120, 144 Hz...)
+        bool between_display = false;
         std::string layout = "both"; // both screens stacked, or "top" alone
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
