@@ -89,8 +89,11 @@ time went from about 450 to 215 ms a second. Frames between: the shader
 runs the program twice, with the frame before's inputs and uniforms and
 with this one's, and puts the vertex between; a draw pairs with the one
 with the same inputs, indices and program whose uniforms differ the least.
-There is no jump test on that path (the positions are not on the CPU): a
-camera cut can show one frame halfway. Immediate-mode draws and the
+The jump test on that path (2026-11-01): when a pair's uniforms differ,
+eight of its vertices run through the program on the CPU for both frames
+(`sample_positions`, each draw once) and the same test as the CPU's
+decides; a pair that jumps is drawn where it is now. `between_test` checks
+it with a triangle moved a little and across the screen. Immediate-mode draws and the
 geometry stage stay on the CPU.
 
 Each vertex program translated to a shader of its own (2026-11-01,

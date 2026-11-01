@@ -115,6 +115,11 @@ add_test(NAME decomp COMMAND decomp_test)
 add_executable(program_test tests/program_test.cpp)
 target_link_libraries(program_test PRIVATE recomp_runtime)
 add_test(NAME program COMMAND program_test)
+if(RUNTIME_VULKAN)
+    add_executable(between_test tests/between_test.cpp)
+    target_link_libraries(between_test PRIVATE recomp_runtime)
+    add_test(NAME between COMMAND between_test)
+endif()
 
 # boots a game on the runtime and reports how far it gets
 add_executable(boot tools/boot.cpp)

@@ -64,6 +64,8 @@ struct GpuDraw {
     // and in which half's turn; none when out of room
     uint32_t outputs = ~0u;
     uint64_t output_turn = 0;
+    // a few of its positions run on the CPU, for the jump test (between.cpp)
+    std::vector<Vertex> samples;
 };
 
 // the registers the shaders read, by slot (pica.frag)
@@ -305,7 +307,11 @@ struct VulkanRenderer::Impl {
     };
     static const Op *match(const std::vector<Op> &list, Matching &m, const Op &op);
 
-    static float moved(const Op &before, const Op &now);
+    static float moved(const std::vector<Vertex> &before, const std::vector<Vertex> &now);
+
+    // a draw shaded on the GPU: its positions at a few of its vertices, run
+    // on the CPU
+    static std::vector<Vertex> sample_positions(const GpuDraw &d);
 
     static bool jumps(const Op &before, const Op &now);
 

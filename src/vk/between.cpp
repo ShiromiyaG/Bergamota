@@ -75,7 +75,7 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
     for (size_t i = 0; i < list.size(); i++) {
         const Op &before = list[i];
         if (m.used[i] || before.uvs != op.uvs || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
-        if (float d = moved(before, op); d < least) least = d, same = int(i);
+        if (float d = moved(before.vertices, op.vertices); d < least) least = d, same = int(i);
     }
     int best = same;
     if (best < 0) {
@@ -85,7 +85,7 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
         for (size_t i = start; i < end; i++) {
             const Op &before = list[i];
             if (m.used[i] || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
-            float d = moved(before, op);
+            float d = moved(before.vertices, op.vertices);
             if (d >= 0.25f) continue;
             if (in_order < 0 && i >= m.from) in_order = int(i);
             if (d < nearest) nearest = d, best = int(i);
@@ -102,15 +102,13 @@ const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &
 // well in front of the eye and on the screen or near it count: near the
 // eye, or far off the screen, a small move projects to a huge one (the
 // ground reaching under the camera, a big piece mostly off the screen)
-float Impl::moved(const Op &before, const Op &now) {
+float Impl::moved(const std::vector<Vertex> &before, const std::vector<Vertex> &now) {
     float far = 0;
-    for (size_t i = 0; i < now.vertices.size(); i++) {
-        far = std::max({far, before.vertices[i].position[3], now.vertices[i].position[3]});
-    }
+    for (size_t i = 0; i < now.size(); i++) far = std::max({far, before[i].position[3], now[i].position[3]});
     const float near = far * 0.05f;
     float most = 0;
-    for (size_t i = 0; i < now.vertices.size(); i++) {
-        const Vec4 &a = before.vertices[i].position, &b = now.vertices[i].position;
+    for (size_t i = 0; i < now.size(); i++) {
+        const Vec4 &a = before[i].position, &b = now[i].position;
         if (a[3] <= near || b[3] <= near) continue;
         float ax = a[0] / a[3], ay = a[1] / a[3], bx = b[0] / b[3], by = b[1] / b[3];
         bool on_screen = (std::abs(ax) <= 1.5f && std::abs(ay) <= 1.5f) || (std::abs(bx) <= 1.5f && std::abs(by) <= 1.5f);
@@ -120,9 +118,68 @@ float Impl::moved(const Op &before, const Op &now) {
     return most;
 }
 
+// SAMPLES vertices spread over the draw, through its program on the CPU:
+// a cut moves them all alike, so a few tell it
+std::vector<Vertex> Impl::sample_positions(const GpuDraw &d) {
+    constexpr size_t SAMPLES = 8;
+    const size_t count = d.stride ? d.inputs.size() / d.stride : 0;
+    std::vector<Vertex> out(std::min(count, SAMPLES));
+    if (out.empty() || !d.program) return out;
+    // the programs decoded, by hash: the same few each frame
+    thread_local std::unordered_map<uint64_t, std::unique_ptr<std::pair<ShaderUnit, Program>>> decoded;
+    if (decoded.size() > 256 && !decoded.count(d.program_hash)) decoded.clear();
+    auto &slot = decoded[d.program_hash];
+    if (!slot) {
+        slot = std::make_unique<std::pair<ShaderUnit, Program>>();
+        std::memcpy(slot->first.program.data(), d.program->code, sizeof d.program->code);
+        std::memcpy(slot->first.descriptors.data(), d.program->desc, sizeof d.program->desc);
+        slot->second.decode(slot->first);
+    }
+    ShaderUnit &u = slot->first;
+    std::memcpy(u.floats.data(), d.unit.f, sizeof d.unit.f);
+    for (int k = 0; k < 4; k++) {
+        for (int c = 0; c < 4; c++) u.ints[k][c] = uint8_t(d.unit.i[k][c]);
+    }
+    u.bools = uint16_t(d.unit.misc[0]);
+    u.entry = d.unit.misc[1];
+    const uint32_t mask = d.unit.misc[2] & 0xFFFF, total = std::min(d.unit.misc[3] & 7, 7u);
+    Runner runner;
+    for (size_t s = 0; s < out.size(); s++) {
+        const size_t v = count * s / out.size();
+        runner.input = {};
+        for (uint32_t r = 0; r < d.stride && r < 16; r++) runner.input[r] = d.inputs[v * d.stride + r];
+        runner.run(u, slot->second);
+        // the output registers packed by the mask, then placed by the map
+        // (pica_gpu.vert, place)
+        Vec4 packed[16]{};
+        for (uint32_t r = 0, at = 0; r < 16; r++) {
+            if (!mask) packed[r] = runner.output[r];
+            else if (mask >> r & 1) packed[at++] = runner.output[r];
+        }
+        Vec4 &p = out[s].position;
+        p = {0, 0, 0, 1};
+        for (uint32_t sl = 0; sl < total; sl++) {
+            for (int c = 0; c < 4; c++) {
+                if (uint32_t semantic = d.unit.map[sl] >> (c * 8) & 0x1F; semantic < 4) p[semantic] = packed[sl][c];
+            }
+        }
+        if (!total) p = packed[0];
+    }
+    return out;
+}
+
 // a pair that jumps (more than a quarter of the screen) is not the same
-// thing moving (a camera cut): drawn where it is now
-bool Impl::jumps(const Op &before, const Op &now) { return moved(before, now) > 0.5f; }
+// thing moving (a camera cut): drawn where it is now. one shaded on the
+// GPU tells it from a few vertices run here, when its uniforms changed
+bool Impl::jumps(const Op &before, const Op &now) {
+    if (!now.gpu) return moved(before.vertices, now.vertices) > 0.5f;
+    if (!before.gpu || std::memcmp(&before.gpu->unit, &now.gpu->unit, sizeof(UnitBlock)) == 0) return false;
+    // each once: this frame's are the next one's frame before
+    for (GpuDraw *d : {before.gpu.get(), now.gpu.get()}) {
+        if (d->samples.empty()) d->samples = sample_positions(*d);
+    }
+    return moved(before.gpu->samples, now.gpu->samples) > 0.5f;
+}
 
 // the game frame just drawn, drawn again at t (0 the frame before, 1
 // this one) into the between images
@@ -179,7 +236,7 @@ void Impl::draw_between(float t) {
         if (op.gpu) {
             // the GPU's shader runs both and puts each vertex between
             gpu_draw = op.gpu.get();
-            gpu_before = before ? before->gpu.get() : nullptr;
+            gpu_before = before && !jumps(*before, op) ? before->gpu.get() : nullptr;
             gpu_t = t;
         } else if (before && !jumps(*before, op)) {
             for (size_t i = 0; i < triangles.size(); i++) {
