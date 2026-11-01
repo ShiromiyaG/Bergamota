@@ -77,11 +77,25 @@ To look at what the player shows: `RUNTIME_DUMP=<folder>` in the player;
 `boot` with `RUNTIME_REPLAY`, `RUNTIME_TRAIL` and `RUNTIME_TRAIL_FROM` on the
 host's clock, as the player runs.
 
+The vertex stage on the GPU (performance 4, done 2026-11-01): the CPU
+gathers each draw's input registers and its triangles as indices
+(`VertexStage::gather`); `src/vk/pica_gpu.vert` runs the game's vertex
+shader program for each vertex, as `src/pica/shader.cpp` does, and places
+its outputs. `boot`'s shots are the same as with the CPU's stage
+(`RUNTIME_CPU_VERTICES=1`), with no validation errors; walking in the
+field, the GPU's thread worked 14.4 s where it worked 33.4 s (the vertex
+stage 4.8 s where it was 19.4 s); at the title screen the player's GPU
+time went from about 450 to 215 ms a second. Frames between: the shader
+runs the program twice, with the frame before's inputs and uniforms and
+with this one's, and puts the vertex between; a draw pairs with the one
+with the same inputs, indices and program whose uniforms differ the least.
+There is no jump test on that path (the positions are not on the CPU): a
+camera cut can show one frame halfway. Immediate-mode draws and the
+geometry stage stay on the CPU.
+
 Left: performance 3 (presenting through the renderer's own Vulkan device)
-and 4 (the vertex stage on the GPU). Both are now off the game's thread:
-3 costs a frame of latency and a little CPU on the main thread, 4 keeps
-the GPU's thread busy (about 45% of each second at the title screen), and
-the game waits for that thread when it reads back what it drew.
+(off the game's thread: a frame of latency and a little CPU on the main
+thread).
 
 ## Flashes with "60 FPS" (frames between)
 

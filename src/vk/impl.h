@@ -17,7 +17,9 @@
 #include <bit>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <map>
 #include <unordered_map>
 
@@ -25,7 +27,36 @@ namespace runtime {
 
 using namespace pica;
 
-constexpr VkDeviceSize VERTEX_RING = 64u << 20, UNIFORM_RING = 8u << 20;
+constexpr VkDeviceSize VERTEX_RING = 64u << 20, UNIFORM_RING = 32u << 20;
+
+// the PICA's vertex shader on the GPU (pica_gpu.vert): the program and its
+// descriptors, and a draw's uniforms and output map, as the shader reads them
+struct ProgramBlock {
+    uint32_t code[4096];
+    uint32_t desc[128];
+};
+struct UnitBlock {
+    float f[96][4];
+    int32_t i[4][4];   // the integer uniforms' bytes
+    uint32_t misc[4];  // bools, entry, output mask, output total
+    uint32_t map[8];   // the output map's seven words
+};
+struct VertexPush {
+    uint32_t stride, before_stride;
+    float t;
+    uint32_t between;
+};
+// a draw for the GPU's vertex shader: its inputs, triangles as indices,
+// uniforms and program
+struct GpuDraw {
+    std::vector<Vec4> inputs;
+    uint32_t stride = 0;
+    std::vector<uint32_t> indices;
+    UnitBlock unit{};
+    std::shared_ptr<const ProgramBlock> program;
+    uint64_t program_hash = 0;
+    uint64_t input_hash = 0; // the inputs, the indices and the stride: alike in a thing that only moves
+};
 
 // the registers the shaders read, by slot (pica.frag)
 struct State {
@@ -156,6 +187,19 @@ struct VulkanRenderer::Impl {
 
     VertexStage stage;
     std::vector<Vertex> triangles;
+    // the vertex shader on the GPU (RUNTIME_CPU_VERTICES=1: on the CPU, to
+    // compare): the draw render takes, and with a frame between the frame
+    // before's and where between them
+    const bool gpu_vertices = std::getenv("RUNTIME_CPU_VERTICES") == nullptr;
+    VertexStage::Gathered gathered;
+    GpuDraw live;
+    const GpuDraw *gpu_draw = nullptr, *gpu_before = nullptr;
+    float gpu_t = 1;
+    std::shared_ptr<const ProgramBlock> program_now;
+    uint64_t program_version = ~0ull, program_hash = 0;
+    VkDeviceSize program_offset = 0;
+    uint64_t program_serial = ~0ull, program_sent = 0;
+    VkShaderModule vert_gpu = VK_NULL_HANDLE;
 
     // the fragment lighting: what was last decoded, and where in the
     // uniform ring it and the tables went, for the submission they went with
@@ -191,6 +235,7 @@ struct VulkanRenderer::Impl {
         Backend::Transfer transfer;
         uint64_t look = 0; // the textures and the combiners: two draws alike in them are the same thing
         uint64_t uvs = 0;  // where it samples its first texture: the same in a thing that only moves
+        std::shared_ptr<const GpuDraw> gpu; // shaded on the GPU: its inputs, not vertices
     };
     std::vector<Op> ops_now;
     std::map<uint32_t, std::vector<Op>> draws_before; // by target: the last frame's that drew it
@@ -334,6 +379,7 @@ struct VulkanRenderer::Impl {
     // -- drawing -----------------------------------------------------------------
 
     void render(Pica &p);
+    void gpu_unit(Pica &p, GpuDraw &d);
 
     void guard(Surface &s);
 

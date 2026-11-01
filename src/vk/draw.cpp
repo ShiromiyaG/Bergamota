@@ -9,8 +9,9 @@ using Impl = VulkanRenderer::Impl;
 VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
     auto it = pipelines.find(key);
     if (it != pipelines.end()) return it->second;
+    bool on_gpu = (key >> 41) & 1;
     VkPipelineShaderStageCreateInfo stages[2] = {
-        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
+        {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, on_gpu ? vert_gpu : vert, "main", nullptr},
         {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
     };
     VkVertexInputBindingDescription binding{0, sizeof(Vertex), VK_VERTEX_INPUT_RATE_VERTEX};
@@ -25,10 +26,12 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
         {7, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, view)},
     };
     VkPipelineVertexInputStateCreateInfo vin{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-    vin.vertexBindingDescriptionCount = 1;
-    vin.pVertexBindingDescriptions = &binding;
-    vin.vertexAttributeDescriptionCount = 8;
-    vin.pVertexAttributeDescriptions = attributes;
+    if (!on_gpu) {
+        vin.vertexBindingDescriptionCount = 1;
+        vin.pVertexBindingDescriptions = &binding;
+        vin.vertexAttributeDescriptionCount = 8;
+        vin.pVertexAttributeDescriptions = attributes;
+    }
     VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -98,7 +101,8 @@ VkPipeline Impl::pipeline(uint64_t key, bool has_depth) {
 void Impl::render(Pica &p) {
     const auto &r = p.regs;
     self.draws++;
-    if (triangles.empty()) return;
+    const bool on_gpu = gpu_draw != nullptr;
+    if (on_gpu ? gpu_draw->indices.empty() : triangles.empty()) return;
     uint32_t dims = r[FRAMEBUFFER_DIMENSIONS], w = dims & 0x7FF, h = ((dims >> 12) & 0x3FF) + 1;
     uint32_t color_address = (r[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3;
     uint32_t depth_address = (r[DEPTH_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3;
@@ -119,7 +123,14 @@ void Impl::render(Pica &p) {
     if (rendering && (color_target != color || depth_target != depth)) end_rendering();
 
     VkDeviceSize vsize = triangles.size() * sizeof(Vertex);
-    if (vsize > VERTEX_RING) return;
+    VkDeviceSize in_size = 0, index_size = 0, before_size = 0;
+    if (on_gpu) {
+        vsize = 0;
+        in_size = gpu_draw->inputs.size() * sizeof(Vec4);
+        index_size = gpu_draw->indices.size() * sizeof(uint32_t);
+        before_size = gpu_before ? gpu_before->inputs.size() * sizeof(Vec4) : 0;
+    }
+    if (vsize + in_size + index_size + before_size + 1024 > VERTEX_RING) return;
     State st{};
     for (size_t i = 0; i < std::size(STATE_REGS); i++) st.regs[i] = r[STATE_REGS[i]];
     st.depth[0] = f24(r[DEPTH_RANGE]);
@@ -129,11 +140,34 @@ void Impl::render(Pica &p) {
     lighting.decode(r.data(), lit);
     // into the rings; a ring that runs out submits, which leaves what
     // went before in the other slot, so then it all goes again
-    VkDeviceSize voff, uoff;
+    VkDeviceSize voff = 0, uoff, in_off = 0, index_off = 0, unit_off = 0, before_off = 0, before_unit_off = 0;
     for (;;) {
         uint64_t serial = submitted;
-        voff = take(vertices, vertex_at, vsize, 16);
-        std::memcpy(vertices.mapped + voff, triangles.data(), vsize);
+        if (on_gpu) {
+            in_off = take(vertices, vertex_at, in_size, 256);
+            std::memcpy(vertices.mapped + in_off, gpu_draw->inputs.data(), in_size);
+            index_off = take(vertices, vertex_at, index_size, 16);
+            std::memcpy(vertices.mapped + index_off, gpu_draw->indices.data(), index_size);
+            unit_off = take(uniforms, uniform_at, sizeof(UnitBlock), 256);
+            std::memcpy(uniforms.mapped + unit_off, &gpu_draw->unit, sizeof(UnitBlock));
+            before_off = in_off, before_unit_off = unit_off;
+            if (gpu_before) {
+                before_off = take(vertices, vertex_at, before_size, 256);
+                std::memcpy(vertices.mapped + before_off, gpu_before->inputs.data(), before_size);
+                before_unit_off = take(uniforms, uniform_at, sizeof(UnitBlock), 256);
+                std::memcpy(uniforms.mapped + before_unit_off, &gpu_before->unit, sizeof(UnitBlock));
+            }
+            // the program, kept while it and the slot stay the same
+            if (program_serial != submitted || program_sent != gpu_draw->program_hash) {
+                program_offset = take(uniforms, uniform_at, sizeof(ProgramBlock), 256);
+                std::memcpy(uniforms.mapped + program_offset, gpu_draw->program.get(), sizeof(ProgramBlock));
+                program_sent = gpu_draw->program_hash;
+                program_serial = submitted;
+            }
+        } else {
+            voff = take(vertices, vertex_at, vsize, 16);
+            std::memcpy(vertices.mapped + voff, triangles.data(), vsize);
+        }
         uoff = take(uniforms, uniform_at, sizeof st, 256);
         std::memcpy(uniforms.mapped + uoff, &st, sizeof st);
         // the lighting block and the tables, kept while they and the
@@ -181,7 +215,7 @@ void Impl::render(Pica &p) {
     bool blend = (r[COLOR_OPERATION] >> 8) & 1;
     uint32_t color_mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
     uint64_t key = uint64_t(blend) | uint64_t(color_mask) << 4 | uint64_t(blend ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
-                   uint64_t(depth != nullptr) << 40;
+                   uint64_t(depth != nullptr) << 40 | uint64_t(on_gpu) << 41;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline(key, depth != nullptr));
 
     // the viewport, rows the PICA's way up
@@ -219,7 +253,7 @@ void Impl::render(Pica &p) {
     for (int u = 0; u < 3; u++) images[u] = {sampler(r[UNIT_BASE[u] + 2]), views[u], VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorBufferInfo light_info{uniforms.buffer, light_offset, sizeof light_block};
     VkDescriptorBufferInfo tables_info{uniforms.buffer, tables_offset, sizeof light_tables};
-    VkWriteDescriptorSet writes[4]{};
+    VkWriteDescriptorSet writes[9]{};
     for (auto &w : writes) w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
@@ -237,10 +271,35 @@ void Impl::render(Pica &p) {
     writes[3].descriptorCount = 1;
     writes[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     writes[3].pBufferInfo = &tables_info;
-    push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
-    vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
-    self.triangles += triangles.size() / 3;
+    if (!on_gpu) {
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 4, writes);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
+        vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
+        self.triangles += triangles.size() / 3;
+    } else {
+        VkDescriptorBufferInfo gpu_info[5] = {
+            {uniforms.buffer, program_offset, sizeof(ProgramBlock)},
+            {uniforms.buffer, unit_off, sizeof(UnitBlock)},
+            {vertices.buffer, in_off, std::max<VkDeviceSize>(in_size, 16)},
+            {uniforms.buffer, before_unit_off, sizeof(UnitBlock)},
+            {vertices.buffer, before_off, std::max<VkDeviceSize>(gpu_before ? before_size : in_size, 16)},
+        };
+        static constexpr VkDescriptorType TYPES[5] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        for (int k = 0; k < 5; k++) {
+            writes[4 + k].dstBinding = uint32_t(4 + k);
+            writes[4 + k].descriptorCount = 1;
+            writes[4 + k].descriptorType = TYPES[k];
+            writes[4 + k].pBufferInfo = &gpu_info[k];
+        }
+        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 9, writes);
+        VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u};
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof push, &push);
+        vkCmdBindIndexBuffer(cmd, vertices.buffer, index_off, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, uint32_t(gpu_draw->indices.size()), 1, 0, 0, 0);
+        self.triangles += gpu_draw->indices.size() / 3;
+    }
 
     // drawn: memory is behind until written back, which the CPU asks for
     // through the guards
@@ -252,6 +311,33 @@ void Impl::render(Pica &p) {
         depth->version++;
         guard(*depth);
     }
+}
+
+// the vertex shader unit as the GPU's shader reads it: its program (made
+// again only when it changes) and the draw's uniforms and output map
+void Impl::gpu_unit(Pica &p, GpuDraw &d) {
+    const ShaderUnit &u = p.vertex_shader;
+    if (program_version != u.version || !program_now) {
+        auto block = std::make_shared<ProgramBlock>();
+        std::memcpy(block->code, u.program.data(), sizeof block->code);
+        std::memcpy(block->desc, u.descriptors.data(), sizeof block->desc);
+        program_hash = hash_bytes(reinterpret_cast<const uint8_t *>(block.get()), sizeof(ProgramBlock));
+        program_now = std::move(block);
+        program_version = u.version;
+    }
+    d.program = program_now;
+    d.program_hash = program_hash;
+    UnitBlock &b = d.unit;
+    std::memcpy(b.f, u.floats.data(), sizeof b.f);
+    for (int k = 0; k < 4; k++) {
+        for (int c = 0; c < 4; c++) b.i[k][c] = u.ints[k][c];
+    }
+    b.misc[0] = u.bools;
+    b.misc[1] = u.entry;
+    b.misc[2] = p.regs[VS_BLOCK + OUTPUT_MASK];
+    b.misc[3] = p.regs[OUTPUT_TOTAL];
+    for (int s = 0; s < 7; s++) b.map[s] = p.regs[OUTPUT_MAP + s];
+    b.map[7] = 0;
 }
 
 } // namespace runtime

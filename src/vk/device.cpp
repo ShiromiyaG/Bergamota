@@ -9,6 +9,9 @@ namespace {
 const uint32_t VERT_SPV[] = {
 #include "pica.vert.inc"
 };
+const uint32_t VERT_GPU_SPV[] = {
+#include "pica_gpu.vert.inc"
+};
 const uint32_t FRAG_SPV[] = {
 #include "pica.frag.inc"
 };
@@ -116,7 +119,10 @@ bool Impl::init() {
     for (Slot &s : slots) {
         vkAllocateCommandBuffers(device, &cai, &s.cmd);
         vkCreateFence(device, &fci, nullptr, &s.fence);
-        s.vertices = buffer(VERTEX_RING, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+        // vertices shaded on the CPU, or the inputs and indices of those
+        // shaded on the GPU
+        s.vertices = buffer(VERTEX_RING, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                             VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
         // the state and lighting blocks, and the lighting tables read as storage
         s.uniforms = buffer(UNIFORM_RING, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
 
@@ -127,26 +133,41 @@ bool Impl::init() {
     uniforms = slots[0].uniforms;
 
     // the one layout: the state, the three textures, the lighting and
-    // its tables
-    VkDescriptorSetLayoutBinding bindings[4] = {
-        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    // its tables; for the vertex shader on the GPU, the program, the
+    // uniforms and the inputs, this frame's and the frame before's
+    constexpr VkShaderStageFlags V = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutBinding bindings[9] = {
+        {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         {3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        {4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
+        {5, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V, nullptr},
+        {6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
+        {7, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, V, nullptr},
+        {8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, V, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-    sli.bindingCount = 4;
+    sli.bindingCount = 9;
     sli.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
+    VkPushConstantRange push{V, 0, sizeof(VertexPush)};
     VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pli.setLayoutCount = 1;
     pli.pSetLayouts = &set_layout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &push;
     vkCreatePipelineLayout(device, &pli, nullptr, &layout);
+    pli.pushConstantRangeCount = 0;
+    pli.pPushConstantRanges = nullptr;
     VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     smi.codeSize = sizeof VERT_SPV;
     smi.pCode = VERT_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &vert);
+    smi.codeSize = sizeof VERT_GPU_SPV;
+    smi.pCode = VERT_GPU_SPV;
+    vkCreateShaderModule(device, &smi, nullptr, &vert_gpu);
     smi.codeSize = sizeof FRAG_SPV;
     smi.pCode = FRAG_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &frag);
@@ -396,6 +417,7 @@ void Impl::shutdown() {
         vkDestroyFence(device, s.fence, nullptr);
     }
     vkDestroyShaderModule(device, vert, nullptr);
+    vkDestroyShaderModule(device, vert_gpu, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
     vkDestroyShaderModule(device, depth_module, nullptr);
     vkDestroyPipeline(device, depth_pipeline, nullptr);

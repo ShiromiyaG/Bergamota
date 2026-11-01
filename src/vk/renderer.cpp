@@ -32,11 +32,27 @@ double since(clock::time_point t) { return std::chrono::duration<double>(clock::
 
 void VulkanRenderer::draw(Pica &p, bool indexed) {
     if (!ready()) return;
+    Impl &d = *impl_;
     auto t = clock::now();
-    impl_->stage.draw(p, indexed, impl_->triangles);
+    // the inputs gathered here and the shader run on the GPU, or all of it here
+    if (d.gpu_vertices && d.stage.gather(p, indexed, d.gathered)) {
+        GpuDraw &live = d.live;
+        std::swap(live.inputs, d.gathered.inputs);
+        std::swap(live.indices, d.gathered.indices);
+        live.stride = d.gathered.stride;
+        d.gpu_unit(p, live);
+        time_vertices += since(t);
+        t = clock::now();
+        d.gpu_draw = &live;
+        d.render(p);
+        d.gpu_draw = nullptr;
+        time_render += since(t);
+        return;
+    }
+    d.stage.draw(p, indexed, d.triangles);
     time_vertices += since(t);
     t = clock::now();
-    impl_->render(p);
+    d.render(p);
     time_render += since(t);
 }
 

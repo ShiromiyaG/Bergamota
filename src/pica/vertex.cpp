@@ -262,6 +262,70 @@ bool VertexStage::draw(Pica &p, bool indexed, std::vector<Vertex> &triangles) {
     return true;
 }
 
+void VertexStage::assemble(Pica &p, const std::vector<uint32_t> *order, size_t count, std::vector<uint32_t> &indices) {
+    auto at = [&](size_t i) { return order ? (*order)[i] : uint32_t(i); };
+    indices.clear();
+    switch ((p.regs[PRIMITIVE_CONFIG] >> 8) & 3) {
+    case 1:
+        for (size_t i = 2; i < count; i++) {
+            bool even = i % 2 == 0;
+            indices.insert(indices.end(), {at(even ? i - 2 : i - 1), at(even ? i - 1 : i - 2), at(i)});
+        }
+        break;
+    case 2:
+        for (size_t i = 2; i < count; i++) indices.insert(indices.end(), {at(0), at(i - 1), at(i)});
+        break;
+    default:
+        for (size_t i = 0; i + 2 < count; i += 3) indices.insert(indices.end(), {at(i), at(i + 1), at(i + 2)});
+    }
+}
+
+bool VertexStage::gather(Pica &p, bool indexed, Gathered &out) {
+    out.inputs.clear();
+    out.indices.clear();
+    if ((p.regs[GEOSTAGE_CONFIG] & 3) == 2) return false; // a geometry shader: not yet
+    uint32_t count = p.regs[VERTEX_COUNT], first = p.regs[VERTEX_OFFSET];
+    if (!count || count > 0x10000) return true;
+    Layout l = layout(p);
+    // the registers the attributes go to, and none past the last
+    uint64_t map = p.regs[VS_BLOCK + INPUT_MAP_LOW] | uint64_t(p.regs[VS_BLOCK + INPUT_MAP_HIGH]) << 32;
+    uint32_t attributes = std::min((p.regs[VS_BLOCK + INPUT_CONFIG] & 0xF) + 1, 12u);
+    out.stride = 0;
+    for (uint32_t id = 0; id < attributes; id++) out.stride = std::max(out.stride, uint32_t((map >> (id * 4)) & 0xF) + 1);
+    uint32_t base = (p.regs[ATTRIBUTE_BASE] & 0x0FFFFFFF) << 3;
+    std::array<Vec4, 16> in;
+    auto keep = [&] { out.inputs.insert(out.inputs.end(), in.begin(), in.begin() + out.stride); };
+    if (indexed) {
+        uint32_t config = p.regs[INDEX_ARRAY];
+        bool shorts = config >> 31;
+        const uint8_t *bytes = p.memory.host(base + (config & 0x0FFFFFFF), count * (shorts ? 2 : 1));
+        if (!bytes) return true;
+        if (seen_.size() < 0x10000 * 2) seen_.assign(0x10000 * 2, 0);
+        if (++stamp_ == 0) std::fill(seen_.begin(), seen_.end(), 0), stamp_ = 1;
+        order_.resize(count);
+        uint32_t vertices = 0;
+        for (uint32_t i = 0; i < count; i++) {
+            uint32_t index = shorts ? uint32_t(bytes[i * 2] | bytes[i * 2 + 1] << 8) : bytes[i];
+            if (seen_[index * 2] != stamp_) {
+                seen_[index * 2] = stamp_;
+                seen_[index * 2 + 1] = vertices++;
+                fetch(p.memory, base, l, index, in);
+                keep();
+            }
+            order_[i] = seen_[index * 2 + 1];
+        }
+        assemble(p, &order_, count, out.indices);
+    } else {
+        for (uint32_t i = 0; i < count; i++) {
+            fetch(p.memory, base, l, first + i, in);
+            keep();
+        }
+        assemble(p, nullptr, count, out.indices);
+    }
+    shaded += out.inputs.size() / std::max(out.stride, 1u);
+    return true;
+}
+
 bool VertexStage::draw_immediate(Pica &p, const std::vector<std::array<Vec4, 16>> &attributes, std::vector<Vertex> &triangles) {
     triangles.clear();
     if ((p.regs[GEOSTAGE_CONFIG] & 3) == 2) return false;

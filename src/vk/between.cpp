@@ -33,6 +33,15 @@ void Impl::note_draw(Pica &p, const VkImageView *views) {
     uvs.reserve(triangles.size() * 2);
     for (const Vertex &v : triangles) uvs.insert(uvs.end(), {v.uv0[0], v.uv0[1]});
     op.uvs = hash_bytes(reinterpret_cast<const uint8_t *>(uvs.data()), uvs.size() * sizeof(float));
+    if (gpu_draw) {
+        // its inputs, which are the same in a thing that only moves
+        auto kept = std::make_shared<GpuDraw>(*gpu_draw);
+        kept->input_hash = hash_bytes(reinterpret_cast<const uint8_t *>(kept->inputs.data()), kept->inputs.size() * sizeof(Vec4)) ^
+                           hash_bytes(reinterpret_cast<const uint8_t *>(kept->indices.data()), kept->indices.size() * 4) * 3 ^
+                           kept->stride * 0x9E3779B97F4A7C15ull;
+        op.uvs = kept->input_hash;
+        op.gpu = std::move(kept);
+    }
     ops_now.push_back(std::move(op));
 }
 
@@ -40,6 +49,27 @@ uint32_t Impl::op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] &
 
 const Impl::Op *Impl::match(const std::vector<Op> &list, Matching &m, const Op &op) {
     if (m.used.size() != list.size()) m.used.assign(list.size(), false);
+    if (op.gpu) {
+        // shaded on the GPU: the one with the same inputs and program whose
+        // uniforms differ the least (quads alike in all but where they go)
+        int best = -1;
+        float least = 0;
+        for (size_t i = 0; i < list.size(); i++) {
+            const Op &before = list[i];
+            if (m.used[i] || !before.gpu || before.look != op.look || before.gpu->input_hash != op.gpu->input_hash ||
+                before.gpu->program_hash != op.gpu->program_hash) {
+                continue;
+            }
+            float d = 0;
+            const float *a = &before.gpu->unit.f[0][0], *b = &op.gpu->unit.f[0][0];
+            for (int k = 0; k < 96 * 4; k++) d += std::abs(a[k] - b[k]);
+            if (best < 0 || d < least) best = int(i), least = d;
+        }
+        if (best < 0) return nullptr;
+        m.used[best] = true;
+        m.from = size_t(best) + 1;
+        return &list[best];
+    }
     int same = -1;
     float least = 0.5f; // past it, a jump
     for (size_t i = 0; i < list.size(); i++) {
@@ -144,7 +174,12 @@ void Impl::draw_between(float t) {
         auto last = draws_before.find(op_target(op));
         if (last != draws_before.end()) before = match(last->second, matched[op_target(op)], op);
         triangles = op.vertices;
-        if (before && !jumps(*before, op)) {
+        if (op.gpu) {
+            // the GPU's shader runs both and puts each vertex between
+            gpu_draw = op.gpu.get();
+            gpu_before = before ? before->gpu.get() : nullptr;
+            gpu_t = t;
+        } else if (before && !jumps(*before, op)) {
             for (size_t i = 0; i < triangles.size(); i++) {
                 const Vec4 &a = before->vertices[i].position, &b = op.vertices[i].position;
                 for (int k = 0; k < 4; k++) triangles[i].position[k] = a[k] + (b[k] - a[k]) * t;
@@ -168,6 +203,8 @@ void Impl::draw_between(float t) {
         }
         forced_views = views;
         render(p);
+        gpu_draw = gpu_before = nullptr;
+        gpu_t = 1;
     }
     end_rendering();
     forced_views = nullptr;

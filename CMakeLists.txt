@@ -42,11 +42,11 @@ option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${V
 if(RUNTIME_VULKAN)
     set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${SHADER_OUT})
-    foreach(stage vert frag)
+    foreach(shader pica.vert pica_gpu.vert pica.frag)
         add_custom_command(
-            OUTPUT ${SHADER_OUT}/pica.${stage}.inc
-            COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/pica.${stage}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica.${stage}
-            DEPENDS src/vk/pica.${stage}
+            OUTPUT ${SHADER_OUT}/${shader}.inc
+            COMMAND Vulkan::glslc -O -mfmt=num -o ${SHADER_OUT}/${shader}.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/${shader}
+            DEPENDS src/vk/${shader}
             VERBATIM)
     endforeach()
     add_custom_command(
@@ -56,7 +56,7 @@ if(RUNTIME_VULKAN)
         VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
         src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/pica/texture.cpp
-        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica.frag.inc ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
     target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan)
     target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)

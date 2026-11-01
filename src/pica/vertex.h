@@ -29,6 +29,16 @@ public:
     bool draw(Pica &pica, bool indexed, std::vector<Vertex> &triangles);
     bool draw_immediate(Pica &pica, const std::vector<std::array<Vec4, 16>> &attributes, std::vector<Vertex> &triangles);
 
+    // a draw's inputs for a shader run elsewhere (the host's GPU): each
+    // vertex's input registers, stride of them (the rest read zero), and
+    // the triangles as indices of those vertices. false where draw is
+    struct Gathered {
+        std::vector<Vec4> inputs;
+        uint32_t stride = 0;
+        std::vector<uint32_t> indices;
+    };
+    bool gather(Pica &pica, bool indexed, Gathered &out);
+
     uint64_t shaded = 0; // vertices through the shader
 
 private:
@@ -36,6 +46,8 @@ private:
     void shade_all(Pica &pica);
     void assemble(Pica &pica, const std::vector<Vertex> &vertices, const std::vector<uint32_t> *order, size_t count,
                   std::vector<Vertex> &triangles);
+    // the same as indices
+    static void assemble(Pica &pica, const std::vector<uint32_t> *order, size_t count, std::vector<uint32_t> &indices);
 
     std::unique_ptr<Program> program_;
     Runner runner_;
