@@ -14,7 +14,8 @@
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=1       frames drawn between the game's, as "60 FPS" in the player
 //   RUNTIME_TRAIL=n         after each shot, the next n frames shown; on the host's
-//                           clock, the first n (RUNTIME_NO_INPUT=1: no A presses)
+//                           clock, the first n from frame RUNTIME_TRAIL_FROM
+//                           (RUNTIME_NO_INPUT=1: no A presses; RUNTIME_REPLAY: its input)
 //   RUNTIME_ASYNC=0         the GPU on the game's thread (on its own by default, as
 //                           in the player)
 
@@ -243,6 +244,7 @@ int main(int argc, char **argv) {
     // on the host's clock with RUNTIME_SHOTS: the first RUNTIME_TRAIL frames
     // shown, every one (the intro as the player plays it)
     int trail = !frames && shots_dir && env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 0;
+    const uint64_t trail_from = env("RUNTIME_TRAIL_FROM") ? std::stoull(env("RUNTIME_TRAIL_FROM")) : 0;
     std::string trail_line;
     auto take_frames = [&] {
         Frame f;
@@ -258,7 +260,7 @@ int main(int argc, char **argv) {
                 if (vulkan && vulkan->between) trail = env("RUNTIME_TRAIL") ? std::atoi(env("RUNTIME_TRAIL")) : 8;
 #endif
                 trail_line.clear();
-            } else if (trail > 0) {
+            } else if (trail > 0 && f.number >= trail_from) {
                 trail--;
                 char name[512];
                 std::snprintf(name, sizeof name, "%s/%06llu-shown-top.ppm", shots_dir, (unsigned long long)f.number);
@@ -299,6 +301,15 @@ int main(int argc, char **argv) {
         // do; RUNTIME_NO_INPUT=1 leaves the game alone
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         handlers.input.buttons = ms % 1000 < 100 && !env("RUNTIME_NO_INPUT") ? 1 : 0;
+        if (replay_path) {
+            // a recording on the host's clock: as the player would get it
+            auto &in = replay.at(handlers.vblanks);
+            handlers.input.buttons = in.buttons;
+            handlers.input.circle_x = in.x;
+            handlers.input.circle_y = in.y;
+            handlers.input.touch.reset();
+            if (in.tx >= 0) handlers.input.touch = std::make_pair(uint16_t(in.tx), uint16_t(in.ty));
+        }
         handlers.tick(system);
         take_frames();
         // both screens to a picture every five seconds

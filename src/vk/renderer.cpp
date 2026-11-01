@@ -203,6 +203,7 @@ struct VulkanRenderer::Impl {
         std::array<uint32_t, 4> fill; // start, end, value, width
         Backend::Transfer transfer;
         uint64_t look = 0; // the textures and the combiners: two draws alike in them are the same thing
+        uint64_t uvs = 0;  // where it samples its first texture: the same in a thing that only moves
     };
     std::vector<Op> ops_now;
     std::map<uint32_t, std::vector<Op>> draws_before; // by target: the last frame's that drew it
@@ -241,32 +242,83 @@ struct VulkanRenderer::Impl {
               tables_kept, p.tables_version, {}, {}};
         op.look = hash_bytes(reinterpret_cast<const uint8_t *>(look), sizeof look) ^
                   hash_bytes(reinterpret_cast<const uint8_t *>(views), 3 * sizeof(VkImageView)) * 3;
+        // the first only: the others are often projected from the camera
+        // (shadows, reflections) and change as it moves
+        std::vector<float> uvs;
+        uvs.reserve(triangles.size() * 2);
+        for (const Vertex &v : triangles) uvs.insert(uvs.end(), {v.uv0[0], v.uv0[1]});
+        op.uvs = hash_bytes(reinterpret_cast<const uint8_t *>(uvs.data()), uvs.size() * sizeof(float));
         ops_now.push_back(std::move(op));
     }
 
     static uint32_t op_target(const Op &op) { return (op.regs[COLOR_BUFFER_ADDRESS] & 0x0FFFFFFF) << 3; }
 
-    // where a draw of the frame before went: the next one to the same target
-    // made of the same (vertices, textures, combiners), a little on at most
-    static const Op *match(const std::vector<Op> &list, size_t &from, const Op &op) {
-        for (size_t i = from; i < list.size() && i < from + 48; i++) {
-            if (list[i].vertices.size() != op.vertices.size() || list[i].look != op.look) continue;
-            from = i + 1;
-            return &list[i];
+    // where a draw of the frame before went, among those to the same target
+    // made of the same (vertex count, textures, combiners): the one that
+    // samples the same part of its first texture (the same thing, moved) and
+    // moved the least, as pieces repeated (a curb's, a row of tiles) sample
+    // the same part each; else, near its place in the order, the first that
+    // moved little. paired by order alone, one piece added or gone shifted
+    // the rest onto their neighbors and opened cracks between them
+    struct Matching {
+        size_t from = 0;
+        std::vector<bool> used;
+    };
+    static const Op *match(const std::vector<Op> &list, Matching &m, const Op &op) {
+        if (m.used.size() != list.size()) m.used.assign(list.size(), false);
+        int same = -1;
+        float least = 0.5f; // past it, a jump
+        for (size_t i = 0; i < list.size(); i++) {
+            const Op &before = list[i];
+            if (m.used[i] || before.uvs != op.uvs || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
+            if (float d = moved(before, op); d < least) least = d, same = int(i);
         }
-        return nullptr;
+        int best = same;
+        if (best < 0) {
+            size_t start = m.from > 8 ? m.from - 8 : 0, end = std::min(list.size(), m.from + 48);
+            float nearest = 0.25f; // an eighth of the screen
+            int in_order = -1;
+            for (size_t i = start; i < end; i++) {
+                const Op &before = list[i];
+                if (m.used[i] || before.vertices.size() != op.vertices.size() || before.look != op.look) continue;
+                float d = moved(before, op);
+                if (d >= 0.25f) continue;
+                if (in_order < 0 && i >= m.from) in_order = int(i);
+                if (d < nearest) nearest = d, best = int(i);
+            }
+            if (in_order >= 0) best = in_order;
+        }
+        if (best < 0) return nullptr;
+        m.used[best] = true;
+        m.from = size_t(best) + 1;
+        return &list[best];
     }
 
-    // a pair that jumps (more than a quarter of the screen, or across the
-    // eye) is not the same thing moving: drawn where it is now
-    static bool jumps(const Op &before, const Op &now) {
+    // the most a vertex moved, in halves of the screen. only the vertices
+    // well in front of the eye and on the screen or near it count: near the
+    // eye, or far off the screen, a small move projects to a huge one (the
+    // ground reaching under the camera, a big piece mostly off the screen)
+    static float moved(const Op &before, const Op &now) {
+        float far = 0;
+        for (size_t i = 0; i < now.vertices.size(); i++) {
+            far = std::max({far, before.vertices[i].position[3], now.vertices[i].position[3]});
+        }
+        const float near = far * 0.05f;
+        float most = 0;
         for (size_t i = 0; i < now.vertices.size(); i++) {
             const Vec4 &a = before.vertices[i].position, &b = now.vertices[i].position;
-            if ((a[3] > 0) != (b[3] > 0) || a[3] == 0 || b[3] == 0) return true;
-            if (std::abs(a[0] / a[3] - b[0] / b[3]) > 0.5f || std::abs(a[1] / a[3] - b[1] / b[3]) > 0.5f) return true;
+            if (a[3] <= near || b[3] <= near) continue;
+            float ax = a[0] / a[3], ay = a[1] / a[3], bx = b[0] / b[3], by = b[1] / b[3];
+            bool on_screen = (std::abs(ax) <= 1.5f && std::abs(ay) <= 1.5f) || (std::abs(bx) <= 1.5f && std::abs(by) <= 1.5f);
+            if (!on_screen) continue;
+            most = std::max({most, std::abs(ax - bx), std::abs(ay - by)});
         }
-        return false;
+        return most;
     }
+
+    // a pair that jumps (more than a quarter of the screen) is not the same
+    // thing moving (a camera cut): drawn where it is now
+    static bool jumps(const Op &before, const Op &now) { return moved(before, now) > 0.5f; }
 
     // the game frame just drawn, drawn again at t (0 the frame before, 1
     // this one) into the between images
@@ -281,6 +333,13 @@ struct VulkanRenderer::Impl {
         };
         std::vector<Kept> kept;
         between_views.clear();
+        // a depth buffer read as color (an effect reading the depth): made
+        // again from the between depth when a replayed draw reads it
+        std::unordered_map<VkImageView, Surface *> depth_views;
+        std::vector<Surface *> depth_redone;
+        for (auto &s : surfaces) {
+            if (s->as_color.image) depth_views[s->as_color.view] = s.get();
+        }
         for (auto &s : surfaces) {
             kept.push_back({s->dirty, s->stale, s->version, s->converted});
             if (!s->between.image) s->between = image(s->width, s->height, s->depth ? depth_format : VK_FORMAT_R8G8B8A8_UNORM, s->depth);
@@ -297,7 +356,7 @@ struct VulkanRenderer::Impl {
         auto tables = p.light_tables;
         uint64_t tables_version = p.tables_version;
         replaying = true;
-        std::map<uint32_t, size_t> matched_from;
+        std::map<uint32_t, Matching> matched;
         for (Op &op : ops_now) {
             if (op.kind == Op::Fill) {
                 fill(op.fill[0], op.fill[1], op.fill[2], op.fill[3]);
@@ -309,7 +368,7 @@ struct VulkanRenderer::Impl {
             }
             const Op *before = nullptr;
             auto last = draws_before.find(op_target(op));
-            if (last != draws_before.end()) before = match(last->second, matched_from[op_target(op)], op);
+            if (last != draws_before.end()) before = match(last->second, matched[op_target(op)], op);
             triangles = op.vertices;
             if (before && !jumps(*before, op)) {
                 for (size_t i = 0; i < triangles.size(); i++) {
@@ -324,6 +383,14 @@ struct VulkanRenderer::Impl {
             for (int u = 0; u < 3; u++) {
                 auto it = between_views.find(op.views[u]);
                 views[u] = it != between_views.end() ? it->second : op.views[u];
+                if (auto d = depth_views.find(op.views[u]); d != depth_views.end()) {
+                    Surface &s = *d->second;
+                    if (std::find(depth_redone.begin(), depth_redone.end(), &s) == depth_redone.end()) {
+                        depth_redone.push_back(&s);
+                        s.converted = ~0ull;
+                    }
+                    views[u] = depth_as_color(s);
+                }
             }
             forced_views = views;
             render(p);
@@ -338,6 +405,8 @@ struct VulkanRenderer::Impl {
             Surface &s = *surfaces[i];
             std::swap(s.image, s.between);
             s.dirty = kept[i].dirty, s.stale = kept[i].stale, s.version = kept[i].version, s.converted = kept[i].converted;
+            // its color copy holds the between depth now: made again when the game reads it
+            if (std::find(depth_redone.begin(), depth_redone.end(), &s) != depth_redone.end()) s.converted = ~0ull;
         }
         barrier();
     }
