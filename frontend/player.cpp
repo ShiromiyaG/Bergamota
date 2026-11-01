@@ -16,6 +16,7 @@
 // The game runs on a thread of its own and the GPU on another (AsyncGpu);
 // this one shows the frames the GPU hands over, one a vertical blank.
 
+#include "battle_ui.h"
 #include "layouts.h"
 #include "scenes.h"
 #include "settings.h"
@@ -40,6 +41,7 @@
 #include <SDL3/SDL_vulkan.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -198,8 +200,14 @@ void read_settings(int argc, char **argv, Settings &settings, std::filesystem::p
 }
 
 // the overlay (Dear ImGui) on the presenter's device
-void start_overlay(SDL_Window *window, VulkanPresenter &presenter) {
+ImFont *start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std::string &ui_font) {
     ImGui_ImplSDL3_InitForVulkan(window);
+    // the port's UI's font, large, drawn smaller (ImGui's own stays the first)
+    ImGui::GetIO().Fonts->AddFontDefault();
+    ImFont *font = nullptr;
+    std::error_code missing;
+    if (!ui_font.empty() && std::filesystem::exists(frontend::path_of(ui_font), missing))
+        font = ImGui::GetIO().Fonts->AddFontFromFileTTF(ui_font.c_str(), 48.0f);
     VkFormat format = presenter.format();
     ImGui_ImplVulkan_InitInfo info{};
     info.Instance = presenter.instance();
@@ -219,6 +227,7 @@ void start_overlay(SDL_Window *window, VulkanPresenter &presenter) {
     // its font goes up through the queue the renderer shares
     std::lock_guard g(presenter.queue_lock());
     ImGui_ImplVulkan_CreateFontsTexture();
+    return font;
 }
 
 // the DSP's frames made since, to the sound card: the queue kept near 60 ms
@@ -268,10 +277,11 @@ struct Pointer {
 };
 
 // the input, from the keyboard and the gamepad together, and the mouse on
-// the bottom screen, wherever the view last shown places it, as the stylus,
-// else the pointer's touch where the view shows it
+// the bottom screen, wherever the view last shown places it, as the stylus
+// (or on the port's battle UI, where its item's button is), else the
+// pointer's touch where the view shows it
 Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *window, const VulkanPresenter::View &shown,
-                 const Pointer &pointer) {
+                 const Pointer &pointer, const std::vector<frontend::BattleHit> &hits) {
     Input now;
     const bool *keys = SDL_GetKeyboardState(nullptr);
     float circle[4] = {}; // up, down, left, right
@@ -295,7 +305,12 @@ Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *win
     SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
     // the mouse in the window's points, the view in its pixels
     float density = SDL_GetWindowPixelDensity(window);
-    if ((mouse & SDL_BUTTON_LMASK) && VulkanPresenter::on_bottom(shown, mx * density, my * density, bx, by)) {
+    auto hit = std::find_if(hits.begin(), hits.end(), [&](const frontend::BattleHit &h) {
+        return mx >= h.x0 && mx < h.x1 && my >= h.y0 && my < h.y1; // both in the window's points
+    });
+    if ((mouse & SDL_BUTTON_LMASK) && hit != hits.end()) {
+        now.touch = std::make_pair(uint16_t(std::clamp(hit->bx, 0.0f, 319.0f)), uint16_t(std::clamp(hit->by, 0.0f, 239.0f)));
+    } else if ((mouse & SDL_BUTTON_LMASK) && VulkanPresenter::on_bottom(shown, mx * density, my * density, bx, by)) {
         now.touch = std::make_pair(uint16_t(std::clamp(bx, 0.0f, 319.0f)), uint16_t(std::clamp(by, 0.0f, 239.0f)));
     } else if (float wx, wy; pointer.touching && VulkanPresenter::from_bottom(shown, pointer.x, pointer.y, wx, wy)) {
         now.touch = std::make_pair(uint16_t(pointer.x), uint16_t(pointer.y));
@@ -521,7 +536,11 @@ int main(int argc, char **argv) {
         return SDL_Vulkan_CreateSurface(window, instance, nullptr, surface);
     });
     if (!presenter.ready()) return fail("the window cannot show Vulkan's pictures (" + presenter.error + ")");
-    start_overlay(window, presenter);
+    // the port's UI font: the setting's, else ui.ttf beside the player
+    std::string font_file = settings.game.ui_font;
+    if (font_file.empty())
+        if (const char *base = SDL_GetBasePath()) font_file = frontend::utf8(frontend::path_of(base) / "ui.ttf");
+    ImFont *ui_font = start_overlay(window, presenter, font_file);
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
@@ -562,10 +581,16 @@ int main(int argc, char **argv) {
     std::atomic<float> top_aspect{0};
     // and no bloom ghosting (Solstice's native/ghosting.c: port_no_ghosting)
     std::atomic<uint32_t> no_ghosting{0};
-    uint32_t top_aspect_at = 0, no_ghosting_at = 0;
+    // and the battle's bottom screen as the port's code reads it
+    // (native/battle_ui.c: port_battle), each blank, for its UI
+    frontend::BattleState battle_state;
+    uint64_t battle_blank = ~0ull, battle_seen = 0;
+    uint32_t battle_serial = 0;
+    uint32_t top_aspect_at = 0, no_ghosting_at = 0, battle_at = 0;
     if (session.decomp) {
         if (auto it = session.decomp->symbols.find("port_top_aspect"); it != session.decomp->symbols.end()) top_aspect_at = it->second;
         if (auto it = session.decomp->symbols.find("port_no_ghosting"); it != session.decomp->symbols.end()) no_ghosting_at = it->second;
+        if (auto it = session.decomp->symbols.find("port_battle"); it != session.decomp->symbols.end()) battle_at = it->second;
     }
     std::thread game([&] {
         system.run([&] {
@@ -576,6 +601,15 @@ int main(int argc, char **argv) {
             recorder.take(handlers.vblanks, handlers.input);
             if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
             if (no_ghosting_at) system.memory.write32(no_ghosting_at, no_ghosting.load());
+            if (battle_at && handlers.vblanks != battle_blank) {
+                battle_blank = handlers.vblanks;
+                frontend::BattleState read = frontend::read_battle(system.memory, battle_at);
+                // gone stale (the bottom screen no longer drawn): none
+                if (read.serial != battle_serial) battle_serial = read.serial, battle_seen = handlers.vblanks;
+                if (handlers.vblanks - battle_seen > 10) read.mode = 0;
+                std::lock_guard g(input_lock);
+                battle_state = std::move(read);
+            }
             handlers.tick(system);
             feed_sound(sound, handlers.audio.output, tally.starved);
             return quit.load(std::memory_order_relaxed);
@@ -600,6 +634,9 @@ int main(int argc, char **argv) {
     auto shown_at = std::chrono::steady_clock::now();
     Pointer pointer;
     auto pointer_at = std::chrono::steady_clock::now();
+    // where the battle UI drawn last can be clicked
+    std::vector<frontend::BattleHit> battle_hits;
+    bool battle_ui = false;
     // L2 (the left trigger) swaps the screens, the bottom one where the top
     // one was and the other way round; pressed again, back
     bool swapped = false, l2_held = false;
@@ -643,7 +680,12 @@ int main(int argc, char **argv) {
             else if (l2 < 8000) l2_held = false;
         }
         // none while the overlay is open
-        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer);
+        frontend::BattleState battle_now;
+        {
+            std::lock_guard g(input_lock);
+            battle_now = battle_state;
+        }
+        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer, battle_hits);
         {
             std::lock_guard g(input_lock);
             input = now;
@@ -694,6 +736,17 @@ int main(int argc, char **argv) {
             draw->AddCircle(at, 9, IM_COL32(255, 255, 255, 255), 0, 2);
             if (pointer.touching) draw->AddCircleFilled(at, 5, IM_COL32(255, 255, 255, 255));
         }
+        // the port's battle UI over the top screen, where the view last
+        // shown puts it (in the window's points)
+        battle_hits.clear();
+        if (battle_ui && !overlay.open) {
+            const float density = SDL_GetWindowPixelDensity(window);
+            for (const VulkanPresenter::Placement &p : shown_view.placements) {
+                if (p.screen != 0 || p.opacity < 0.99f) continue;
+                frontend::draw_battle(ImGui::GetBackgroundDrawList(), ui_font, battle_now, p.to[0] / density, p.to[1] / density,
+                                      p.to[2] / density, p.to[3] / density, battle_hits);
+            }
+        }
         ImGui::Render();
         int pw = 0, ph = 0;
         SDL_GetWindowSizeInPixels(window, &pw, &ph);
@@ -724,11 +777,17 @@ int main(int argc, char **argv) {
                 scene = scenes.pick(modules);
             }
             layout = scene ? scene->layout : "panel";
+            // in battle, with the option: the port's battle UI on the top
+            // screen while the commands or the moves are up, no panel
+            battle_ui = settings.video.battle_on_top && battle_now.mode != 0 && layout == "panel";
+            if (battle_ui) layout = "top";
             if (scene != scene_shown) {
                 scene_shown = scene;
                 std::fprintf(stderr, "scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
             frontend::place(view, layout, panel, settings.video.panel_size, settings.video.panel_corner);
+        } else {
+            battle_ui = false;
         }
         if (swapped) frontend::swap_screens(view);
         // in the window's pixels, eased from the layout before (a swap too:

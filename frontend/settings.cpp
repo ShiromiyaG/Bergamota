@@ -77,6 +77,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "game", "user", s.game.user);
     get(t, "game", "decomp", s.game.decomp);
     get(t, "game", "layouts", s.game.layouts);
+    get(t, "game", "ui_font", s.game.ui_font);
     get(t, "game", "record", s.game.record);
     int64_t number;
     get(t, "video", "fullscreen", s.video.fullscreen);
@@ -92,6 +93,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "panel_corner", s.video.panel_corner);
     get(t, "video", "panel_shown", s.video.panel_shown);
     get(t, "video", "no_ghosting", s.video.no_ghosting);
+    get(t, "video", "battle_on_top", s.video.battle_on_top);
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
     get(t, "video", "antialias", s.video.antialias);
@@ -122,6 +124,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                              {"user", s.game.user},
                              {"decomp", s.game.decomp},
                              {"layouts", s.game.layouts},
+                             {"ui_font", s.game.ui_font},
                              {"record", s.game.record}}},
         {"video", toml::table{{"fullscreen", s.video.fullscreen},
                               {"vsync", s.video.vsync},
@@ -134,6 +137,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"panel_corner", s.video.panel_corner},
                               {"panel_shown", s.video.panel_shown},
                               {"no_ghosting", s.video.no_ghosting},
+                              {"battle_on_top", s.video.battle_on_top},
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},
                               {"antialias", s.video.antialias},

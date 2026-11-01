@@ -87,6 +87,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                     moved = true;
                 }
                 moved |= ImGui::SliderFloat("Bottom screen's size", &s.video.panel_size, 0.25f, 1.0f, "%.2f");
+                moved |= ImGui::Checkbox("Battle: our commands and moves on the top screen (Sword and Shield's layout)", &s.video.battle_on_top);
                 ImGui::TextDisabled("Scene: %s; right stick: pointer, R2 or R3: touch, L2: swap", scene.c_str());
             }
             int aspect = s.video.aspect == "16:9" ? 1 : s.video.aspect == "21:9" ? 2 : 0;

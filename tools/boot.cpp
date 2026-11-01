@@ -14,6 +14,9 @@
 //   RUNTIME_USAGE=file      the commands asked for, as ZAKURO_USAGE writes them
 //   RUNTIME_PORT=name=n,... words of the decomp's port_ variables set once it loads
 //                           (port_no_ghosting=1), as the player sets them
+//   RUNTIME_PEEK=name:bytes:blank,...  that many bytes of the decomp's port_ variable
+//                           written to peek-<name>-<blank>.bin (in RUNTIME_SHOTS, else
+//                           here) once the game reaches that vertical blank
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
 //                           functions it replaces; the library built with it
 //   RUNTIME_BETWEEN=n       frames drawn between the game's, n pictures a blank: 1 as
@@ -37,7 +40,10 @@
 //                           picks it, from RUNTIME_LAYOUTS=file, a port's
 //                           single-screen.toml); RUNTIME_PANEL=1 the panel out,
 //                           RUNTIME_PANEL_SIZE=n (0.35), RUNTIME_PANEL_CORNER=c
-//                           (bottom-right), RUNTIME_SWAP=1 the screens swapped (L2).
+//                           (bottom-right), RUNTIME_SWAP=1 the screens swapped (L2),
+//                           RUNTIME_BATTLE_UI=1 the port's battle UI drawn over it while
+//                           the port's code reads a battle (port_battle; the top screen
+//                           alone then), in RUNTIME_UI_FONT (a .ttf) if given
 //                           Scene changes printed as the player does
 
 #include "runtime/decomp.h"
@@ -54,6 +60,7 @@
 #include "runtime/session.h"
 #include "runtime/system.h"
 #ifdef BOOT_LAYOUTS
+#include "../frontend/battle_ui.h"
 #include "../frontend/layouts.h"
 #include "../frontend/scenes.h"
 #endif
@@ -267,6 +274,16 @@ int main(int argc, char **argv) {
                 std::printf("scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
         }
+        // the port's battle UI: the top screen alone, the UI over it
+        frontend::BattleState battle;
+        static uint32_t battle_at = ~0u;
+        if (battle_at == ~0u) {
+            battle_at = 0;
+            if (session.decomp)
+                if (auto it = session.decomp->symbols.find("port_battle"); it != session.decomp->symbols.end()) battle_at = it->second;
+        }
+        if (env("RUNTIME_BATTLE_UI") && battle_at) battle = frontend::read_battle(system.memory, battle_at);
+        if (battle.mode) layout = "top";
         VulkanPresenter::View view;
         view.width = 1920, view.height = 1080;
         view.top = float(top.width);
@@ -274,7 +291,36 @@ int main(int argc, char **argv) {
                         env("RUNTIME_PANEL_SIZE") ? float(std::atof(env("RUNTIME_PANEL_SIZE"))) : 0.35f,
                         env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right");
         if (env("RUNTIME_SWAP")) frontend::swap_screens(view);
-        save(name, frontend::compose(view, top, bottom));
+        Picture picture = frontend::compose(view, top, bottom);
+        if (battle.mode) {
+            // the composed picture drawn larger, the UI's shapes and words
+            // need the pixels
+            const uint32_t k = 3;
+            Picture big;
+            big.width = picture.width * k, big.height = picture.height * k;
+            big.rgba.resize(size_t(big.width) * big.height * 4);
+            for (uint32_t y = 0; y < big.height; y++)
+                for (uint32_t x = 0; x < big.width; x++)
+                    std::memcpy(&big.rgba[(size_t(y) * big.width + x) * 4], &picture.rgba[(size_t(y / k) * picture.width + x / k) * 4], 4);
+            static ImFont *font = nullptr;
+            if (!ImGui::GetCurrentContext()) {
+                ImGui::CreateContext();
+                if (const char *f = env("RUNTIME_UI_FONT")) font = ImGui::GetIO().Fonts->AddFontFromFileTTF(f, 48.0f);
+                unsigned char *pixels;
+                int w, h;
+                ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+            }
+            ImGuiIO &io = ImGui::GetIO();
+            io.DisplaySize = ImVec2(float(big.width), float(big.height));
+            io.DeltaTime = 1.0f / 60;
+            ImGui::NewFrame();
+            std::vector<frontend::BattleHit> hits;
+            frontend::draw_battle(ImGui::GetForegroundDrawList(), font, battle, 0, 0, float(big.width), float(big.height), hits);
+            ImGui::Render();
+            frontend::raster_ui(ImGui::GetDrawData(), big);
+            picture = std::move(big);
+        }
+        save(name, picture);
     };
 #else
     auto save_composed = [&](const std::string &, const Picture &, const Picture &) {
@@ -329,7 +375,38 @@ int main(int argc, char **argv) {
     auto next_shot = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     int shots = 0;
     uint64_t sketch_frame = 0;
+    // RUNTIME_PEEK: the port's variables as the game left them at a blank
+    struct Peek {
+        std::string name;
+        uint32_t address, bytes;
+        uint64_t blank;
+    };
+    std::vector<Peek> peeks;
+    if (const char *e = env("RUNTIME_PEEK"); e && session.decomp) {
+        std::stringstream list(e);
+        for (std::string item; std::getline(list, item, ',');) {
+            char name[128];
+            unsigned bytes = 0;
+            unsigned long long blank = 0;
+            if (std::sscanf(item.c_str(), "%127[^:]:%u:%llu", name, &bytes, &blank) != 3) continue;
+            auto it = session.decomp->symbols.find(name);
+            if (it == session.decomp->symbols.end()) std::printf("RUNTIME_PEEK: no %s in the decomp\n", name);
+            else peeks.push_back({name, it->second, bytes, blank});
+        }
+    }
+    auto peek = [&] {
+        for (Peek &p : peeks) {
+            if (handlers.vblanks != p.blank || !p.bytes) continue;
+            std::vector<uint8_t> data(p.bytes);
+            system.memory.read_bytes(p.address, data.data(), p.bytes);
+            std::string file = std::string(shots_dir ? shots_dir : ".") + "/peek-" + p.name + "-" + std::to_string(p.blank) + ".bin";
+            std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char *>(data.data()), std::streamsize(data.size()));
+            std::printf("peek %s at blank %llu: %s\n", p.name.c_str(), (unsigned long long)p.blank, file.c_str());
+            p.bytes = 0;
+        }
+    };
     bool went_on = system.run([&] {
+        peek();
         auto now = std::chrono::steady_clock::now();
         if (sample_count && !sampling && now >= sample_from) {
             sampling = true;

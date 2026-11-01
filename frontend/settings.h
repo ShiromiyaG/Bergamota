@@ -30,6 +30,9 @@ struct Settings {
     // the player
     struct {
         std::string exheader, code, library, game, update, user, decomp, layouts;
+        // the font of a port's own UI (its battle UI), a .ttf; none: ui.ttf
+        // beside the player, else ImGui's
+        std::string ui_font;
         // the input recorded from the start, with a copy of the saves as they
         // were, into recordings/ beside the settings (for boot to play back)
         bool record = false;
@@ -52,6 +55,9 @@ struct Settings {
         // the panel out (the bottom screen shown) once a movie or cutscene
         // shown stacked is past; Tab and L3 switch it and it is kept so
         bool panel_shown = true;
+        // the single screen in battle: the port's own battle UI on the top
+        // screen (Sword and Shield's layout, frontend/battle_ui.h), no panel
+        bool battle_on_top = true;
         // the bloom's ghosting (a trail behind what moves outside) left out,
         // through the port's code (port_no_ghosting)
         bool no_ghosting = true;
