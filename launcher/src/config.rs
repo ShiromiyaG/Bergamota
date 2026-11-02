@@ -20,6 +20,11 @@ pub struct Library {
     /// them
     pub recomp: Option<PathBuf>,
     pub player: Option<PathBuf>,
+    /// a fast compile, for modest processors: the game's hot code first as
+    /// always (with what it was seen to run), then the rest in the
+    /// background compiled without optimizing, three times faster, since it
+    /// nearly never runs
+    pub fast: bool,
     /// each game set up, by title id
     pub games: BTreeMap<String, Config>,
 }

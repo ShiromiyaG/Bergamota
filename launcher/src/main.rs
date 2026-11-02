@@ -95,7 +95,13 @@ fn build_full(tools: &Tools, title: &str) {
     if recent || std::fs::write(&lock, std::process::id().to_string()).is_err() {
         return;
     }
+    // a fast compile: the hot code optimized, the rest not
+    let fast = Library::load().fast;
+    let hot = crate::check::game(config.game.as_deref().unwrap_or(Path::new(""))).ok().and_then(hot_list);
     let built = recompile::command(tools, &config).is_ok_and(|mut command| {
+        if let (true, Some(hot)) = (fast, &hot) {
+            command.arg("--hot").arg(hot).arg("--cold-fast");
+        }
         // Zig is there already, downloaded for the first build
         if compiler::prepare(&mut command, &|_, _| {}, &recompile::Running::default()).is_err() {
             return false;
@@ -311,6 +317,7 @@ impl App {
             self.set_up(config.as_ref());
         }
         ui.add_space(8.0);
+        self.fast_option(ui);
         if ui.button("Add a desktop shortcut").clicked() {
             self.note = Some(match desktop_shortcut() {
                 Ok(()) => "The shortcut is on the desktop.".to_owned(),
@@ -319,6 +326,21 @@ impl App {
         }
         if let Some(note) = &self.note {
             ui.label(note);
+        }
+    }
+
+    /// the fast compile's switch, kept at once
+    fn fast_option(&mut self, ui: &mut egui::Ui) {
+        if ui
+            .checkbox(&mut self.library.fast, "Fast compile (for modest processors)")
+            .on_hover_text(
+                "The game still plays after about a minute. What follows in the background compiles about three \
+                 times faster, the code the game nearly never runs left unoptimized; the code it runs, and what it \
+                 was seen to run, stays optimized.",
+            )
+            .changed()
+        {
+            self.note = self.library.save().err();
         }
     }
 
@@ -448,7 +470,9 @@ impl App {
                 port.name
             )
         });
-        ui.add_space(12.0);
+        ui.add_space(8.0);
+        self.fast_option(ui);
+        ui.add_space(8.0);
         let Some(tools) = self.tools.clone() else {
             ui.colored_label(ui.visuals().error_fg_color, format!("{} can't find 3dsrecomp and {}. It looked in:", port.name, port.player));
             for place in recompile::places("3dsrecomp").into_iter().chain(recompile::game_places()) {
@@ -483,6 +507,9 @@ impl App {
                 ui.add_space(12.0);
                 match stage {
                     Stage::Done => {
+                        let fast = self.library.fast;
+                        self.library = Library::load();
+                        self.library.fast = fast;
                         self.library.put(self.config(true));
                         self.note = self.library.save().err();
                         self.job = None;
