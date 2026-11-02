@@ -14,6 +14,7 @@
 //! update = 2048              # the update it is tested with (the TMD's version), if any
 //! update_name = "v1.2"       # and as players know it
 //! decomp = "decomp"          # the port's code for it (decomp.bin, decomp.txt), a folder beside the launcher
+//! color = "#F08A24"          # its color in the launcher (the glow, Play)
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -38,6 +39,7 @@ pub struct GameInfo {
     pub update: Option<u16>,
     pub update_name: Option<String>,
     pub decomp: Option<String>,
+    pub color: Option<String>,
 }
 
 impl GameInfo {

@@ -16,19 +16,33 @@
 mod check;
 mod config;
 mod compiler;
+mod look;
 mod port;
 mod recompile;
+mod settings;
 mod unpack;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use eframe::egui;
+use eframe::egui::{self, RichText};
 
 use check::{Game, Update};
 use config::{Config, Library};
 use recompile::{Job, Stage, Tools};
+use settings::PlayerSettings;
+
+/// wgpu, on Direct3D 12 on Windows: NVIDIA's OpenGL and Vulkan driver has
+/// been seen to crash presenting the launcher's window (WGPU_BACKEND, when
+/// set, still chooses)
+const RENDERER: eframe::Renderer = eframe::Renderer::Wgpu;
+
+fn prefer_direct3d() {
+    if cfg!(windows) && std::env::var_os("WGPU_BACKEND").is_none() {
+        std::env::set_var("WGPU_BACKEND", "dx12");
+    }
+}
 
 /// the value after an argument
 fn after(name: &str) -> Option<String> {
@@ -38,6 +52,7 @@ fn after(name: &str) -> Option<String> {
 }
 
 fn main() -> eframe::Result {
+    prefer_direct3d();
     let port = match port::get() {
         Ok(port) => port,
         Err(error) => {
@@ -45,6 +60,7 @@ fn main() -> eframe::Result {
             let error = error.to_owned();
             let options = eframe::NativeOptions {
                 viewport: egui::ViewportBuilder::default().with_title("Launcher").with_inner_size([520.0, 200.0]),
+                renderer: RENDERER,
                 ..Default::default()
             };
             return eframe::run_native("Launcher", options, Box::new(move |_| Ok(Box::new(Missing(error)))));
@@ -70,10 +86,18 @@ fn main() -> eframe::Result {
         }
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title(&port.name).with_inner_size([640.0, 480.0]).with_resizable(false),
+        viewport: egui::ViewportBuilder::default().with_title(&port.name).with_inner_size([1180.0, 720.0]).with_min_inner_size([960.0, 600.0]),
+        renderer: RENDERER,
         ..Default::default()
     };
-    eframe::run_native(&port.name, options, Box::new(move |_| Ok(Box::new(App::new(library, tools)))))
+    eframe::run_native(
+        &port.name,
+        options,
+        Box::new(move |creation| {
+            look::install(&creation.egui_ctx);
+            Ok(Box::new(App::new(library, tools)))
+        }),
+    )
 }
 
 /// the list of the game's hottest functions, in a hot folder beside the
@@ -136,6 +160,11 @@ fn finish_in_background(config: &Config) {
     }
 }
 
+/// a line of the home page, from the right, so high
+fn line(ui: &mut egui::Ui, height: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height), egui::Layout::right_to_left(egui::Align::Center), add);
+}
+
 /// starts the game in the runtime's player, which carries on once the
 /// launcher closes, and the rest of its build behind it.
 fn play(tools: &Tools, config: &Config) -> Result<(), String> {
@@ -189,10 +218,23 @@ enum Page {
     Build,
 }
 
+/// the bar along the bottom
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Tab {
+    Home,
+    Graphics,
+    Controls,
+    Advanced,
+}
+
 struct App {
+    tab: Tab,
     page: Page,
+    /// the game the home page shows, by title id
+    selected: String,
     library: Library,
     tools: Option<Tools>,
+    settings: PlayerSettings,
     // the game being set up
     game_path: Option<PathBuf>,
     game: Option<Result<Game, String>>,
@@ -207,12 +249,15 @@ struct App {
 
 impl App {
     fn new(library: Library, tools: Option<Tools>) -> App {
-        // with a game set up, the games; the first time, its questions
-        let page = if library.ready().is_empty() { Page::Game } else { Page::Home };
-        App {
-            page,
+        let port = port::port();
+        let selected = library.last.clone().or_else(|| port.games.first().map(|game| game.title.to_uppercase())).unwrap_or_default();
+        let mut app = App {
+            tab: Tab::Home,
+            page: Page::Home,
+            selected,
             library,
             tools,
+            settings: PlayerSettings::load(),
             game_path: None,
             game: None,
             update_path: None,
@@ -220,7 +265,12 @@ impl App {
             chosen_decomp: None,
             job: None,
             note: None,
+        };
+        // the first time, its questions
+        if app.library.ready().is_empty() {
+            app.set_up(None);
         }
+        app
     }
 
     /// the questions again, for a game set up or about to be
@@ -236,6 +286,7 @@ impl App {
         self.job = None;
         self.note = None;
         self.page = Page::Game;
+        self.tab = Tab::Home;
     }
 
     fn valid_game(&self) -> Option<Game> {
@@ -265,93 +316,223 @@ impl App {
         config
     }
 
-    fn home_page(&mut self, ui: &mut egui::Ui) {
-        let port = port::port();
-        ui.heading(&port.name);
-        if !port.about.is_empty() {
-            ui.label(&port.about);
+    /// the color of what is on screen: the game being set up, else the one
+    /// chosen on the home page
+    fn accent(&self) -> egui::Color32 {
+        match (self.page, self.valid_game()) {
+            (Page::Home, _) | (_, None) => look::accent(&self.selected),
+            (_, Some(game)) => look::accent(&game.title()),
         }
-        ui.add_space(12.0);
-        let mut chosen = None;
-        let mut set_up = None;
-        for info in &port.games {
-            let config = self.library.games.get(&info.title.to_uppercase()).cloned();
-            let ready = config.as_ref().is_some_and(Config::ready);
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new(&info.name).strong().size(18.0));
-                        ui.label(egui::RichText::new(if ready {
-                            "Ready to play"
-                        } else if config.is_some() {
-                            "Its files moved, or its build is out of date: set it up again"
-                        } else {
-                            "Not set up"
-                        })
-                        .weak());
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ready {
-                            if ui.add(egui::Button::new(egui::RichText::new("Play").strong().size(16.0)).min_size([90.0, 32.0].into())).clicked() {
-                                chosen = config.clone();
+    }
+
+    /// the home page: the port's name over the glow, the game chosen, Play
+    fn home(&mut self, ui: &mut egui::Ui) {
+        let port = port::port();
+        let accent = self.accent();
+        let config = self.library.games.get(&self.selected).cloned();
+        let ready = config.as_ref().is_some_and(Config::ready);
+        let info = port.games.iter().find(|game| game.title.eq_ignore_ascii_case(&self.selected));
+
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
+            ui.add_space(26.0);
+            ui.label(RichText::new("In the game: F1 opens the player's menu, F11 switches fullscreen.").size(12.5).color(look::WEAK));
+            ui.label(RichText::new(self.settings.summary()).color(look::TEXT));
+            ui.add_space(2.0);
+            line(ui, 30.0, |ui| {
+                {
+                    match &config {
+                        Some(config) if config.built => {
+                            let building = config::lock(&config.title).is_some_and(|lock| lock.is_file());
+                            if config.full {
+                                look::chip(ui, "✔ Fully built", look::GOOD);
+                            } else if building {
+                                look::chip(ui, "• The rest building in the background", look::WARN);
+                            } else {
+                                look::chip(ui, "• The rest builds while you play", look::WARN);
                             }
-                            if ui.button("Change files").clicked() {
-                                set_up = Some(config.clone());
+                            match (&config.update, info.and_then(|info| info.update_name.as_deref())) {
+                                (Some(_), Some(name)) => look::chip(ui, &format!("✔ Update {name}"), look::GOOD),
+                                (Some(_), None) => look::chip(ui, "✔ Update", look::GOOD),
+                                (None, _) => look::chip(ui, "No update", look::WARN),
                             }
-                        } else if ui.button("Set up").clicked() {
-                            set_up = Some(config.clone());
+                            if !ready {
+                                look::chip(ui, "✖ Its files moved, or the port's code changed", look::BAD);
+                            }
                         }
-                    });
-                });
+                        _ => look::chip(ui, "• Not set up yet", look::WEAK),
+                    }
+                    if config.as_ref().and_then(|config| config.decomp_dir()).is_some() {
+                        look::chip(ui, "✔ The port's own code", look::GOOD);
+                    }
+                }
             });
             ui.add_space(6.0);
-        }
-        if let Some(config) = chosen {
-            match self.tools.as_ref().ok_or("3dsrecomp or the game's player is missing".to_owned()).and_then(|tools| play(tools, &config)) {
-                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
-                Err(error) => self.note = Some(error),
-            }
-        }
-        if let Some(config) = set_up {
-            self.set_up(config.as_ref());
-        }
-        ui.add_space(8.0);
-        self.fast_option(ui);
-        if ui.button("Add a desktop shortcut").clicked() {
-            self.note = Some(match desktop_shortcut() {
-                Ok(()) => "The shortcut is on the desktop.".to_owned(),
-                Err(error) => error,
+            line(ui, 64.0, |ui| {
+                {
+                    if ready {
+                        if look::big_button(ui, "PLAY", accent).clicked() {
+                            let config = config.clone().unwrap_or_default();
+                            match self.tools.as_ref().ok_or("3dsrecomp or the game's player is missing".to_owned()).and_then(|tools| play(tools, &config)) {
+                                Ok(()) => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close),
+                                Err(error) => self.note = Some(error),
+                            }
+                        }
+                        if ui.button("Change files").clicked() {
+                            self.set_up(config.as_ref());
+                        }
+                    } else if look::big_button(ui, "SET UP", accent).clicked() {
+                        self.set_up(config.as_ref());
+                    }
+                }
             });
-        }
-        if let Some(note) = &self.note {
-            ui.label(note);
-        }
+            if let Some(note) = &self.note {
+                ui.colored_label(look::BAD, note);
+            }
+            ui.add_space(8.0);
+            // the games of the port, the chosen one in its color
+            line(ui, 36.0, |ui| {
+                {
+                    for game in port.games.iter().rev() {
+                        let title = game.title.to_uppercase();
+                        let chosen = title == self.selected;
+                        let color = look::accent(&title);
+                        let text = RichText::new(&game.name).size(16.0).color(if chosen { egui::Color32::WHITE } else { look::WEAK });
+                        let button = egui::Button::new(text)
+                            .fill(if chosen { color.gamma_multiply(0.85) } else { look::INK.gamma_multiply(0.6) })
+                            .stroke(egui::Stroke::new(1.0, if chosen { color } else { look::LINE }))
+                            .corner_radius(16.0);
+                        if ui.add(button).clicked() {
+                            self.selected = title;
+                            self.note = None;
+                        }
+                    }
+                }
+            });
+            ui.add_space(4.0);
+            ui.label(RichText::new(port.name.to_uppercase()).font(look::title_font(76.0)).color(look::TEXT));
+        });
+        // the port's name small, top left
+        let corner = ui.max_rect().left_top() + egui::vec2(28.0, 22.0);
+        ui.painter().text(corner, egui::Align2::LEFT_TOP, &port.name, look::title_font(22.0), accent);
     }
 
     /// the fast compile's switch, kept at once
     fn fast_option(&mut self, ui: &mut egui::Ui) {
-        if ui
-            .checkbox(&mut self.library.fast, "Fast compile (for modest processors)")
-            .on_hover_text(
-                "The game still plays after about a minute. What follows in the background compiles about three \
-                 times faster, the code the game nearly never runs left unoptimized; the code it runs, and what it \
-                 was seen to run, stays optimized.",
-            )
-            .changed()
-        {
-            self.note = self.library.save().err();
+        let mut fast = self.library.fast;
+        look::row(
+            ui,
+            "Fast compile",
+            "For modest processors. The game still plays after about a minute; what is built in the background \
+             then takes about a third of the time, the code the game nearly never runs left unoptimized.",
+            |ui| {
+                if ui.checkbox(&mut fast, "").changed() {
+                    self.library.fast = fast;
+                    self.note = self.library.save().err();
+                }
+            },
+        );
+    }
+
+    fn advanced(&mut self, ui: &mut egui::Ui) {
+        let port = port::port();
+        let accent = self.accent();
+        look::page_title(ui, "Advanced", "Building the games, recording, and where things are kept.");
+        look::section(ui, "Building", accent);
+        self.fast_option(ui);
+        let config = self.library.games.get(&self.selected).cloned();
+        let name = port.games.iter().find(|game| game.title.eq_ignore_ascii_case(&self.selected)).map_or("the game", |game| game.name.as_str());
+        if let Some(config) = config.filter(|config| config.built) {
+            if !config.full {
+                look::row(ui, &format!("Build all of {name} now"), "Rather than while you play: takes a while, the computer stays usable.", |ui| {
+                    if ui.button("Build").clicked() {
+                        finish_in_background(&config);
+                        self.note = Some("Building in the background.".to_owned());
+                    }
+                });
+            }
+            look::row(ui, &format!("{name}'s files"), "Another dump or update, and the game recompiled for them.", |ui| {
+                if ui.button("Change").clicked() {
+                    self.set_up(Some(&config));
+                }
+            });
         }
+
+        look::section(ui, "Recording", accent);
+        let mut record = self.settings.flag("game", "record", false);
+        look::row(
+            ui,
+            "Record my input",
+            "Each start records what you press, with a copy of the saves as they were, into recordings\\ in the \
+             port's folder: for reporting a problem the way it happened.",
+            |ui| {
+                if ui.checkbox(&mut record, "").changed() {
+                    self.settings.set_flag("game", "record", record);
+                }
+            },
+        );
+
+        look::section(ui, "Files", accent);
+        let folder = config::dir();
+        look::row(
+            ui,
+            "The port's folder",
+            "Your saves (user\\), the games as built, the settings. A new version of the port, unzipped over this \
+             one or anywhere else, keeps them.",
+            |ui| {
+                if ui.button("Open").clicked() {
+                    if let Some(folder) = &folder {
+                        let _ = std::fs::create_dir_all(folder);
+                        let _ = Command::new("explorer").arg(folder).spawn();
+                    }
+                }
+            },
+        );
+        look::row(ui, "Desktop shortcut", "", |ui| {
+            if ui.button("Add").clicked() {
+                self.note = Some(match desktop_shortcut() {
+                    Ok(()) => "The shortcut is on the desktop.".to_owned(),
+                    Err(error) => error,
+                });
+            }
+        });
+        if let Some(note) = &self.note {
+            ui.label(RichText::new(note).color(look::WEAK));
+        }
+
+        look::section(ui, "About", accent);
+        if !port.about.is_empty() {
+            ui.label(&port.about);
+        }
+        ui.label(RichText::new(format!("{} {} · {}", port.name, env!("CARGO_PKG_VERSION"), std::env::consts::OS)).color(look::WEAK));
+        ui.add_space(20.0);
+    }
+
+    fn steps(&self, ui: &mut egui::Ui) {
+        let steps = ["Game", "Update", "Recompile"];
+        let current = self.page as usize - 1;
+        ui.add_space(18.0);
+        ui.horizontal(|ui| {
+            for (index, step) in steps.iter().enumerate() {
+                let text = RichText::new(format!("{} {step}", index + 1)).size(14.0);
+                ui.label(if index == current { text.color(self.accent()) } else { text.color(look::WEAK) });
+                if index + 1 < steps.len() {
+                    ui.label(RichText::new("›").color(look::WEAK));
+                }
+            }
+        });
     }
 
     fn game_page(&mut self, ui: &mut egui::Ui) {
         let port = port::port();
-        ui.heading("Your game");
-        ui.label(format!(
-            "{} runs your own copy of {}, recompiled for this computer. Pick your decrypted dump: .3ds, .cci, .cxi or .cia.",
-            port.name,
-            port.games.iter().map(|game| game.name.as_str()).collect::<Vec<_>>().join(" or ")
-        ));
+        look::page_title(
+            ui,
+            "Your game",
+            &format!(
+                "{} runs your own copy of {}, recompiled for this computer. Pick your decrypted dump: .3ds, .cci, .cxi or .cia.",
+                port.name,
+                port.games.iter().map(|game| game.name.as_str()).collect::<Vec<_>>().join(" or ")
+            ),
+        );
         ui.add_space(12.0);
         if ui.button("Choose the game…").clicked() {
             if let Some(path) = rfd::FileDialog::new().add_filter("3DS game", &["3ds", "cci", "cxi", "cia"]).pick_file() {
@@ -366,17 +547,20 @@ impl App {
                     _ => None,
                 };
                 self.chosen_decomp = known.and_then(|config| config.decomp);
+                if let Some(game) = self.valid_game() {
+                    self.selected = game.title();
+                }
             }
         }
         if let Some(path) = &self.game_path {
-            ui.label(egui::RichText::new(path.display().to_string()).weak());
+            ui.label(RichText::new(path.display().to_string()).color(look::WEAK));
         }
         match &self.game {
             Some(Ok(game)) => {
-                ui.colored_label(ui.visuals().widgets.active.fg_stroke.color, format!("✔ {}", game.name));
+                ui.colored_label(look::GOOD, format!("✔ {}", game.name));
             }
             Some(Err(error)) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.colored_label(look::BAD, error);
             }
             None => {}
         }
@@ -397,11 +581,14 @@ impl App {
             return;
         };
         let port = port::port();
-        ui.heading("Its update");
-        ui.label(match game.tested_name {
-            Some(tested) => format!("Pick the decrypted update for {} (.cia). {} is tested with {tested}.", game.name, port.name),
-            None => format!("Pick the decrypted update for {} (.cia).", game.name),
-        });
+        look::page_title(
+            ui,
+            "Its update",
+            &match game.tested_name {
+                Some(tested) => format!("Pick the decrypted update for {} (.cia). {} is tested with {tested}.", game.name, port.name),
+                None => format!("Pick the decrypted update for {} (.cia).", game.name),
+            },
+        );
         ui.add_space(12.0);
         if ui.button("Choose the update…").clicked() {
             if let Some(path) = rfd::FileDialog::new().add_filter("3DS update", &["cia"]).pick_file() {
@@ -410,15 +597,15 @@ impl App {
             }
         }
         if let Some(path) = &self.update_path {
-            ui.label(egui::RichText::new(path.display().to_string()).weak());
+            ui.label(RichText::new(path.display().to_string()).color(look::WEAK));
         }
         match &self.update {
             Some(Ok(update)) if update.tested(game) => {
-                ui.colored_label(ui.visuals().widgets.active.fg_stroke.color, format!("✔ {}", update.name(game)));
+                ui.colored_label(look::GOOD, format!("✔ {}", update.name(game)));
             }
             Some(Ok(update)) => {
                 ui.colored_label(
-                    ui.visuals().warn_fg_color,
+                    look::WARN,
                     format!(
                         "This is {}. It should work, but {} is tested with {}.",
                         update.name(game),
@@ -428,10 +615,10 @@ impl App {
                 );
             }
             Some(Err(error)) => {
-                ui.colored_label(ui.visuals().error_fg_color, error);
+                ui.colored_label(look::BAD, error);
             }
             None => {
-                ui.colored_label(ui.visuals().warn_fg_color, "Without the update the game runs as it came on the cartridge.");
+                ui.colored_label(look::WARN, "Without the update the game runs as it came on the cartridge.");
             }
         }
         ui.add_space(16.0);
@@ -455,28 +642,31 @@ impl App {
     fn build_page(&mut self, ui: &mut egui::Ui) {
         let port = port::port();
         let hot = self.valid_game().and_then(hot_list);
-        ui.heading("Recompiling");
-        ui.label(if hot.is_some() {
-            format!(
-                "{} now turns the game's code into code for this computer, starting with the parts the game \
-                 spends nearly all its time in: about a minute, longer on slower computers. The rest is built in the \
-                 background while you play. If there is no C compiler here, one (Zig) is downloaded first.",
-                port.name
-            )
-        } else {
-            format!(
-                "{} now turns the game's code into code for this computer. It takes around ten to fifteen \
-                 minutes and only happens once. If there is no C compiler here, one (Zig) is downloaded first.",
-                port.name
-            )
-        });
+        look::page_title(
+            ui,
+            "Recompiling",
+            &if hot.is_some() {
+                format!(
+                    "{} now turns the game's code into code for this computer, starting with the parts the game \
+                     spends nearly all its time in: about a minute, longer on slower computers. The rest is built in the \
+                     background while you play. If there is no C compiler here, one (Zig) is downloaded first.",
+                    port.name
+                )
+            } else {
+                format!(
+                    "{} now turns the game's code into code for this computer. It takes around ten to fifteen \
+                     minutes and only happens once. If there is no C compiler here, one (Zig) is downloaded first.",
+                    port.name
+                )
+            },
+        );
         ui.add_space(8.0);
         self.fast_option(ui);
         ui.add_space(8.0);
         let Some(tools) = self.tools.clone() else {
-            ui.colored_label(ui.visuals().error_fg_color, format!("{} can't find 3dsrecomp and {}. It looked in:", port.name, port.player));
+            ui.colored_label(look::BAD, format!("{} can't find 3dsrecomp and {}. It looked in:", port.name, port.player));
             for place in recompile::places("3dsrecomp").into_iter().chain(recompile::game_places()) {
-                ui.label(egui::RichText::new(place.display().to_string()).weak());
+                ui.label(RichText::new(place.display().to_string()).color(look::WEAK));
             }
             ui.label("Keep the 3dsrecomp and game folders from the download beside the launcher.");
             ui.add_space(8.0);
@@ -485,6 +675,7 @@ impl App {
             }
             return;
         };
+        let accent = self.accent();
         match &mut self.job {
             None => {
                 ui.horizontal(|ui| {
@@ -502,7 +693,7 @@ impl App {
             }
             Some(job) => {
                 let stage = job.stage();
-                ui.add(egui::ProgressBar::new(stage.fraction()).show_percentage());
+                ui.add(egui::ProgressBar::new(stage.fraction()).show_percentage().fill(accent));
                 ui.label(stage.describe());
                 ui.add_space(12.0);
                 match stage {
@@ -510,7 +701,9 @@ impl App {
                         let fast = self.library.fast;
                         self.library = Library::load();
                         self.library.fast = fast;
-                        self.library.put(self.config(true));
+                        let config = self.config(true);
+                        self.selected = config.title.clone();
+                        self.library.put(config);
                         self.note = self.library.save().err();
                         self.job = None;
                         self.page = Page::Home;
@@ -530,33 +723,89 @@ impl App {
             }
         }
     }
+
+    fn tabs(&mut self, ui: &mut egui::Ui) {
+        let accent = self.accent();
+        ui.horizontal(|ui| {
+            ui.add_space(12.0);
+            for (tab, name) in [(Tab::Home, "Home"), (Tab::Graphics, "Graphics"), (Tab::Controls, "Controls"), (Tab::Advanced, "Advanced")] {
+                let chosen = self.tab == tab;
+                let text = RichText::new(name).font(look::title_font(17.0)).color(if chosen { accent } else { look::WEAK });
+                let response = ui.add(egui::Button::new(text).frame(false).min_size(egui::vec2(96.0, 46.0)));
+                if chosen {
+                    let rect = response.rect;
+                    ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(rect.left(), rect.bottom() - 3.0), rect.right_bottom()), 0.0, accent);
+                }
+                if response.clicked() && !chosen {
+                    self.tab = tab;
+                    // the player may have changed them in the game
+                    self.settings = PlayerSettings::load();
+                    if self.page != Page::Home && self.job.is_none() && tab != Tab::Home {
+                        self.page = Page::Home;
+                    }
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(14.0);
+                ui.label(RichText::new(format!("{} · v{}", port::port().name, env!("CARGO_PKG_VERSION"))).size(12.5).color(look::WEAK));
+            });
+        });
+    }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.add_space(8.0);
-            if self.page != Page::Home {
-                let steps = ["Game", "Update", "Recompile"];
-                let current = self.page as usize - 1;
-                ui.horizontal(|ui| {
-                    for (index, step) in steps.iter().enumerate() {
-                        let text = egui::RichText::new(*step);
-                        ui.label(if index == current { text.strong() } else { text.weak() });
-                        if index + 1 < steps.len() {
-                            ui.label(egui::RichText::new("›").weak());
+        let accent = self.accent();
+        let partner = look::partner(&self.selected);
+        look::background(ui.painter(), ui.max_rect(), accent, partner);
+
+        egui::Panel::bottom("tabs")
+            .frame(egui::Frame::NONE.fill(look::INK.gamma_multiply(0.92)).stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.7))))
+            .show(ui, |ui| self.tabs(ui));
+
+        let paged = self.page != Page::Home || self.tab != Tab::Home;
+        if paged {
+            let width = (ui.available_width() * 0.5).clamp(480.0, 640.0);
+            egui::Panel::left("page")
+                .exact_size(width)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(look::PANEL.gamma_multiply(0.97)).inner_margin(egui::Margin::symmetric(28, 0)).stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.6))))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        if self.page != Page::Home {
+                            self.steps(ui);
+                            match self.page {
+                                Page::Game => self.game_page(ui),
+                                Page::Update => self.update_page(ui),
+                                Page::Build => self.build_page(ui),
+                                Page::Home => {}
+                            }
+                        } else {
+                            match self.tab {
+                                Tab::Graphics => self.settings.graphics_page(ui, accent),
+                                Tab::Controls => self.settings.controls_page(ui, accent),
+                                Tab::Advanced => self.advanced(ui),
+                                Tab::Home => {}
+                            }
                         }
-                    }
+                    });
                 });
-                ui.separator();
-                ui.add_space(8.0);
-            }
-            match self.page {
-                Page::Home => self.home_page(ui),
-                Page::Game => self.game_page(ui),
-                Page::Update => self.update_page(ui),
-                Page::Build => self.build_page(ui),
-            }
-        });
+        }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.inner_margin(egui::Margin { left: 28, right: 36, top: 0, bottom: 0 }))
+            .show(ui, |ui| {
+                if paged {
+                    // the port's name and the game's, over the glow
+                    ui.with_layout(egui::Layout::bottom_up(egui::Align::Max), |ui| {
+                        ui.add_space(30.0);
+                        if let Some(game) = port::port().games.iter().find(|game| game.title.eq_ignore_ascii_case(&self.selected)) {
+                            ui.label(RichText::new(&game.name).size(18.0).color(accent));
+                        }
+                        ui.label(RichText::new(port::port().name.to_uppercase()).font(look::title_font(56.0)).color(look::TEXT));
+                    });
+                } else {
+                    self.home(ui);
+                }
+            });
     }
 }
