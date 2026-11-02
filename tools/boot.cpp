@@ -217,6 +217,8 @@ int main(int argc, char **argv) {
             // RUNTIME_BETWEEN=n: frames drawn between the game's, n pictures
             // a blank; the shots' trail says which of the frames shown were
             vulkan->between = env("RUNTIME_BETWEEN") ? std::atoi(env("RUNTIME_BETWEEN")) : 0;
+            // RUNTIME_WIDE=f: the top screen shown f times as wide (16:9: 1.0667), its 2D narrowed
+            if (env("RUNTIME_WIDE")) vulkan->top_wide = float(std::atof(env("RUNTIME_WIDE")));
             // RUNTIME_CPU_PICTURES=0: no pictures read back (the player's way, to time it; no shots)
             if (env("RUNTIME_CPU_PICTURES") && *env("RUNTIME_CPU_PICTURES") == '0') vulkan->cpu_pictures = false;
             // RUNTIME_SCALE=n: the buffers drawn n times as large each way (the shots stay the console's size)

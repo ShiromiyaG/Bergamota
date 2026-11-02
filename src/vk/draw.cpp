@@ -350,13 +350,30 @@ void Impl::render(Pica &p) {
     // interface is drawn; what is in the world tests its depth
     // (a viewport the top screen's size: games draw both screens into one
     // buffer, even into the same rows one after the other)
+    // a kind of draw (its program and the size of its first texture) once
+    // found 2D stays 2D: a line of X and Y's text is many draws of one
+    // program over the font's sheets, and what else sits in their uniforms
+    // can let only some of them pass drawn_flat (a menu's did), a line part
+    // narrowed, its letters run together. the sheet's size, not where it
+    // is: a letter on another sheet (an é) is the same kind
     const float top_size = float(top_rows[1] - top_rows[0]);
     if (const float wide = self.top_wide.load(std::memory_order_relaxed);
-        wide > 1.001f && color->address == top_source && std::abs(vh - top_size) < 1 && !depth_test && !depth_write &&
-        drawn_flat(p)) {
-        float narrower = vh / wide;
-        vy += (vh - narrower) / 2;
-        vh = narrower;
+        wide > 1.001f && color->address == top_source && std::abs(vh - top_size) < 1 && !depth_test && !depth_write) {
+        const uint64_t program = gpu_draw ? gpu_draw->program_hash
+                                          : hash_bytes(reinterpret_cast<const uint8_t *>(p.vertex_shader.program.data()),
+                                                       p.vertex_shader.program.size() * sizeof p.vertex_shader.program[0]);
+        const uint64_t kind = program ^ (uint64_t(r[UNIT_BASE[0] + 1]) + 1) * 0x9E3779B97F4A7C15ull;
+        bool flat = flat_kinds.count(kind) != 0;
+        if (!flat && drawn_flat(p)) {
+            if (flat_kinds.size() >= 4096) flat_kinds.clear();
+            flat_kinds.insert(kind);
+            flat = true;
+        }
+        if (flat) {
+            float narrower = vh / wide;
+            vy += (vh - narrower) / 2;
+            vh = narrower;
+        }
     }
     // at the resolution
     VkViewport viewport{vx * res, (float(h) - (vy + vh)) * res, vw * res, vh * res, 0, 1};
@@ -481,13 +498,18 @@ void Impl::render(Pica &p) {
 // 2D: every position's w 1 and the same z, a plane facing the screen (3D
 // models can come out of their shaders divided by w already, w 1 too, but
 // their z goes with their shape), and no perspective among its uniforms
-// (a row (0, 0, -1, 0), a perspective's last: what divides by w itself
-// in the world was framed wider by the port's override already); on the
-// GPU's path a few of its vertices run here
+// (a row (0, 0, -1, 0) after one (0, 0, a, b), a perspective's last two:
+// what divides by w itself in the world was framed wider by the port's
+// override already). the row alone is not enough: X and Y's text keeps a
+// (0, 0, -1, 0) among its glyphs' uniforms now and then, and a line's
+// draws went some narrowed, some not, its letters run into each other.
+// on the GPU's path a few of its vertices run here
 bool Impl::drawn_flat(const Pica &p) const {
     const float(*f)[4] = gpu_draw ? gpu_draw->unit.f : reinterpret_cast<const float(*)[4]>(p.vertex_shader.floats.data());
-    for (int i = 0; i < 96; i++) {
-        if (f[i][0] == 0 && f[i][1] == 0 && f[i][2] == -1 && f[i][3] == 0) return false;
+    for (int i = 1; i < 96; i++) {
+        if (f[i][0] == 0 && f[i][1] == 0 && f[i][2] == -1 && f[i][3] == 0 && f[i - 1][0] == 0 && f[i - 1][1] == 0 &&
+            f[i - 1][2] != 0 && f[i - 1][3] != 0)
+            return false;
     }
     auto flat = [](const std::vector<Vertex> &v) {
         return !v.empty() && std::all_of(v.begin(), v.end(), [&](const Vertex &x) {

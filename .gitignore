@@ -5,3 +5,6 @@ build/
 
 # the launcher's build
 launcher/target/
+
+# the ports' packages' build (ports/package-all.ps1)
+build-release/
