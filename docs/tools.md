@@ -90,6 +90,10 @@ the game uses each (`VulkanRenderer::textures_from`, `src/vk/textures.cpp`),
 or all of them from the start on threads of their own with
 `video.preload_textures` (no stutter, but every one kept in memory).
 
+`tools/make_upscale_chain.py <textures> <out> <chain.chn> [model]` writes a chaiNNer
+(0.26) chain that upscales a folder of them with a PyTorch model and saves
+each under its own name and folder, ready for `textures/`.
+
 ## The player
 
 | Variable | What it does |
