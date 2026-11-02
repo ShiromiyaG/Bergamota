@@ -550,6 +550,32 @@ int main(int argc, char **argv) {
     ImFont *ui_font = start_overlay(window, presenter, font_file, battle_art, art_folder);
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
+    // HD textures beside the settings (any folders in textures/), and the dump
+    if (settings.video.hd_textures) {
+        vulkan.textures_from(config_file.parent_path() / "textures", [](const std::filesystem::path &file, std::vector<uint8_t> &rgba,
+                                                                        uint32_t &w, uint32_t &h) {
+            SDL_Surface *loaded = SDL_LoadPNG(frontend::utf8(file).c_str());
+            if (!loaded) return false;
+            SDL_Surface *s = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_ABGR8888); // bytes R, G, B, A
+            SDL_DestroySurface(loaded);
+            if (!s) return false;
+            w = uint32_t(s->w), h = uint32_t(s->h);
+            rgba.resize(size_t(w) * h * 4);
+            for (uint32_t y = 0; y < h; y++)
+                std::memcpy(&rgba[size_t(y) * w * 4], static_cast<const uint8_t *>(s->pixels) + size_t(y) * s->pitch, size_t(w) * 4);
+            SDL_DestroySurface(s);
+            return true;
+        });
+    }
+    if (settings.video.dump_textures) {
+        vulkan.dump_textures(config_file.parent_path() / "texture-dump", [](const std::filesystem::path &file, const uint8_t *rgba,
+                                                                           uint32_t w, uint32_t h) {
+            SDL_Surface *s = SDL_CreateSurfaceFrom(int(w), int(h), SDL_PIXELFORMAT_ABGR8888, const_cast<uint8_t *>(rgba), int(w * 4));
+            bool saved = s && SDL_SavePNG(s, frontend::utf8(file).c_str());
+            SDL_DestroySurface(s);
+            return saved;
+        });
+    }
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
     // RUNTIME_SYNC_GPU=1 keeps it on the game's, to compare
     std::unique_ptr<AsyncGpu> async; // declared after what it drives: it goes first

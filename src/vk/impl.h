@@ -26,6 +26,8 @@
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
+#include <set>
+#include <filesystem>
 
 namespace runtime {
 
@@ -229,6 +231,21 @@ struct VulkanRenderer::Impl {
     // of the frames between, or drawn with no depth, and flashed
     std::vector<std::unique_ptr<Surface>> retired;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures;
+    // HD textures (VulkanRenderer::textures_from): the files by the hash of
+    // what they replace, and those read so far (upright rows turned over to
+    // the PICA's, empty for one that would not read)
+    struct Replacement {
+        std::vector<uint8_t> rgba;
+        uint32_t width = 0, height = 0;
+    };
+    std::map<uint64_t, std::filesystem::path> replacement_files;
+    std::map<uint64_t, Replacement> replacements;
+    VulkanRenderer::LoadImage load_image;
+    const Replacement *replacement(uint64_t hash);
+    // and the dump (VulkanRenderer::dump_textures)
+    std::filesystem::path dump_folder;
+    VulkanRenderer::SaveImage save_image;
+    std::set<uint64_t> dumped;
     Image blank; // a unit with no texture
 
     bool recording = false;

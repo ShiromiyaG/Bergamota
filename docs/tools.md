@@ -70,6 +70,24 @@ python -I tools/compare.py <exheader.bin> <code.bin> <library> <game .3ds> <upda
 Needs Pillow. The two clocks count alike but not the same, so timed scenes
 (the intro movie) can differ by a few frames without anything being wrong.
 
+## `texdump` and HD textures
+
+`texdump <game .3ds> [update .cia] <out folder>` writes a game's textures as
+PNG without running it: its RomFS (the update's files over the game's),
+through GARC, LZ11, Game Freak's two-letter packs and darc, to the textures in
+BCH, CLIM/FLIM, CTPK and Sun and Moon's GFTexture. Each is named
+`tex_<w>x<h>_<hash>_<format>.png`: the hash is `hash_bytes` (`src/vk/impl.h`)
+over the texture's first level as memory has it, the image upright. Two
+games of a pair go into one folder (the same texture, the same name). What
+only the running game makes (the font, what it draws into) is not in its
+files: the player's `video.dump_textures` writes every texture the game uses
+to `texture-dump/` beside the settings, named the same way.
+
+The player draws the PNGs in `textures/` beside the settings (any folders in
+it, any size, the 16 hex digits of the hash in the name) in place of the
+textures they name (`video.hd_textures`, on by default), read the first time
+the game uses each (`VulkanRenderer::textures_from`, `src/vk/textures.cpp`).
+
 ## The player
 
 | Variable | What it does |

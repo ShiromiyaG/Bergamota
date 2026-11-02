@@ -70,6 +70,11 @@ struct Settings {
         // window's own); the 3DS's pixels then scale by a fraction
         std::string resolution = "native";
         bool antialias = false; // FXAA over the screens
+        // HD textures: the PNGs in textures/ beside the settings in place of
+        // the game's (VulkanRenderer::textures_from); and every texture the
+        // game uses written to texture-dump/ (dump_textures). on the next start
+        bool hd_textures = true;
+        bool dump_textures = false;
         float sharpen = 0;      // 0-1
         // the outlines around the characters: "auto" (the game's at the
         // console's resolution, thin above it), "original", "thin" (a pixel

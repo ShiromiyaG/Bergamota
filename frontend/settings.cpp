@@ -98,6 +98,8 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
     get(t, "video", "antialias", s.video.antialias);
+    get(t, "video", "hd_textures", s.video.hd_textures);
+    get(t, "video", "dump_textures", s.video.dump_textures);
     get(t, "video", "outlines", s.video.outlines);
     double sharpen = s.video.sharpen;
     get(t, "video", "sharpen", sharpen);
@@ -143,6 +145,8 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},
                               {"antialias", s.video.antialias},
+                              {"hd_textures", s.video.hd_textures},
+                              {"dump_textures", s.video.dump_textures},
                               {"outlines", s.video.outlines},
                               {"sharpen", double(s.video.sharpen)}}},
         {"audio", toml::table{{"volume", s.audio.volume}, {"mute", s.audio.mute}}},

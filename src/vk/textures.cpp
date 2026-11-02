@@ -83,14 +83,53 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
         t.checked_list = p.transfers;
         uint64_t hash = hash_bytes(bytes, size);
         if (hash != t.hash || !t.image.image) {
-            if (!t.image.image) t.image = image(w, h, VK_FORMAT_R8G8B8A8_UNORM, false);
-            std::vector<uint8_t> rgba(size_t(w) * h * 4);
-            decode_texture(format, bytes, w, h, rgba.data());
-            upload_color(t.image, rgba.data(), rgba.size());
+            // ours in its place, at its own size, or the game's
+            const Replacement *r = replacement_files.empty() ? nullptr : replacement(hash);
+            const uint32_t iw = r ? r->width : w, ih = r ? r->height : h;
+            if (t.image.image && (t.image.width != iw || t.image.height != ih)) let_go(t.image), t.image = {};
+            if (!t.image.image) t.image = image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, false);
+            if (r) {
+                upload_color(t.image, r->rgba.data(), r->rgba.size());
+            } else {
+                std::vector<uint8_t> rgba(size_t(w) * h * 4);
+                decode_texture(format, bytes, w, h, rgba.data());
+                upload_color(t.image, rgba.data(), rgba.size());
+                if (save_image && dumped.insert(hash).second) {
+                    // upright, as texdump writes them: the PICA's rows bottom first
+                    std::vector<uint8_t> upright(rgba.size());
+                    for (uint32_t y = 0; y < h; y++)
+                        std::memcpy(&upright[size_t(y) * w * 4], &rgba[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
+                    char name[96];
+                    std::snprintf(name, sizeof name, "tex_%ux%u_%016llX_%u.png", w, h, (unsigned long long)hash, format);
+                    save_image(dump_folder / name, upright.data(), w, h);
+                }
+            }
             t.hash = hash;
         }
     }
     return t.image.view;
+}
+
+// an HD texture for a hash, read the first time it is asked for
+const Impl::Replacement *Impl::replacement(uint64_t hash) {
+    auto file = replacement_files.find(hash);
+    if (file == replacement_files.end()) return nullptr;
+    auto [it, fresh] = replacements.try_emplace(hash);
+    Replacement &r = it->second;
+    if (fresh) {
+        std::vector<uint8_t> upright;
+        uint32_t w = 0, h = 0;
+        if (load_image && load_image(file->second, upright, w, h) && w && h && w <= 8192 && h <= 8192 &&
+            upright.size() >= size_t(w) * h * 4) {
+            r.rgba.resize(size_t(w) * h * 4);
+            for (uint32_t y = 0; y < h; y++)
+                std::memcpy(&r.rgba[size_t(y) * w * 4], &upright[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
+            r.width = w, r.height = h;
+        } else {
+            std::fprintf(stderr, "runtime: %s would not read as an image\n", file->second.string().c_str());
+        }
+    }
+    return r.rgba.empty() ? nullptr : &r;
 }
 
 VkImageView Impl::depth_as_color(Surface &s) {

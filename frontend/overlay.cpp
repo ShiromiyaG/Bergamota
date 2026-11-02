@@ -106,6 +106,8 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
                 moved = true;
             }
             moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
+            moved |= ImGui::Checkbox("HD textures (textures folder; on the next start)", &s.video.hd_textures);
+            moved |= ImGui::Checkbox("Dump the textures the game uses (texture-dump folder; on the next start)", &s.video.dump_textures);
             moved |= ImGui::Checkbox("No bloom ghosting (the trail behind what moves outside)", &s.video.no_ghosting);
             static const char *OUTLINES[] = {"auto", "original", "thin", "none"};
             int outlines = 0;

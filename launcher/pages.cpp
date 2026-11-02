@@ -124,6 +124,10 @@ void PlayerPages::graphics(ImU32 accent) {
     });
     look::row("Smooth scaling", "Off: sharp pixels.", box, [&] { check("##smooth", v.smooth); });
     look::row("Anti-aliasing (FXAA)", "", box, [&] { check("##antialias", v.antialias); });
+    look::row("HD textures", "The PNGs in the textures folder beside the settings, in place of the game's.", box,
+              [&] { check("##hd_textures", v.hd_textures); });
+    look::row("Dump textures", "Every texture the game uses written to texture-dump, for making HD ones.", box,
+              [&] { check("##dump_textures", v.dump_textures); });
     look::row("Sharpen", "", wide, [&] { changed |= ImGui::SliderFloat("##sharpen", &v.sharpen, 0, 1, "%.2f"); });
     look::row("No bloom ghosting", "Leaves out the trail the bloom draws behind what moves.", box, [&] { check("##ghosting", v.no_ghosting); });
 

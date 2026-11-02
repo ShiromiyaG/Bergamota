@@ -1,8 +1,8 @@
 // Dumps a game's textures without playing it: every file of its RomFS (the
 // update's in place of the game's), opened through the containers the
 // Pokémon games keep them in (GARC, LZ11, Game Freak's two-letter packs,
-// darc), and the textures in BCH, CLIM/FLIM and CTPK, decoded with the
-// runtime's own decoder and written as PNG. Nothing of a game goes into
+// darc), and the textures in BCH, CLIM/FLIM, CTPK and Sun and Moon's
+// GFTexture, decoded with the runtime's own decoder and written as PNG. Nothing of a game goes into
 // this repository: the PNGs are for the user's own copy.
 //
 //   texdump <game .3ds> [update .cia] <out folder>
@@ -214,6 +214,36 @@ struct Dumper {
             if (lz11(p, n, d)) return scan(d.data(), d.size(), depth + 1);
         }
         if (pack(p, n, depth)) return;
+        // anything else (Sun and Moon's model packs, a container not known
+        // here): its GFTextures and BCHs wherever they start
+        for (size_t at = 0; at + 0x80 <= n; at += 4) {
+            if (u32(p + at) == 0x15041213) gftexture(p + at, n - at);
+            else if (at && !std::memcmp(p + at, "BCH", 4)) bch(p + at, n - at);
+        }
+    }
+
+    // Sun and Moon's GFTexture: a header of 0x80, then the data
+    void gftexture(const uint8_t *p, size_t n) {
+        const uint32_t length = u32(p + 0x18), width = u16(p + 0x68), height = u16(p + 0x6A), format = u16(p + 0x6C);
+        uint32_t pica;
+        switch (format) {
+        case 0x02: pica = 3; break;
+        case 0x03: pica = 1; break;
+        case 0x04: pica = 0; break;
+        case 0x16: pica = 4; break;
+        case 0x17: pica = 2; break;
+        case 0x23: pica = 5; break;
+        case 0x24: pica = 6; break;
+        case 0x25: pica = 7; break;
+        case 0x26: pica = 8; break;
+        case 0x27: pica = 9; break;
+        case 0x28: pica = 10; break;
+        case 0x29: pica = 11; break;
+        case 0x2A: pica = 12; break;
+        case 0x2B: pica = 13; break;
+        default: return;
+        }
+        texture(pica, width, height, p + 0x80, std::min<size_t>(length, n - 0x80), "GFTexture");
     }
 
     // Game Freak's packs: two capital letters, a count, its offsets and the end

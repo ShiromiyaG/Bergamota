@@ -7,6 +7,9 @@
 #include "runtime/pica.h"
 
 #include <atomic>
+#include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -65,6 +68,20 @@ public:
     // the translated shaders and the driver's pipelines kept in folder
     // across runs; before the game starts
     void cache_in(const std::string &folder);
+    // images for textures: a PNG read into RGBA8 rows (the first row the
+    // top), and written from them; the front end's, with what it links
+    using LoadImage = std::function<bool(const std::filesystem::path &, std::vector<uint8_t> &rgba, uint32_t &w, uint32_t &h)>;
+    using SaveImage = std::function<bool(const std::filesystem::path &, const uint8_t *rgba, uint32_t w, uint32_t h)>;
+    // textures of our own (HD textures) in place of the game's: the PNGs in
+    // folder and its folders, each named with the 16 hex digits of the hash
+    // of the texture it replaces (hash_bytes over its first level as memory
+    // has it, as tools/texdump.cpp names them), of any size. read as the
+    // game first uses them; before the game starts
+    void textures_from(const std::filesystem::path &folder, LoadImage load);
+    // every texture the game uses written to folder once, named as texdump
+    // names them (those only the running game makes too: the font, what it
+    // draws into and reads back); before the game starts
+    void dump_textures(const std::filesystem::path &folder, SaveImage save);
     // frames drawn between two of the game's, its logic untouched: each
     // draw's vertices placed between where the frame before and this one
     // put them. the pictures each vertical blank shows: 0 none drawn, 1 (a

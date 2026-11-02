@@ -4,6 +4,8 @@
 
 #include "impl.h"
 
+#include <cctype>
+
 namespace runtime {
 
 VulkanRenderer::VulkanRenderer(Memory &memory, const std::vector<std::string> &instance_extensions)
@@ -30,6 +32,41 @@ void VulkanRenderer::translation_counts(uint64_t &compiled, uint64_t &loaded, ui
     compiled = loaded = failed = 0;
     if (!impl_->translator) return;
     compiled = impl_->translator->compiled, loaded = impl_->translator->loaded, failed = impl_->translator->failed;
+}
+
+void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImage load) {
+    if (!ready()) return;
+    Impl &d = *impl_;
+    d.load_image = std::move(load);
+    std::error_code e;
+    for (auto it = std::filesystem::recursive_directory_iterator(folder, e); !e && it != std::filesystem::recursive_directory_iterator();
+         it.increment(e)) {
+        if (!it->is_regular_file(e)) continue;
+        std::string ext = it->path().extension().string();
+        for (char &c : ext) c = char(std::tolower(uint8_t(c)));
+        if (ext != ".png") continue;
+        // the hash: 16 hex digits on their own in the name
+        const std::string stem = it->path().stem().string();
+        for (size_t i = 0; i + 16 <= stem.size(); i++) {
+            auto hex = [&](size_t k) { return k < stem.size() && std::isxdigit(uint8_t(stem[k])); };
+            if ((i && hex(i - 1)) || hex(i + 16)) continue;
+            bool all = true;
+            for (size_t k = i; k < i + 16 && all; k++) all = hex(k);
+            if (!all) continue;
+            d.replacement_files[std::stoull(stem.substr(i, 16), nullptr, 16)] = it->path();
+            break;
+        }
+    }
+    if (!d.replacement_files.empty())
+        std::fprintf(stderr, "runtime: %zu textures of our own in %s\n", d.replacement_files.size(), folder.string().c_str());
+}
+
+void VulkanRenderer::dump_textures(const std::filesystem::path &folder, SaveImage save) {
+    if (!ready()) return;
+    std::error_code e;
+    std::filesystem::create_directories(folder, e);
+    impl_->dump_folder = folder;
+    impl_->save_image = std::move(save);
 }
 
 void VulkanRenderer::cache_in(const std::string &folder) {
