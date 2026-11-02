@@ -3,6 +3,10 @@
 
 #include "impl.h"
 
+#include <cctype>
+#include <fstream>
+#include <iterator>
+
 namespace runtime {
 
 using Impl = VulkanRenderer::Impl;
@@ -86,8 +90,12 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
             // ours in its place, at its own size, or the game's
             const Replacement *r = replacement_files.empty() ? nullptr : replacement(hash);
             const uint32_t iw = r ? r->width : w, ih = r ? r->height : h;
-            if (t.image.image && (t.image.width != iw || t.image.height != ih)) let_go(t.image), t.image = {};
-            if (!t.image.image) t.image = image(iw, ih, VK_FORMAT_R8G8B8A8_UNORM, false);
+            const VkFormat f = r ? r->format : VK_FORMAT_R8G8B8A8_UNORM;
+            if (t.image.image && (t.image.width != iw || t.image.height != ih || t.format != f)) let_go(t.image), t.image = {};
+            if (!t.image.image) {
+                t.image = f == VK_FORMAT_R8G8B8A8_UNORM ? image(iw, ih, f, false) : compressed_image(iw, ih, f);
+                t.format = f;
+            }
             if (r) {
                 upload_color(t.image, r->rgba.data(), r->rgba.size());
             } else {
@@ -114,6 +122,45 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
 // file that would not read)
 Impl::Replacement Impl::read_replacement(const std::filesystem::path &file) const {
     Replacement r;
+    std::string ext = file.extension().string();
+    for (char &c : ext) c = char(std::tolower(uint8_t(c)));
+    if (ext == ".dds") {
+        // its first level only, its rows as they are: a DDS for the runtime
+        // keeps the bottom row first, as the PICA does (the chain of
+        // tools/make_upscale_chain.py turns the image over before saving)
+        std::ifstream in(file, std::ios::binary);
+        std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), {});
+        auto u32 = [&](size_t at) { return at + 4 <= d.size() ? uint32_t(d[at] | d[at + 1] << 8 | d[at + 2] << 16 | uint32_t(d[at + 3]) << 24) : 0u; };
+        size_t data = 128;
+        uint32_t block = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        const uint32_t fourcc = u32(84);
+        auto cc = [](const char *s) { return uint32_t(uint8_t(s[0]) | uint8_t(s[1]) << 8 | uint8_t(s[2]) << 16 | uint32_t(uint8_t(s[3])) << 24); };
+        if (fourcc == cc("DX10")) {
+            data += 20;
+            // sRGB or not, the bits are the same: the game's values, as they are
+            switch (u32(128)) {
+            case 71: case 72: format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8; break;
+            case 77: case 78: format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16; break;
+            case 98: case 99: format = VK_FORMAT_BC7_UNORM_BLOCK, block = 16; break;
+            }
+        } else if (fourcc == cc("DXT1")) {
+            format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8;
+        } else if (fourcc == cc("DXT5")) {
+            format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16;
+        }
+        const uint32_t h = u32(12), w = u32(16);
+        const size_t size = size_t((w + 3) / 4) * ((h + 3) / 4) * block;
+        if (d.size() < 128 || u32(0) != cc("DDS ") || !block || !w || !h || w > 8192 || h > 8192 || data + size > d.size()) {
+            std::fprintf(stderr, "runtime: %s is not a DDS of BC1, BC3 or BC7\n", file.string().c_str());
+        } else if (!bc_textures) {
+            std::fprintf(stderr, "runtime: %s passed over: the GPU has no BC textures\n", file.string().c_str());
+        } else {
+            r.rgba.assign(d.begin() + data, d.begin() + data + size);
+            r.width = w, r.height = h, r.format = format;
+        }
+        return r;
+    }
     std::vector<uint8_t> upright;
     uint32_t w = 0, h = 0;
     if (load_image && load_image(file, upright, w, h) && w && h && w <= 8192 && h <= 8192 && upright.size() >= size_t(w) * h * 4) {
@@ -160,6 +207,47 @@ void Impl::preload_replacements() {
             }
         });
     }
+}
+
+// an image for an HD texture in a compressed format: copied into and
+// sampled, nothing else
+Image Impl::compressed_image(uint32_t w, uint32_t h, VkFormat format) {
+    Image i;
+    i.width = w, i.height = h;
+    VkImageCreateInfo ii{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ii.imageType = VK_IMAGE_TYPE_2D;
+    ii.format = format;
+    ii.extent = {w, h, 1};
+    ii.mipLevels = ii.arrayLayers = 1;
+    ii.samples = VK_SAMPLE_COUNT_1_BIT;
+    ii.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    vkCreateImage(device, &ii, nullptr, &i.image);
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(device, i.image, &req);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    vkAllocateMemory(device, &ai, nullptr, &i.memory);
+    vkBindImageMemory(device, i.image, i.memory, 0);
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = i.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = format;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCreateImageView(device, &vi, nullptr, &i.view);
+    VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    b.srcStageMask = b.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    b.dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    b.image = i.image;
+    b.subresourceRange = vi.subresourceRange;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.imageMemoryBarrierCount = 1;
+    di.pImageMemoryBarriers = &b;
+    end_rendering();
+    vkCmdPipelineBarrier2(cmd, &di);
+    return i;
 }
 
 VkImageView Impl::depth_as_color(Surface &s) {

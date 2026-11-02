@@ -92,7 +92,10 @@ or all of them from the start on threads of their own with
 
 `tools/make_upscale_chain.py <textures> <out> <chain.chn> [model]` writes a chaiNNer
 (0.26) chain that upscales a folder of them with a PyTorch model and saves
-each under its own name and folder, ready for `textures/`.
+each under its own name and folder, ready for `textures/`: as DDS in BC7 (a
+byte a pixel on disk and on the GPU, kept compressed; turned upside down
+first, since the runtime takes a DDS's rows bottom first, as the PICA keeps
+them), or with `--png` as PNG. The player reads DDSs of BC1, BC3 and BC7.
 
 ## The player
 

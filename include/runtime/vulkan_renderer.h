@@ -72,10 +72,11 @@ public:
     // top), and written from them; the front end's, with what it links
     using LoadImage = std::function<bool(const std::filesystem::path &, std::vector<uint8_t> &rgba, uint32_t &w, uint32_t &h)>;
     using SaveImage = std::function<bool(const std::filesystem::path &, const uint8_t *rgba, uint32_t w, uint32_t h)>;
-    // textures of our own (HD textures) in place of the game's: the PNGs in
-    // folder and its folders, each named with the 16 hex digits of the hash
-    // of the texture it replaces (hash_bytes over its first level as memory
-    // has it, as tools/texdump.cpp names them), of any size. read as the
+    // textures of our own (HD textures) in place of the game's: the PNGs and
+    // DDSs (BC1, BC3, BC7, kept compressed; their rows bottom first, as the
+    // PICA keeps them) in folder and its folders, each named with the 16 hex
+    // digits of the hash of the texture it replaces (hash_bytes over its first
+    // level as memory has it, as tools/texdump.cpp names them), of any size. read as the
     // game first uses them, or, preload, all of them from the start on
     // threads of their own (the game asking for one not read yet reads it
     // itself); before the game starts

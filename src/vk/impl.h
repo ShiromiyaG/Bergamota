@@ -163,6 +163,7 @@ struct Surface {
 
 struct Texture {
     Image image;
+    VkFormat format = VK_FORMAT_R8G8B8A8_UNORM; // an HD texture's may be compressed
     uint64_t hash = 0, checked_list = ~0ull;
 };
 
@@ -236,8 +237,9 @@ struct VulkanRenderer::Impl {
     // what they replace, and those read so far (upright rows turned over to
     // the PICA's, empty for one that would not read)
     struct Replacement {
-        std::vector<uint8_t> rgba;
+        std::vector<uint8_t> rgba; // RGBA8, or a DDS's blocks
         uint32_t width = 0, height = 0;
+        VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
     };
     std::map<uint64_t, std::filesystem::path> replacement_files;
     std::map<uint64_t, Replacement> replacements; // under replacements_lock while preloading
@@ -247,6 +249,7 @@ struct VulkanRenderer::Impl {
     VulkanRenderer::LoadImage load_image;
     const Replacement *replacement(uint64_t hash);
     Replacement read_replacement(const std::filesystem::path &file) const;
+    Image compressed_image(uint32_t w, uint32_t h, VkFormat format);
     void preload_replacements();
     // and the dump (VulkanRenderer::dump_textures)
     std::filesystem::path dump_folder;
@@ -289,6 +292,7 @@ struct VulkanRenderer::Impl {
     VkDeviceSize output_at = 0;
     uint64_t output_turn = 1;
     bool store_outputs = false; // the device lets vertex shaders write
+    bool bc_textures = false;   // and samples BC1, BC3 and BC7 (HD textures as DDS)
     // the GPU's own time: a timestamp at each command buffer's start and end,
     // and a pair around each part (gpu_open, gpu_close): the passes that
     // draw, the frames between, their buffers' copies, the screens'

@@ -103,6 +103,9 @@ bool Impl::init() {
     // the shadow output's atomics on its map
     features.features.fragmentStoresAndAtomics = has.fragmentStoresAndAtomics;
     store_outputs = has.vertexPipelineStoresAndAtomics;
+    // HD textures as DDS, kept compressed (BC1, BC3, BC7)
+    features.features.textureCompressionBC = has.textureCompressionBC;
+    bc_textures = has.textureCompressionBC;
     VkPhysicalDeviceVulkan12Features v12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
     v12.timelineSemaphore = VK_TRUE;
     VkPhysicalDeviceVulkan13Features v13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};

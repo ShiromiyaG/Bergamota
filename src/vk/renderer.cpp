@@ -46,7 +46,7 @@ void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImag
         if (!it->is_regular_file(e)) continue;
         std::string ext = it->path().extension().string();
         for (char &c : ext) c = char(std::tolower(uint8_t(c)));
-        if (ext != ".png") continue;
+        if (ext != ".png" && ext != ".dds") continue;
         // the hash: 16 hex digits on their own in the name
         const std::string stem = it->path().stem().string();
         for (size_t i = 0; i + 16 <= stem.size(); i++) {
