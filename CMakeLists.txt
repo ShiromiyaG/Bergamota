@@ -156,6 +156,9 @@ if(RUNTIME_VULKAN)
 endif()
 
 # boots a game on the runtime and reports how far it gets
+# a game's textures from its files, as PNG (tools/texdump.cpp)
+add_executable(texdump tools/texdump.cpp)
+target_link_libraries(texdump PRIVATE recomp_runtime)
 add_executable(boot tools/boot.cpp)
 target_link_libraries(boot PRIVATE recomp_runtime)
 
