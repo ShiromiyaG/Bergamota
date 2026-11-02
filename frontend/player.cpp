@@ -565,7 +565,7 @@ int main(int argc, char **argv) {
                 std::memcpy(&rgba[size_t(y) * w * 4], static_cast<const uint8_t *>(s->pixels) + size_t(y) * s->pitch, size_t(w) * 4);
             SDL_DestroySurface(s);
             return true;
-        });
+        }, settings.video.preload_textures);
     }
     if (settings.video.dump_textures) {
         vulkan.dump_textures(config_file.parent_path() / "texture-dump", [](const std::filesystem::path &file, const uint8_t *rgba,

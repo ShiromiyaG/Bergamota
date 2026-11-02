@@ -126,6 +126,8 @@ void PlayerPages::graphics(ImU32 accent) {
     look::row("Anti-aliasing (FXAA)", "", box, [&] { check("##antialias", v.antialias); });
     look::row("HD textures", "The PNGs in the textures folder beside the settings, in place of the game's.", box,
               [&] { check("##hd_textures", v.hd_textures); });
+    look::row("Preload HD textures", "All of them read from the start: no stutter the first time one shows, more memory.", box,
+              [&] { check("##preload_textures", v.preload_textures); });
     look::row("Dump textures", "Every texture the game uses written to texture-dump, for making HD ones.", box,
               [&] { check("##dump_textures", v.dump_textures); });
     look::row("Sharpen", "", wide, [&] { changed |= ImGui::SliderFloat("##sharpen", &v.sharpen, 0, 1, "%.2f"); });

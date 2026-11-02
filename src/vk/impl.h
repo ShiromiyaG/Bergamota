@@ -23,6 +23,7 @@
 #include <memory>
 #include <atomic>
 #include <mutex>
+#include <thread>
 #include <map>
 #include <unordered_map>
 #include <unordered_set>
@@ -239,9 +240,14 @@ struct VulkanRenderer::Impl {
         uint32_t width = 0, height = 0;
     };
     std::map<uint64_t, std::filesystem::path> replacement_files;
-    std::map<uint64_t, Replacement> replacements;
+    std::map<uint64_t, Replacement> replacements; // under replacements_lock while preloading
+    std::mutex replacements_lock;
+    std::vector<std::thread> preloaders;
+    std::atomic<bool> stop_preloading{false};
     VulkanRenderer::LoadImage load_image;
     const Replacement *replacement(uint64_t hash);
+    Replacement read_replacement(const std::filesystem::path &file) const;
+    void preload_replacements();
     // and the dump (VulkanRenderer::dump_textures)
     std::filesystem::path dump_folder;
     VulkanRenderer::SaveImage save_image;

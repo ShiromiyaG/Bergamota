@@ -110,26 +110,56 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
     return t.image.view;
 }
 
-// an HD texture for a hash, read the first time it is asked for
+// an HD texture read, its rows turned over to the PICA's (empty for a
+// file that would not read)
+Impl::Replacement Impl::read_replacement(const std::filesystem::path &file) const {
+    Replacement r;
+    std::vector<uint8_t> upright;
+    uint32_t w = 0, h = 0;
+    if (load_image && load_image(file, upright, w, h) && w && h && w <= 8192 && h <= 8192 && upright.size() >= size_t(w) * h * 4) {
+        r.rgba.resize(size_t(w) * h * 4);
+        for (uint32_t y = 0; y < h; y++) std::memcpy(&r.rgba[size_t(y) * w * 4], &upright[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
+        r.width = w, r.height = h;
+    } else {
+        std::fprintf(stderr, "runtime: %s would not read as an image\n", file.string().c_str());
+    }
+    return r;
+}
+
+// an HD texture for a hash: read already (preloaded, or asked for before),
+// else read now. a Replacement stays where it is once in the map
 const Impl::Replacement *Impl::replacement(uint64_t hash) {
     auto file = replacement_files.find(hash);
     if (file == replacement_files.end()) return nullptr;
-    auto [it, fresh] = replacements.try_emplace(hash);
-    Replacement &r = it->second;
-    if (fresh) {
-        std::vector<uint8_t> upright;
-        uint32_t w = 0, h = 0;
-        if (load_image && load_image(file->second, upright, w, h) && w && h && w <= 8192 && h <= 8192 &&
-            upright.size() >= size_t(w) * h * 4) {
-            r.rgba.resize(size_t(w) * h * 4);
-            for (uint32_t y = 0; y < h; y++)
-                std::memcpy(&r.rgba[size_t(y) * w * 4], &upright[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
-            r.width = w, r.height = h;
-        } else {
-            std::fprintf(stderr, "runtime: %s would not read as an image\n", file->second.string().c_str());
-        }
+    {
+        std::lock_guard g(replacements_lock);
+        if (auto it = replacements.find(hash); it != replacements.end()) return it->second.rgba.empty() ? nullptr : &it->second;
     }
+    Replacement read = read_replacement(file->second);
+    std::lock_guard g(replacements_lock);
+    Replacement &r = replacements.try_emplace(hash, std::move(read)).first->second;
     return r.rgba.empty() ? nullptr : &r;
+}
+
+// every HD texture read on threads of their own, those the game asked for
+// first left alone
+void Impl::preload_replacements() {
+    std::vector<std::pair<uint64_t, std::filesystem::path>> files(replacement_files.begin(), replacement_files.end());
+    auto next = std::make_shared<std::atomic<size_t>>(0);
+    const size_t workers = std::clamp<size_t>(std::thread::hardware_concurrency() / 2, 1, 8);
+    for (size_t k = 0; k < workers; k++) {
+        preloaders.emplace_back([this, files, next] {
+            for (size_t i; !stop_preloading && (i = (*next)++) < files.size();) {
+                {
+                    std::lock_guard g(replacements_lock);
+                    if (replacements.count(files[i].first)) continue;
+                }
+                Replacement read = read_replacement(files[i].second);
+                std::lock_guard g(replacements_lock);
+                replacements.try_emplace(files[i].first, std::move(read));
+            }
+        });
+    }
 }
 
 VkImageView Impl::depth_as_color(Surface &s) {

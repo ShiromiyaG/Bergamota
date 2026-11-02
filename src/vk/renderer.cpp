@@ -23,6 +23,8 @@ VulkanRenderer::VulkanRenderer(Memory &memory, const std::vector<std::string> &i
 
 VulkanRenderer::~VulkanRenderer() {
     impl_->memory.gpu_sync = nullptr;
+    impl_->stop_preloading = true;
+    for (auto &t : impl_->preloaders) t.join();
     impl_->shutdown();
 }
 
@@ -34,7 +36,7 @@ void VulkanRenderer::translation_counts(uint64_t &compiled, uint64_t &loaded, ui
     compiled = impl_->translator->compiled, loaded = impl_->translator->loaded, failed = impl_->translator->failed;
 }
 
-void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImage load) {
+void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImage load, bool preload) {
     if (!ready()) return;
     Impl &d = *impl_;
     d.load_image = std::move(load);
@@ -59,6 +61,7 @@ void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImag
     }
     if (!d.replacement_files.empty())
         std::fprintf(stderr, "runtime: %zu textures of our own in %s\n", d.replacement_files.size(), folder.string().c_str());
+    if (preload && !d.replacement_files.empty()) d.preload_replacements();
 }
 
 void VulkanRenderer::dump_textures(const std::filesystem::path &folder, SaveImage save) {

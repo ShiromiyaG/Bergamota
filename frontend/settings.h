@@ -74,6 +74,7 @@ struct Settings {
         // the game's (VulkanRenderer::textures_from); and every texture the
         // game uses written to texture-dump/ (dump_textures). on the next start
         bool hd_textures = true;
+        bool preload_textures = false; // all of them read from the start, not as the game first uses each
         bool dump_textures = false;
         float sharpen = 0;      // 0-1
         // the outlines around the characters: "auto" (the game's at the

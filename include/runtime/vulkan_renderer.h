@@ -76,8 +76,10 @@ public:
     // folder and its folders, each named with the 16 hex digits of the hash
     // of the texture it replaces (hash_bytes over its first level as memory
     // has it, as tools/texdump.cpp names them), of any size. read as the
-    // game first uses them; before the game starts
-    void textures_from(const std::filesystem::path &folder, LoadImage load);
+    // game first uses them, or, preload, all of them from the start on
+    // threads of their own (the game asking for one not read yet reads it
+    // itself); before the game starts
+    void textures_from(const std::filesystem::path &folder, LoadImage load, bool preload = false);
     // every texture the game uses written to folder once, named as texdump
     // names them (those only the running game makes too: the font, what it
     // draws into and reads back); before the game starts

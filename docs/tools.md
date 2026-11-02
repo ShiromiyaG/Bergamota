@@ -86,7 +86,9 @@ to `texture-dump/` beside the settings, named the same way.
 The player draws the PNGs in `textures/` beside the settings (any folders in
 it, any size, the 16 hex digits of the hash in the name) in place of the
 textures they name (`video.hd_textures`, on by default), read the first time
-the game uses each (`VulkanRenderer::textures_from`, `src/vk/textures.cpp`).
+the game uses each (`VulkanRenderer::textures_from`, `src/vk/textures.cpp`),
+or all of them from the start on threads of their own with
+`video.preload_textures` (no stutter, but every one kept in memory).
 
 ## The player
 
