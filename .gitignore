@@ -2,3 +2,6 @@ build/
 
 # boot's shots of the game
 *.ppm
+
+# the launcher's build
+launcher/target/
