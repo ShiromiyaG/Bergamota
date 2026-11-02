@@ -54,6 +54,8 @@ public:
     }
 
     std::optional<RomFsImage> romfs, update_romfs;
+    // the user folder
+    const std::filesystem::path &user() const { return user_; }
 
     // fs:USER, FSFile and FSDirectory
     bool handle(System &system, Thread &thread, CommandBuffer &b, const std::string &service, uint32_t subhandle);

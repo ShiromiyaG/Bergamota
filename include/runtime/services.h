@@ -126,6 +126,7 @@ private:
     bool hid(System &, CommandBuffer &);
     void hid_update(System &);
     bool y2r(System &, CommandBuffer &);
+    bool ptm(System &, CommandBuffer &);
     bool online(System &, CommandBuffer &, const std::string &service);
     uint32_t gsp_shared(System &) const;
     void gsp_interrupt(System &, uint8_t id);
@@ -146,6 +147,7 @@ private:
     std::optional<Handle> notification_semaphore_;
     // APT
     std::optional<Handle> apt_lock_, apt_notification_, apt_parameter_event_;
+    std::optional<ObjectId> shared_font_;
     std::optional<Parameter> parameter_;
     std::optional<uint32_t> library_applet_;
     std::vector<uint8_t> capture_info_;

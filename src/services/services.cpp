@@ -5,6 +5,7 @@
 #include "runtime/services.h"
 
 #include "runtime/fs.h"
+#include "runtime/shared_font.h"
 
 #include <algorithm>
 #include <chrono>
@@ -79,6 +80,7 @@ void Services::request(System &system, Thread &thread, const std::string &servic
     else if (service == "gsp::Gpu" && gpu) handled = gsp(system, buffer);
     else if (service == "hid:USER" || service == "hid:SPVR") handled = hid(system, buffer);
     else if (service == "y2r:u") handled = y2r(system, buffer);
+    else if (service == "ptm:u") handled = ptm(system, buffer);
     else if (service == "ssl:C" || service == "frd:u" || service == "frd:a" || service == "boss:U" ||
              service == "boss:P" || service == "ndm:u")
         handled = online(system, buffer, service);
@@ -283,6 +285,36 @@ bool Services::apt(System &system, CommandBuffer &b) {
         cpu_time_limit_ = b.get(2);
         b.reply(0x004F);
         return true;
+    case 0x0044: { // GetSharedFont: the block's address and its handle
+        if (!shared_font_) {
+            std::string source;
+            // laid out for an address found once there is a block, then moved
+            auto font = shared_font(fs ? fs->user() : std::filesystem::path(), 0, source);
+            const uint32_t size = (uint32_t(font.size()) + map::PAGE_SIZE - 1) & ~(map::PAGE_SIZE - 1);
+            auto block = system.memory.allocate(Region::Base, size);
+            if (!block) {
+                b.reply_error(command, result::OUT_OF_MEMORY);
+                return true;
+            }
+            // where the linear mapping puts it, among the system's memory, which
+            // a title's linear heap never reaches
+            const uint32_t address = system.memory.linear_base + (block->paddr - map::FCRAM_PADDR);
+            shared_font_relocate(font, address);
+            std::memset(system.memory.host(block->paddr, size), 0, size);
+            std::memcpy(system.memory.host(block->paddr, size), font.data(), font.size());
+            system.memory.map(address, block->paddr, size, READ, MemoryState::Shared);
+            shared_font_ = k.insert(SharedMemory{"SharedFont", address, size, block->paddr, address});
+            k.hold(*shared_font_);
+            std::fprintf(stderr, "runtime: the shared font at 0x%08X (%u KiB): %s\n", address, size / 1024, source.c_str());
+        }
+        auto *font = std::get_if<SharedMemory>(k.object(*shared_font_));
+        b.set(0, header(command, 2, 2));
+        b.set(1, result::SUCCESS);
+        b.set(2, font->address);
+        b.set(3, descriptor::handles(1));
+        b.set(4, k.create_handle(*shared_font_));
+        return true;
+    }
     case 0x0050: // GetAppCpuTimeLimit
         b.reply(0x0050, {cpu_time_limit_});
         return true;
@@ -341,6 +373,27 @@ void Services::tick(System &system) {
     dsp_frames++;
     audio.tick(system.memory);
     dsp_signal(system);
+}
+
+// the power and step counter, as a console with the lid open, full battery,
+// not charging and no steps taken (X and Y ask for the step history)
+bool Services::ptm(System &system, CommandBuffer &b) {
+    uint32_t command = b.command();
+    switch (command) {
+    case 0x0005: b.reply(command, {1}); return true; // GetShellState: open
+    case 0x0007: b.reply(command, {5}); return true; // GetBatteryLevel: full
+    case 0x0008: case 0x0009: case 0x000C: // GetBatteryChargeState, GetPedometerState, GetTotalStepCount
+        b.reply(command, {0});
+        return true;
+    case 0x000B: { // GetStepHistory(hours, start time, buffer): no steps in any
+        std::vector<uint8_t> none(std::min<uint32_t>(b.get(1), 0x8000) * 2);
+        system.memory.write_bytes(b.get(5), none.data(), uint32_t(none.size()));
+        b.reply(command);
+        return true;
+    }
+    default:
+        return false;
+    }
 }
 
 // what works offline of the online services, as a console with no network

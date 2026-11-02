@@ -31,6 +31,7 @@ add_library(recomp_runtime STATIC
     src/services/ldr_ro.cpp
     src/services/gsp.cpp
     src/services/hid.cpp
+    src/services/shared_font.cpp
     src/services/y2r.cpp
     src/audio.cpp
     src/aac.cpp
@@ -56,6 +57,16 @@ if(RUNTIME_AAC)
     FetchContent_MakeAvailable(fdk_aac)
     target_link_libraries(recomp_runtime PRIVATE fdk-aac)
     target_compile_definitions(recomp_runtime PRIVATE RUNTIME_AAC=1)
+endif()
+# the shared font's stand-in drawn from a host font for Japanese, with
+# stb_truetype (Dear ImGui's copy; the player fetches the same)
+option(RUNTIME_HOST_FONT "the shared font's stand-in from a host font (stb_truetype)" ON)
+if(RUNTIME_HOST_FONT)
+    include(FetchContent)
+    FetchContent_Declare(imgui GIT_REPOSITORY https://github.com/ocornut/imgui.git GIT_TAG v1.91.9 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(imgui)
+    target_include_directories(recomp_runtime PRIVATE ${imgui_SOURCE_DIR})
+    target_compile_definitions(recomp_runtime PRIVATE RUNTIME_HOST_FONT=1)
 endif()
 
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
@@ -131,6 +142,9 @@ add_test(NAME decomp COMMAND decomp_test)
 add_executable(program_test tests/program_test.cpp)
 target_link_libraries(program_test PRIVATE recomp_runtime)
 add_test(NAME program COMMAND program_test)
+add_executable(shared_font_test tests/shared_font_test.cpp)
+target_link_libraries(shared_font_test PRIVATE recomp_runtime)
+add_test(NAME shared_font COMMAND shared_font_test)
 if(RUNTIME_VULKAN)
     add_executable(between_test tests/between_test.cpp)
     target_link_libraries(between_test PRIVATE recomp_runtime)
