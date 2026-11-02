@@ -803,7 +803,13 @@ int main(int argc, char **argv) {
                 scene_shown = scene;
                 std::fprintf(stderr, "scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
-            frontend::place(view, layout, panel, settings.video.panel_size, settings.video.panel_corner);
+            // in battle the panel over the message box (the bottom 48 rows)
+            bool in_battle = false;
+            {
+                std::lock_guard g(modules_lock);
+                in_battle = modules.count("Battle") != 0;
+            }
+            frontend::place(view, layout, panel, settings.video.panel_size, settings.video.panel_corner, in_battle ? 46.0f : 0.0f);
         } else {
             battle_ui = false;
         }

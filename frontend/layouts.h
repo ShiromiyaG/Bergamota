@@ -19,8 +19,9 @@ namespace frontend {
 
 // the top screen fills the canvas; the bottom one a panel in corner
 // ("bottom-right", "top-left"...), size times its own, in from its side as
-// shown goes from 0 to 1
-void place_single(runtime::VulkanPresenter::View &view, float shown, float size, const std::string &corner);
+// shown goes from 0 to 1; a bottom corner lifted by lift (of the top
+// screen's 240 rows: over a battle's message box)
+void place_single(runtime::VulkanPresenter::View &view, float shown, float size, const std::string &corner, float lift = 0);
 
 // both screens stacked on a canvas as wide as the window's shape, its sides
 // filled with the top screen blurred and dimmed
@@ -28,7 +29,8 @@ void place_stacked(runtime::VulkanPresenter::View &view);
 
 // the layout by its name ("panel", "stacked", "top"; the panel shown as
 // much as shown)
-void place(runtime::VulkanPresenter::View &view, const std::string &layout, float shown, float size, const std::string &corner);
+void place(runtime::VulkanPresenter::View &view, const std::string &layout, float shown, float size, const std::string &corner,
+           float lift = 0);
 
 // the screens swapped (the player's L2): each placement shows the other
 // screen, as tall as it was and as wide as that screen's shape asks, kept

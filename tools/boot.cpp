@@ -290,7 +290,10 @@ int main(int argc, char **argv) {
         view.top = float(top.width);
         frontend::place(view, layout, env("RUNTIME_PANEL") ? 1.0f : 0.0f,
                         env("RUNTIME_PANEL_SIZE") ? float(std::atof(env("RUNTIME_PANEL_SIZE"))) : 0.35f,
-                        env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right");
+                        env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right", [&] {
+                            std::lock_guard g(modules_lock);
+                            return modules.count("Battle") ? 46.0f : 0.0f; // over a battle's message box, as the player
+                        }());
         if (env("RUNTIME_SWAP")) frontend::swap_screens(view);
         Picture picture = frontend::compose(view, top, bottom);
         if (battle.mode) {

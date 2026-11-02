@@ -9,7 +9,7 @@ using runtime::Picture;
 using runtime::VulkanPresenter;
 using Placement = VulkanPresenter::Placement;
 
-void place_single(VulkanPresenter::View &view, float shown, float size, const std::string &corner) {
+void place_single(VulkanPresenter::View &view, float shown, float size, const std::string &corner, float lift) {
     view.canvas[0] = view.top, view.canvas[1] = 240;
     Placement top;
     top.to[2] = view.top, top.to[3] = 240;
@@ -23,7 +23,7 @@ void place_single(VulkanPresenter::View &view, float shown, float size, const st
     Placement panel;
     panel.screen = 1;
     panel.to[0] = left ? margin - away : view.top - margin - w + away;
-    panel.to[1] = high ? margin : 240 - margin - h;
+    panel.to[1] = high ? margin : std::max(margin, 240 - margin - h - lift);
     panel.to[2] = panel.to[0] + w;
     panel.to[3] = panel.to[1] + h;
     view.placements.push_back(panel);
@@ -47,9 +47,10 @@ void place_stacked(VulkanPresenter::View &view) {
     view.placements = {fill, top, bottom};
 }
 
-void place(VulkanPresenter::View &view, const std::string &layout, float shown, float size, const std::string &corner) {
+void place(VulkanPresenter::View &view, const std::string &layout, float shown, float size, const std::string &corner,
+           float lift) {
     if (layout == "stacked") place_stacked(view);
-    else place_single(view, layout == "top" ? 0.0f : shown, size, corner);
+    else place_single(view, layout == "top" ? 0.0f : shown, size, corner, lift);
 }
 
 void swap_screens(VulkanPresenter::View &view) {

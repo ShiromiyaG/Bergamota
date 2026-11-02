@@ -58,7 +58,7 @@ struct Settings {
         bool panel_shown = true;
         // the single screen in battle: the port's own battle UI on the top
         // screen (Sword and Shield's layout, frontend/battle_ui.h), no panel
-        bool battle_on_top = true;
+        bool battle_on_top = false; // off: the panel, lifted over the message box
         // the bloom's ghosting (a trail behind what moves outside) left out,
         // through the port's code (port_no_ghosting)
         bool no_ghosting = true;
