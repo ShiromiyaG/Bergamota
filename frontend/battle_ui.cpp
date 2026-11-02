@@ -1,7 +1,10 @@
 #include "battle_ui.h"
 
+#include <SDL3/SDL.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 namespace frontend {
@@ -23,79 +26,10 @@ std::string utf8(const uint16_t *s) {
     return out;
 }
 
-ImU32 rgb(uint32_t hex, int alpha = 255) { return IM_COL32(hex >> 16 & 0xFF, hex >> 8 & 0xFF, hex & 0xFF, alpha); }
-
-// the commands' colors, as Ultra Sun and Ultra Moon's buttons have them: a
-// gradient from the first to the second, corner to corner
-struct Look {
-    uint32_t from, to;
-    const char *label;
-};
-
-const Look &look_of(uint32_t kind) {
-    static const Look FIGHT{0xD8263F, 0xFF7A45, "FIGHT"}, POKEMON{0x1E9E57, 0x8BD448, "POK\xC3\x89MON"},
-        BAG{0xE08A10, 0xFFD23C, "BAG"}, RUN{0x2F63C8, 0x5FC6F4, "RUN"}, CARE{0xD84C8E, 0xFF9CC4, "Care"},
-        BACK{0x4E5568, 0x8C95AB, "Back"}, ZMOVE{0xC79A12, 0xFFE15A, "Z-Move"}, MEGA{0x6A3FC0, 0xC08CFF, "Mega"},
-        ULTRA{0xC9C9C9, 0xFFFFFF, "Ultra Burst"}, MOVE{0x2B3B5E, 0x4F6A9E, ""};
-    switch (kind) {
-    case BATTLE_FIGHT: return FIGHT;
-    case BATTLE_POKEMON: return POKEMON;
-    case BATTLE_BAG: return BAG;
-    case BATTLE_RUN: return RUN;
-    case BATTLE_CARE: return CARE;
-    case BATTLE_BACK: return BACK;
-    case BATTLE_ZMOVE: return ZMOVE;
-    case BATTLE_MEGA: return MEGA;
-    case BATTLE_ULTRA_BURST: return ULTRA;
-    default: return MOVE;
-    }
-}
-
-ImU32 mix(uint32_t a, uint32_t b, float t, int alpha) {
-    auto ch = [&](int s) { return int(std::lround((a >> s & 0xFF) * (1 - t) + (b >> s & 0xFF) * t)); };
-    return IM_COL32(ch(16), ch(8), ch(0), alpha);
-}
-
-// a bar in the games' way: slanted ends, a dark outline, a light rim inside
-// and a gradient corner to corner; selected, a white rim and brighter
-void bar(ImDrawList *d, float x, float y, float w, float h, float slant, const Look &look, bool selected, float s) {
-    const int alpha = 255;
-    ImVec2 outer[4] = {{x + slant, y}, {x + w, y}, {x + w - slant, y + h}, {x, y + h}};
-    // the outline, a little larger
-    const float o = 1.6f * s;
-    ImVec2 rim[4] = {{outer[0].x - o * 0.5f, outer[0].y - o}, {outer[1].x + o, outer[1].y - o},
-                     {outer[2].x + o * 0.5f, outer[2].y + o}, {outer[3].x - o, outer[3].y + o}};
-    d->AddConvexPolyFilled(rim, 4, IM_COL32(24, 18, 40, 235));
-    // the body, its corners' colors a gradient corner to corner
-    uint32_t from = look.from, to = look.to;
-    if (selected) {
-        auto lift = [](uint32_t c) {
-            int r = std::min(255, int(c >> 16 & 0xFF) + 40), g = std::min(255, int(c >> 8 & 0xFF) + 40), b = std::min(255, int(c & 0xFF) + 40);
-            return uint32_t(r << 16 | g << 8 | b);
-        };
-        from = lift(from), to = lift(to);
-    }
-    ImU32 colors[4] = {mix(from, to, 0.0f, alpha), mix(from, to, 0.55f, alpha), mix(from, to, 1.0f, alpha), mix(from, to, 0.45f, alpha)};
-    const ImVec2 white = ImGui::GetFontTexUvWhitePixel();
-    d->PrimReserve(6, 4);
-    ImDrawIdx base = ImDrawIdx(d->_VtxCurrentIdx);
-    for (int i = 0; i < 4; i++) d->PrimWriteVtx(outer[i], white, colors[i]);
-    d->PrimWriteIdx(base), d->PrimWriteIdx(ImDrawIdx(base + 1)), d->PrimWriteIdx(ImDrawIdx(base + 2));
-    d->PrimWriteIdx(base), d->PrimWriteIdx(ImDrawIdx(base + 2)), d->PrimWriteIdx(ImDrawIdx(base + 3));
-    // a sheen across the top half
-    ImVec2 sheen[4] = {outer[0], outer[1], {x + w - slant * 0.5f, y + h * 0.45f}, {x + slant * 0.5f, y + h * 0.45f}};
-    d->AddConvexPolyFilled(sheen, 4, IM_COL32(255, 255, 255, 38));
-    // the rim
-    const float in = 1.4f * s;
-    ImVec2 inner[4] = {{outer[0].x + in, outer[0].y + in}, {outer[1].x - in, outer[1].y + in},
-                       {outer[2].x - in, outer[2].y - in}, {outer[3].x + in, outer[3].y - in}};
-    d->AddPolyline(inner, 4, selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(255, 255, 255, 110), ImDrawFlags_Closed,
-                   (selected ? 1.8f : 1.0f) * s);
-}
-
 // a label in white with a dark edge, as the games' are
 void label(ImDrawList *d, ImFont *font, float size, ImVec2 at, const std::string &text, float s, ImU32 color = IM_COL32_WHITE) {
-    const float e = 1.1f * s;
+    (void)s;
+    const float e = size * 0.075f; // the edge, as thick as the letters ask
     for (int k = 0; k < 8; k++) {
         float a = float(k) * 3.14159265f / 4;
         d->AddText(font, size, ImVec2(at.x + std::cos(a) * e, at.y + std::sin(a) * e), IM_COL32(24, 18, 40, 230), text.c_str());
@@ -131,83 +65,204 @@ BattleState read_battle(runtime::Memory &memory, uint32_t address) {
     return state;
 }
 
-void draw_battle(ImDrawList *d, ImFont *font, const BattleState &state, float x0, float y0, float x1, float y1,
-                 std::vector<BattleHit> &hits) {
+std::vector<size_t> battle_order(const BattleState &state) {
+    std::vector<size_t> order;
+    auto take = [&](uint32_t kind) {
+        for (size_t i = 0; i < state.items.size(); i++)
+            if (state.items[i].kind == kind) order.push_back(i);
+    };
+    if (state.mode == 1) {
+        for (uint32_t kind : {BATTLE_CARE, BATTLE_FIGHT, BATTLE_POKEMON, BATTLE_BAG, BATTLE_RUN}) take(kind);
+    } else if (state.mode == 2) {
+        for (uint32_t kind : {BATTLE_MOVE, BATTLE_ZMOVE, BATTLE_MEGA, BATTLE_ULTRA_BURST, BATTLE_BACK}) take(kind);
+    }
+    return order;
+}
+
+void BattleArt::load(const std::string &folder) {
+    std::map<std::string, std::pair<int, float>> margins;
+    if (FILE *f = std::fopen((folder + "/pieces.txt").c_str(), "r")) {
+        char name[64];
+        int margin;
+        float scale;
+        while (std::fscanf(f, "%63s %d %f", name, &margin, &scale) == 3) margins[name] = {margin, scale};
+        std::fclose(f);
+    }
+    for (const auto &[name, m] : margins) {
+        SDL_Surface *loaded = SDL_LoadPNG((folder + "/" + name + ".png").c_str());
+        if (!loaded) continue;
+        SDL_Surface *rgba = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_ABGR8888); // bytes R, G, B, A
+        SDL_DestroySurface(loaded);
+        if (!rgba) continue;
+        Piece piece;
+        piece.width = rgba->w, piece.height = rgba->h, piece.margin = m.first, piece.scale = m.second;
+        piece.rgba.resize(size_t(rgba->w) * rgba->h * 4);
+        for (int y = 0; y < rgba->h; y++)
+            std::memcpy(&piece.rgba[size_t(y) * rgba->w * 4], static_cast<uint8_t *>(rgba->pixels) + size_t(y) * rgba->pitch, size_t(rgba->w) * 4);
+        SDL_DestroySurface(rgba);
+        piece.rect = ImGui::GetIO().Fonts->AddCustomRectRegular(piece.width, piece.height);
+        pieces[name] = std::move(piece);
+    }
+}
+
+void BattleArt::finish() {
+    ImFontAtlas *atlas = ImGui::GetIO().Fonts;
+    unsigned char *pixels = nullptr;
+    int aw = 0, ah = 0;
+    atlas->GetTexDataAsRGBA32(&pixels, &aw, &ah);
+    for (auto &[name, piece] : pieces) {
+        const ImFontAtlasCustomRect *r = atlas->GetCustomRectByIndex(piece.rect);
+        if (!r || !r->IsPacked()) continue;
+        for (int y = 0; y < piece.height; y++)
+            std::memcpy(pixels + (size_t(r->Y + y) * aw + r->X) * 4, &piece.rgba[size_t(y) * piece.width * 4], size_t(piece.width) * 4);
+        atlas->CalcCustomRectUV(r, &piece.uv0, &piece.uv1);
+        piece.rgba.clear();
+    }
+}
+
+const BattleArt::Piece *BattleArt::find(const std::string &name) const {
+    auto it = pieces.find(name);
+    return it == pieces.end() || it->second.rect < 0 ? nullptr : &it->second;
+}
+
+namespace {
+
+// a piece placed by its body: x, y its top left, in the window's points, s
+// points a unit of the top screen's; tinted (white: as drawn)
+void piece(ImDrawList *d, const BattleArt &art, const std::string &name, float x, float y, float s, ImU32 tint = IM_COL32_WHITE) {
+    const BattleArt::Piece *p = art.find(name);
+    if (!p) return;
+    const float k = s / p->scale, m = float(p->margin) * k;
+    d->AddImage(ImGui::GetIO().Fonts->TexID, ImVec2(x - m, y - m), ImVec2(x - m + float(p->width) * k, y - m + float(p->height) * k), p->uv0,
+                p->uv1, tint);
+}
+
+const char *piece_name(uint32_t kind) {
+    switch (kind) {
+    case BATTLE_FIGHT: return "fight";
+    case BATTLE_POKEMON: return "pokemon";
+    case BATTLE_BAG: return "bag";
+    case BATTLE_RUN: return "run";
+    case BATTLE_CARE: return "care";
+    case BATTLE_BACK: return "back";
+    case BATTLE_ZMOVE: return "zmove";
+    case BATTLE_MEGA: return "mega";
+    case BATTLE_ULTRA_BURST: return "ultra";
+    default: return "move";
+    }
+}
+
+} // namespace
+
+void draw_battle(ImDrawList *d, ImFont *font, const BattleArt &art, const BattleState &state, int chosen, float x0, float y0, float x1,
+                 float y1, std::vector<BattleHit> &hits) {
     hits.clear();
     if (!state.mode) return;
     if (!font) font = ImGui::GetFont();
     // units of the top screen's height, 240 of them; laid out from the
-    // bottom right corner, as Sword and Shield has them
-    const float s = (y1 - y0) / 240.0f, right = x1 - 8 * s, bottom = y1 - 50 * s; // over the message box
-    auto add_hit = [&](float x, float y, float w, float h, const BattleItem &item) {
-        hits.push_back({x, y, x + w, y + h, item.x, item.y});
-    };
-    const BattleItem *chosen = state.selected >= 0 && size_t(state.selected) < state.items.size() ? &state.items[state.selected] : nullptr;
+    // bottom right corner, over the message box, as Sword and Shield has them
+    const float s = (y1 - y0) / 240.0f, right = x1 - 8 * s, bottom = y1 - 48 * s;
+    (void)x0;
+    auto hit = [&](float x, float y, float w, float h, const BattleItem &item) { hits.push_back({x, y, x + w, y + h, item.x, item.y}); };
+    std::vector<size_t> order = battle_order(state);
     if (state.mode == 1) {
-        // the commands, Fight on top, Run at the bottom; the chosen one out
-        // to the left
-        const float w = 96 * s, h = 19 * s, gap = 4 * s;
-        const uint32_t order[] = {BATTLE_FIGHT, BATTLE_POKEMON, BATTLE_BAG, BATTLE_RUN};
-        float y = bottom - 4 * h - 3 * gap;
-        for (uint32_t kind : order) {
-            auto it = std::find_if(state.items.begin(), state.items.end(), [&](const BattleItem &i) { return i.kind == kind; });
-            if (it != state.items.end()) {
-                bool selected = chosen == &*it;
-                float x = right - w - (selected ? 10 * s : 0);
-                const Look &look = look_of(kind);
-                bar(d, x, y, w, h, 7 * s, look, selected, s);
-                label(d, font, 12 * s, ImVec2(x + 15 * s, y + (h - 12 * s) / 2), look.label, s);
-                add_hit(x, y, w, h, *it);
+        // Care small on top, then the commands; the chosen one out to the left
+        const float w = 104 * s, h = 27 * s, gap = 3 * s;
+        int big = 0;
+        for (size_t i : order) big += state.items[i].kind != BATTLE_CARE;
+        float y = bottom - float(big) * (h + gap) + gap;
+        for (size_t i : order) {
+            const BattleItem &item = state.items[i];
+            const bool on = int(i) == chosen;
+            if (item.kind == BATTLE_CARE) {
+                const float cw = 54 * s, ch = 17 * s, cx = right - cw, cy = y - ch - 6 * s;
+                piece(d, art, on ? "care_on" : "care", cx, cy, s);
+                hit(cx, cy, cw, ch, item);
+                continue;
             }
+            float x = right - w - (on ? 8 * s : 0);
+            piece(d, art, std::string(piece_name(item.kind)) + (on ? "_on" : ""), x, y, s);
+            hit(x, y, w, h, item);
             y += h + gap;
-        }
-        for (const BattleItem &item : state.items) {
-            if (item.kind != BATTLE_CARE) continue;
-            const float cw = 54 * s, ch = 15 * s, cx = right - cw, cy = bottom - 4 * h - 3 * gap - ch - 8 * s;
-            bar(d, cx, cy, cw, ch, 6 * s, look_of(BATTLE_CARE), false, s);
-            label(d, font, 10 * s, ImVec2(cx + 12 * s, cy + (ch - 10 * s) / 2), look_of(BATTLE_CARE).label, s);
-            add_hit(cx, cy, cw, ch, item);
         }
         return;
     }
-    // the moves: four bars, the name and the PP; back under them, the
+    // the moves: their windows, each tinted by its type (not read yet: the
+    // same blue for all), the name and the PP on them; back under them, the
     // Z-Move, Mega or Ultra Burst switch beside it
-    const float w = 140 * s, h = 23 * s, gap = 4 * s, small = 15 * s;
-    std::vector<const BattleItem *> moves;
-    for (const BattleItem &item : state.items)
-        if (item.kind == BATTLE_MOVE) moves.push_back(&item);
-    float y = bottom - small - 8 * s - float(moves.size()) * (h + gap) + gap;
-    for (const BattleItem *move : moves) {
-        bool selected = chosen == move;
-        float x = right - w - (selected ? 10 * s : 0);
-        bar(d, x, y, w, h, 8 * s, look_of(BATTLE_MOVE), selected, s);
-        label(d, font, 12 * s, ImVec2(x + 14 * s, y + (h - 12 * s) / 2), move->text[0], s);
-        std::string pp = move->text[1].empty() ? "" : "PP " + move->text[1];
-        float pw = text_width(font, 9 * s, pp);
-        label(d, font, 9 * s, ImVec2(x + w - 12 * s - pw, y + (h - 9 * s) / 2 + 1 * s), pp, s, IM_COL32(230, 236, 255, 255));
-        add_hit(x, y, w, h, *move);
-        y += h + gap;
+    const float w = 142 * s, h = 25 * s, gap = 3 * s, small_w = 54 * s, small_h = 17 * s;
+    int moves = 0;
+    for (size_t i : order) moves += state.items[i].kind == BATTLE_MOVE;
+    float y = bottom - small_h - 6 * s - float(moves) * (h + gap) + gap;
+    float x_small = right;
+    for (size_t i : order) {
+        const BattleItem &item = state.items[i];
+        const bool on = int(i) == chosen;
+        if (item.kind == BATTLE_MOVE) {
+            float x = right - w - (on ? 8 * s : 0);
+            piece(d, art, "move", x, y, s, IM_COL32(150, 172, 214, 255));
+            piece(d, art, on ? "move_frame_on" : "move_frame", x, y, s);
+            label(d, font, 12.5f * s, ImVec2(x + 14 * s, y + (h - 12.5f * s) / 2 - 0.5f * s), item.text[0], s);
+            std::string pp = item.text[1].empty() ? "" : "PP " + item.text[1];
+            float pw = text_width(font, 9.5f * s, pp);
+            label(d, font, 9.5f * s, ImVec2(x + w - 12 * s - pw, y + (h - 9.5f * s) / 2), pp, s);
+            hit(x, y, w, h, item);
+            y += h + gap;
+            continue;
+        }
+        const BattleArt::Piece *p = art.find(piece_name(item.kind));
+        const float pw = p ? (float(p->width) / p->scale - 2 * float(p->margin) / p->scale) * s : small_w;
+        x_small -= pw;
+        piece(d, art, std::string(piece_name(item.kind)) + (on ? "_on" : ""), x_small, bottom - small_h, s);
+        hit(x_small, bottom - small_h, pw, small_h, item);
+        x_small -= 5 * s;
     }
-    float x = right;
-    for (const BattleItem &item : state.items) {
-        if (item.kind != BATTLE_BACK) continue;
-        const float bw = 46 * s;
-        x -= bw;
-        bar(d, x, bottom - small, bw, small, 6 * s, look_of(BATTLE_BACK), chosen == &item, s);
-        label(d, font, 10 * s, ImVec2(x + 12 * s, bottom - small + (small - 10 * s) / 2), look_of(BATTLE_BACK).label, s);
-        add_hit(x, bottom - small, bw, small, item);
-        x -= 6 * s;
+}
+
+bool BattleCursor::step(const BattleState &state, uint32_t &buttons, float &circle_y, float seconds, float &bx, float &by) {
+    constexpr uint32_t A = 1, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128;
+    std::vector<size_t> order = battle_order(state);
+    if (!state.mode || order.empty()) {
+        chosen = -1, mode_ = 0, touching_ = 0, held_ = 0;
+        return false;
     }
-    for (const BattleItem &item : state.items) {
-        if (item.kind != BATTLE_ZMOVE && item.kind != BATTLE_MEGA && item.kind != BATTLE_ULTRA_BURST) continue;
-        const Look &look = look_of(item.kind);
-        const float zw = text_width(font, 10 * s, look.label) + 26 * s;
-        x -= zw;
-        bar(d, x, bottom - small, zw, small, 6 * s, look, chosen == &item, s);
-        label(d, font, 10 * s, ImVec2(x + 12 * s, bottom - small + (small - 10 * s) / 2), look.label, s);
-        add_hit(x, bottom - small, zw, small, item);
-        x -= 6 * s;
+    // a new list (the commands, the moves): from where the game's cursor is
+    if (state.mode != mode_ || order.size() != count_ || chosen < 0 || size_t(chosen) >= state.items.size()) {
+        mode_ = state.mode, count_ = order.size();
+        bool found = std::find(order.begin(), order.end(), size_t(state.selected)) != order.end();
+        chosen = int(found ? size_t(state.selected) : order[0]);
+        // in the commands the game starts on Fight, after Care
+        if (!found && state.mode == 1)
+            for (size_t i : order)
+                if (state.items[i].kind == BATTLE_FIGHT) chosen = int(i);
     }
+    size_t at = size_t(std::find(order.begin(), order.end(), size_t(chosen)) - order.begin());
+    if (at >= order.size()) at = 0;
+    const int n = int(order.size());
+    const int dir = (buttons & UP) || circle_y > 0.5f ? -1 : (buttons & DOWN) || circle_y < -0.5f ? 1 : 0;
+    if (dir != held_) {
+        held_ = dir, repeat_ = 0.35f;
+        if (dir) at = size_t((int(at) + dir + n) % n);
+    } else if (dir && (repeat_ -= seconds) <= 0) {
+        repeat_ = 0.12f;
+        at = size_t((int(at) + dir + n) % n);
+    }
+    chosen = int(order[at]);
+    // A: a touch where the game's button is, a tenth of a second
+    const bool a = buttons & A;
+    if (a && !a_held_ && touching_ <= 0) {
+        touching_ = 6;
+        tx_ = state.items[size_t(chosen)].x, ty_ = state.items[size_t(chosen)].y;
+    }
+    a_held_ = a;
+    buttons &= ~(A | UP | DOWN | LEFT | RIGHT);
+    circle_y = 0;
+    if (touching_ > 0) {
+        touching_--;
+        bx = tx_, by = ty_;
+        return true;
+    }
+    return false;
 }
 
 void raster_ui(const ImDrawData *data, runtime::Picture &into) {

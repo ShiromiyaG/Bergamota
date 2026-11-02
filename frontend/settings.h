@@ -31,8 +31,9 @@ struct Settings {
     struct {
         std::string exheader, code, library, game, update, user, decomp, layouts;
         // the font of a port's own UI (its battle UI), a .ttf; none: ui.ttf
-        // beside the player, else ImGui's
-        std::string ui_font;
+        // beside the player, else ImGui's. ui_art: the folder of its
+        // battle UI's pieces (PNG, pieces.txt); none: ui/battle beside it
+        std::string ui_font, ui_art;
         // the input recorded from the start, with a copy of the saves as they
         // were, into recordings/ beside the settings (for boot to play back)
         bool record = false;

@@ -43,7 +43,8 @@
 //                           (bottom-right), RUNTIME_SWAP=1 the screens swapped (L2),
 //                           RUNTIME_BATTLE_UI=1 the port's battle UI drawn over it while
 //                           the port's code reads a battle (port_battle; the top screen
-//                           alone then), in RUNTIME_UI_FONT (a .ttf) if given
+//                           alone then), in RUNTIME_UI_FONT (a .ttf) and RUNTIME_UI_ART
+//                           (its pieces' folder) if given
 //                           Scene changes printed as the player does
 
 #include "runtime/decomp.h"
@@ -303,19 +304,20 @@ int main(int argc, char **argv) {
                 for (uint32_t x = 0; x < big.width; x++)
                     std::memcpy(&big.rgba[(size_t(y) * big.width + x) * 4], &picture.rgba[(size_t(y / k) * picture.width + x / k) * 4], 4);
             static ImFont *font = nullptr;
+            static frontend::BattleArt art;
             if (!ImGui::GetCurrentContext()) {
                 ImGui::CreateContext();
                 if (const char *f = env("RUNTIME_UI_FONT")) font = ImGui::GetIO().Fonts->AddFontFromFileTTF(f, 48.0f);
-                unsigned char *pixels;
-                int w, h;
-                ImGui::GetIO().Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
+                if (const char *a = env("RUNTIME_UI_ART")) art.load(a);
+                art.finish();
             }
             ImGuiIO &io = ImGui::GetIO();
             io.DisplaySize = ImVec2(float(big.width), float(big.height));
             io.DeltaTime = 1.0f / 60;
             ImGui::NewFrame();
             std::vector<frontend::BattleHit> hits;
-            frontend::draw_battle(ImGui::GetForegroundDrawList(), font, battle, 0, 0, float(big.width), float(big.height), hits);
+            frontend::draw_battle(ImGui::GetForegroundDrawList(), font, art, battle, battle.selected, 0, 0, float(big.width),
+                                  float(big.height), hits);
             ImGui::Render();
             frontend::raster_ui(ImGui::GetDrawData(), big);
             picture = std::move(big);

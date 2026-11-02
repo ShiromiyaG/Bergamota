@@ -157,7 +157,7 @@ if(RUNTIME_PLAYER)
     # boot's shots of the single screen, composed as the player shows it
     if(RUNTIME_VULKAN)
         target_sources(boot PRIVATE frontend/layouts.cpp frontend/scenes.cpp frontend/battle_ui.cpp)
-        target_link_libraries(boot PRIVATE tomlplusplus::tomlplusplus imgui)
+        target_link_libraries(boot PRIVATE tomlplusplus::tomlplusplus imgui SDL3::SDL3-static)
         target_compile_definitions(boot PRIVATE BOOT_LAYOUTS=1)
     endif()
 endif()

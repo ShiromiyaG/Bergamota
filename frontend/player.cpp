@@ -200,7 +200,8 @@ void read_settings(int argc, char **argv, Settings &settings, std::filesystem::p
 }
 
 // the overlay (Dear ImGui) on the presenter's device
-ImFont *start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std::string &ui_font) {
+ImFont *start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std::string &ui_font, frontend::BattleArt &art,
+                      const std::string &art_folder) {
     ImGui_ImplSDL3_InitForVulkan(window);
     // the port's UI's font, large, drawn smaller (ImGui's own stays the first)
     ImGui::GetIO().Fonts->AddFontDefault();
@@ -208,6 +209,9 @@ ImFont *start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std:
     std::error_code missing;
     if (!ui_font.empty() && std::filesystem::exists(frontend::path_of(ui_font), missing))
         font = ImGui::GetIO().Fonts->AddFontFromFileTTF(ui_font.c_str(), 48.0f);
+    // and the battle UI's pieces, in the same atlas
+    art.load(art_folder);
+    art.finish();
     VkFormat format = presenter.format();
     ImGui_ImplVulkan_InitInfo info{};
     info.Instance = presenter.instance();
@@ -536,11 +540,14 @@ int main(int argc, char **argv) {
         return SDL_Vulkan_CreateSurface(window, instance, nullptr, surface);
     });
     if (!presenter.ready()) return fail("the window cannot show Vulkan's pictures (" + presenter.error + ")");
-    // the port's UI font: the setting's, else ui.ttf beside the player
-    std::string font_file = settings.game.ui_font;
-    if (font_file.empty())
-        if (const char *base = SDL_GetBasePath()) font_file = frontend::utf8(frontend::path_of(base) / "ui.ttf");
-    ImFont *ui_font = start_overlay(window, presenter, font_file);
+    // the port's UI font and art: the settings', else beside the player
+    std::string font_file = settings.game.ui_font, art_folder = settings.game.ui_art;
+    if (const char *base = SDL_GetBasePath()) {
+        if (font_file.empty()) font_file = frontend::utf8(frontend::path_of(base) / "ui.ttf");
+        if (art_folder.empty()) art_folder = frontend::utf8(frontend::path_of(base) / "ui" / "battle");
+    }
+    frontend::BattleArt battle_art;
+    ImFont *ui_font = start_overlay(window, presenter, font_file, battle_art, art_folder);
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // the GPU on a thread of its own, beside the game's (async_gpu.h);
@@ -634,9 +641,11 @@ int main(int argc, char **argv) {
     auto shown_at = std::chrono::steady_clock::now();
     Pointer pointer;
     auto pointer_at = std::chrono::steady_clock::now();
-    // where the battle UI drawn last can be clicked
+    // where the battle UI drawn last can be clicked, and its own cursor
     std::vector<frontend::BattleHit> battle_hits;
     bool battle_ui = false;
+    frontend::BattleCursor battle_cursor;
+    auto battle_at_time = std::chrono::steady_clock::now();
     // L2 (the left trigger) swaps the screens, the bottom one where the top
     // one was and the other way round; pressed again, back
     bool swapped = false, l2_held = false;
@@ -686,6 +695,15 @@ int main(int argc, char **argv) {
             battle_now = battle_state;
         }
         Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer, battle_hits);
+        // the battle UI's cursor takes up, down and A: A touches the item
+        {
+            auto at = std::chrono::steady_clock::now();
+            float seconds = std::chrono::duration<float>(at - battle_at_time).count(), bx, by;
+            battle_at_time = at;
+            frontend::BattleState none;
+            if (battle_cursor.step(battle_ui && !overlay.open ? battle_now : none, now.buttons, now.circle_y, seconds, bx, by))
+                now.touch = std::make_pair(uint16_t(std::clamp(bx, 0.0f, 319.0f)), uint16_t(std::clamp(by, 0.0f, 239.0f)));
+        }
         {
             std::lock_guard g(input_lock);
             input = now;
@@ -743,8 +761,8 @@ int main(int argc, char **argv) {
             const float density = SDL_GetWindowPixelDensity(window);
             for (const VulkanPresenter::Placement &p : shown_view.placements) {
                 if (p.screen != 0 || p.opacity < 0.99f) continue;
-                frontend::draw_battle(ImGui::GetBackgroundDrawList(), ui_font, battle_now, p.to[0] / density, p.to[1] / density,
-                                      p.to[2] / density, p.to[3] / density, battle_hits);
+                frontend::draw_battle(ImGui::GetBackgroundDrawList(), ui_font, battle_art, battle_now, battle_cursor.chosen,
+                                      p.to[0] / density, p.to[1] / density, p.to[2] / density, p.to[3] / density, battle_hits);
             }
         }
         ImGui::Render();
