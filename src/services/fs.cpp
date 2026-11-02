@@ -134,7 +134,7 @@ static std::optional<uint64_t> find_ncch(std::ifstream &in, const fsys::path &du
 // backwards LZSS ("BLZ"), as the SDK compresses an ExeFS's .code: from the
 // end back, a control byte, then per bit a byte copied or a run from what
 // was already written. Translated from zakuro-fs's lz77.rs
-static bool blz_decompress(std::vector<uint8_t> &data, std::string &error) {
+bool blz_decompress(std::vector<uint8_t> &data, std::string &error) {
     size_t size = data.size();
     if (size < 8) {
         error = "the code is shorter than its footer";
@@ -203,8 +203,12 @@ bool read_program(const fsys::path &dump, std::vector<uint8_t> &exheader, std::v
             error = dump.string() + ": its code is cut short";
             return false;
         }
-        // the exheader's flags, bit 0: the code is compressed
-        return !(exheader[0x0D] & 1) || blz_decompress(code, error);
+        // the exheader's flags, bit 0: the code is compressed; once it is
+        // not, it says so (X and Y's, Omega Ruby and Alpha Sapphire's are)
+        if (!(exheader[0x0D] & 1)) return true;
+        if (!blz_decompress(code, error)) return false;
+        exheader[0x0D] &= ~1;
+        return true;
     }
     error = dump.string() + ": no code in its ExeFS";
     return false;

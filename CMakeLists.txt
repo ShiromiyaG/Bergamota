@@ -33,6 +33,7 @@ add_library(recomp_runtime STATIC
     src/services/hid.cpp
     src/services/y2r.cpp
     src/audio.cpp
+    src/aac.cpp
     src/pica/pica.cpp
     src/pica/shader.cpp
     src/pica/batch.cpp
@@ -42,6 +43,21 @@ add_library(recomp_runtime STATIC
     src/service_list.cpp
     src/sampler.cpp
 )
+# the audio firmware's AAC decoder (X and Y, Omega Ruby and Alpha Sapphire
+# play their music through it): Fraunhofer's FDK AAC, static, built here
+option(RUNTIME_AAC "the DSP's AAC decoder, with FDK AAC (fetched)" ON)
+if(RUNTIME_AAC)
+    include(FetchContent)
+    set(BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(FDK_AAC_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+    set(FDK_AAC_INSTALL_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(fdk_aac GIT_REPOSITORY https://github.com/mstorsjo/fdk-aac.git GIT_TAG v2.0.3 GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(fdk_aac)
+    target_link_libraries(recomp_runtime PRIVATE fdk-aac)
+    target_compile_definitions(recomp_runtime PRIVATE RUNTIME_AAC=1)
+endif()
+
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
 # shaders compiled to SPIR-V here, never while a game runs
 find_package(Vulkan COMPONENTS glslc shaderc_combined)

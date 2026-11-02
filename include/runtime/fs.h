@@ -35,6 +35,10 @@ std::optional<RomFsImage> find_romfs(const std::filesystem::path &dump, std::str
 bool read_program(const std::filesystem::path &dump, std::vector<uint8_t> &exheader, std::vector<uint8_t> &code,
                   std::string &error);
 
+// an ExeFS's .code as the SDK compresses it (backwards LZSS, "BLZ"),
+// decompressed in place; false with why
+bool blz_decompress(std::vector<uint8_t> &data, std::string &error);
+
 // the game's name as its icon gives it (the English short title, UTF-8),
 // empty when the dump has none
 std::string read_title(const std::filesystem::path &dump);

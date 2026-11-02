@@ -4,6 +4,8 @@
 
 #include "runtime/services.h"
 
+#include "runtime/aac.h"
+
 #include "runtime/fs.h"
 
 #include <algorithm>
@@ -28,10 +30,67 @@ void Services::dsp_signal(System &system) {
     for (ObjectId e : dsp_.interrupt_events) system.kernel.signal_event(e);
 }
 
+// the binary pipe's messages, 32 bytes either way (as Citra lays them): the
+// codec (1, AAC decoding) and the command (0 initialize, 1 decode), the
+// result; a decode names where the ADTS frames are and how many bytes, and
+// where each channel's PCM goes, all physical; its answer the rate (an index
+// of RATES), the channels, the size taken and the samples a channel made
+std::vector<uint8_t> Services::dsp_aac(System &system, const std::vector<uint8_t> &request) {
+    constexpr size_t MESSAGE = 32;
+    constexpr uint32_t FCRAM = 0x20000000, ERROR = 1;
+    constexpr uint32_t RATES[9] = {48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000};
+    std::vector<uint8_t> message(MESSAGE, 0);
+    std::memcpy(message.data(), request.data(), std::min(request.size(), MESSAGE));
+    auto half = [&](size_t at) { return uint32_t(message[at] | message[at + 1] << 8); };
+    auto word = [&](size_t at) {
+        uint32_t v;
+        std::memcpy(&v, &message[at], 4);
+        return v;
+    };
+    auto put = [&](std::vector<uint8_t> &to, size_t at, uint32_t value) { std::memcpy(&to[at], &value, 4); };
+    const uint32_t codec = half(0), command = half(2);
+    if (codec != 1) {
+        put(message, 4, ERROR);
+        return message;
+    }
+    if (!dsp_.aac) dsp_.aac = std::make_shared<AacDecoder>();
+    if (command != 1) {
+        // initialize (a new stream), shut down and the rest succeed
+        if (command == 0) dsp_.aac->reset();
+        put(message, 4, 0);
+        return message;
+    }
+    const uint32_t source = word(8), size = std::min(word(12), 0x100000u), left = word(16), right = word(20);
+    std::vector<uint8_t> answer(MESSAGE, 0);
+    std::memcpy(answer.data(), message.data(), 4);
+    // what Citra answers when decoding fails, which keeps titles going
+    put(answer, 8, 0), put(answer, 12, 2), put(answer, 16, size), put(answer, 28, 1024);
+    const uint8_t *data = source >= FCRAM ? system.memory.host(source, size) : nullptr;
+    std::vector<int16_t> channels[2];
+    uint32_t rate = 0;
+    if (!data || !dsp_.aac->decode(data, size, channels, rate)) return answer;
+    // each channel's samples where it goes, the GPU's copy of that memory
+    // left behind
+    const uint32_t targets[2] = {left, right};
+    for (int c = 0; c < 2 && !channels[c].empty(); c++) {
+        const uint32_t bytes = uint32_t(channels[c].size() * 2);
+        if (targets[c] < FCRAM) continue;
+        uint8_t *to = system.memory.host(targets[c], bytes);
+        if (!to) continue;
+        gpu_sync(system, system.memory.linear_base + (targets[c] - FCRAM), bytes);
+        std::memcpy(to, channels[c].data(), bytes);
+    }
+    const uint32_t index = uint32_t(std::find(RATES, RATES + 9, rate) - RATES);
+    put(answer, 8, index < 9 ? index : 0);
+    put(answer, 12, channels[1].empty() ? 1 : 2);
+    put(answer, 28, uint32_t(channels[0].size()));
+    return answer;
+}
+
 void Services::dsp_write_pipe(System &system, uint32_t channel, const std::vector<uint8_t> &data) {
     if (channel == PIPE_BINARY && !data.empty()) {
-        // the AAC decoder: not there yet, it answers nothing
-        dsp_.pipes[PIPE_BINARY].clear();
+        // a request for the AAC decoder, answered at once
+        dsp_.pipes[PIPE_BINARY] = dsp_aac(system, data);
         dsp_signal(system);
         return;
     }

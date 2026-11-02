@@ -48,6 +48,11 @@ bool Session::open(const Files &files, Config config, std::string &error,
         return false;
     }
     if (!parse_exheader(exheader_bytes, exheader, error)) return false;
+    // code the exheader says is compressed and is shorter than the program
+    // it lays out (ctrtool without --decompresscode leaves it so): made whole
+    const size_t whole = size_t(exheader.text.pages + exheader.rodata.pages) * 0x1000 + exheader.data.size;
+    if (exheader.compressed && code.size() < whole && !blz_decompress(code, error)) return false;
+    exheader.compressed = false;
     if (!files.game.empty()) title = read_title(path_of(files.game));
     std::string library_path = files.library;
     if (library_path.empty()) {

@@ -19,7 +19,11 @@
 #include "runtime/gpu.h"
 #include "runtime/system.h"
 
+#include <memory>
+
 namespace runtime {
+
+class AacDecoder;
 
 class Fs;
 
@@ -154,7 +158,11 @@ private:
         uint32_t semaphore_mask = 0, semaphore_value = 0;
         std::vector<uint8_t> pipes[8];
         uint64_t next_frame = 0;
+        // its AAC decoder, kept between requests (aac.h)
+        std::shared_ptr<AacDecoder> aac;
     } dsp_;
+    // an answer of the AAC decoder's to a request on the binary pipe
+    std::vector<uint8_t> dsp_aac(System &, const std::vector<uint8_t> &request);
     // modules ldr:ro gave memory of their own: where they run, the game's
     // buffer, their memory, how much fixing left
     struct Copy {

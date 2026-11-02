@@ -77,10 +77,6 @@ bool parse_exheader(const std::vector<uint8_t> &b, ExHeader &out, std::string &e
             out.region = type == 2 ? Region::System : type == 3 ? Region::Base : Region::Application;
         }
     }
-    if (out.compressed) {
-        error = "the code is compressed: extract it with ctrtool's --decompresscode";
-        return false;
-    }
     return true;
 }
 
