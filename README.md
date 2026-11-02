@@ -22,10 +22,12 @@ renderer, at full speed on a desktop GPU.
 | The run loop: cooperative threads on one host thread, a virtual clock for reproducible runs | `system.h`, `src/system.cpp` | done |
 | ARM/Thumb/VFPv2 interpreter, for code the C does not have | `interpreter.h` | done |
 | The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`) | `decomp.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
-| Services: srv, APT, cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h` | what USUM uses |
-| Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer | `audio.h`, `src/audio.cpp` | done; AAC (X/Y's music) not yet |
+| Services: srv, APT (with the shared font), cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, ptm, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h`, `shared_font.h` | what USUM and X/Y use |
+| The dumps: NCSD, NCCH, CIA (its TMD), ExeFS, RomFS, BLZ; an update laid out for 3dsrecomp | `dump.h`, `src/dump.cpp` | done |
+| Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer, AAC with FDK AAC | `audio.h`, `aac.h`, `src/audio.cpp`, `src/aac.cpp` | done |
 | Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | to the field, with fragment lighting, fog, logic ops, mipmaps, scissor, the procedural texture, cube maps, shadows, the geometry shader, a resolution scale and a pipeline cache on disk; what a game asks for that is not done is counted ([plan](docs/vulkan-renderer.md)) |
 | The player: SDL3 window, keyboard, gamepad, mouse as the stylus, `config.toml`, a launcher and an ImGui overlay (F1) | `frontend/` | done |
+| The ports' launcher: port.toml, the games set up and recompiled with 3dsrecomp (Zig fetched when there is no C compiler), the player's settings and controls, drawn with ImGui on SDL's renderer | `launcher/`, `tests/launcher_test.cpp` | done |
 
 ## Building
 

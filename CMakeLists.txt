@@ -32,6 +32,7 @@ add_library(recomp_runtime STATIC
     src/services/gsp.cpp
     src/services/hid.cpp
     src/services/shared_font.cpp
+    src/dump.cpp
     src/services/y2r.cpp
     src/audio.cpp
     src/aac.cpp
@@ -184,6 +185,30 @@ if(RUNTIME_PLAYER)
     add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
                           frontend/layouts.cpp frontend/battle_ui.cpp)
     target_link_libraries(player PRIVATE recomp_runtime SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
+    # the ports' launcher (launcher/, docs in main.cpp): Nunito built in, the
+    # player's settings code and the dumps' readers compiled along, drawn on
+    # SDL's renderer
+    set(LAUNCHER_GEN ${CMAKE_CURRENT_BINARY_DIR}/launcher)
+    foreach(weight SemiBold Black)
+        string(TOLOWER ${weight} lower)
+        string(TOUPPER ${weight} upper)
+        add_custom_command(
+            OUTPUT ${LAUNCHER_GEN}/nunito_${lower}.inc
+            COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/Nunito-${weight}.ttf
+                    -DOUT=${LAUNCHER_GEN}/nunito_${lower}.inc -DNAME=NUNITO_${upper} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake
+            DEPENDS launcher/assets/Nunito-${weight}.ttf cmake/embed_binary.cmake
+            VERBATIM)
+    endforeach()
+    set(LAUNCHER_SOURCES launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp
+                         launcher/pages.cpp frontend/settings.cpp src/dump.cpp
+                         ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
+    add_executable(launcher WIN32 launcher/main.cpp ${LAUNCHER_SOURCES})
+    target_include_directories(launcher PRIVATE include ${LAUNCHER_GEN})
+    target_link_libraries(launcher PRIVATE SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
+    add_executable(launcher_test tests/launcher_test.cpp ${LAUNCHER_SOURCES})
+    target_include_directories(launcher_test PRIVATE include launcher ${LAUNCHER_GEN})
+    target_link_libraries(launcher_test PRIVATE SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
+    add_test(NAME launcher COMMAND launcher_test)
     # boot's shots of the single screen, composed as the player shows it
     if(RUNTIME_VULKAN)
         target_sources(boot PRIVATE frontend/layouts.cpp frontend/scenes.cpp frontend/battle_ui.cpp)

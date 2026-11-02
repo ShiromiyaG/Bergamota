@@ -15,33 +15,10 @@
 #include <string>
 #include <vector>
 
+#include "runtime/dump.h"
 #include "runtime/services.h"
 
 namespace runtime {
-
-// a window into a file on disk: a RomFS inside a game's dump
-struct RomFsImage {
-    std::filesystem::path file;
-    uint64_t offset = 0, size = 0; // level 3, to the RomFS's end
-};
-
-// the RomFS of a .3ds (NCSD, its first partition) or of a CIA's first
-// content, both decrypted; nullopt with why when it is not one
-std::optional<RomFsImage> find_romfs(const std::filesystem::path &dump, std::string &error);
-
-// the program a dump runs, its exheader (0x800 bytes, as ctrtool writes it)
-// and its code, decompressed: from a .3ds, or from an update's CIA, whose
-// program takes the game's place. false with why in error
-bool read_program(const std::filesystem::path &dump, std::vector<uint8_t> &exheader, std::vector<uint8_t> &code,
-                  std::string &error);
-
-// an ExeFS's .code as the SDK compresses it (backwards LZSS, "BLZ"),
-// decompressed in place; false with why
-bool blz_decompress(std::vector<uint8_t> &data, std::string &error);
-
-// the game's name as its icon gives it (the English short title, UTF-8),
-// empty when the dump has none
-std::string read_title(const std::filesystem::path &dump);
 
 class Fs {
 public:
