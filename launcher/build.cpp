@@ -8,6 +8,12 @@
 #include <cstring>
 #include <fstream>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace launcher {
 
 namespace {
@@ -474,6 +480,12 @@ bool play(const Tools &tools, const Config &config, std::string &error) {
     std::string ignored;
     library.save(ignored);
     finish_in_background(config);
+#ifdef _WIN32
+    // the launcher closes as the game opens: Windows would keep the game's
+    // window behind whatever comes to the front then (it opened as if
+    // minimized), unless the launcher, in front now, lets it come forward
+    AllowSetForegroundWindow(ASFW_ANY);
+#endif
     return start({utf8(tools.player), "--config", utf8(settings)}, error);
 }
 

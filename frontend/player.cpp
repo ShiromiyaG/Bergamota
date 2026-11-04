@@ -486,7 +486,16 @@ int main(int argc, char **argv) {
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD | SDL_INIT_AUDIO)) return fail(std::string("SDL: ") + SDL_GetError());
     constexpr int SCALE = 2;
+    // its windows to the front as they open: started by the launcher, which
+    // closes then, Windows would otherwise keep them behind what came forward
+    SDL_SetHint(SDL_HINT_FORCE_RAISEWINDOW, "1");
+    auto to_front = [](SDL_Window *w) {
+        if (!w) return;
+        if (SDL_GetWindowFlags(w) & SDL_WINDOW_MINIMIZED) SDL_RestoreWindow(w);
+        SDL_RaiseWindow(w);
+    };
     SDL_Window *window = SDL_CreateWindow("runtime", 400 * SCALE, 480 * SCALE, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
+    to_front(window);
     SDL_Renderer *renderer = SDL_CreateRenderer(window, nullptr);
     if (!window || !renderer) return fail(std::string("SDL: ") + SDL_GetError());
     frontend::ui_init(window, renderer);
@@ -547,6 +556,7 @@ int main(int argc, char **argv) {
         window = SDL_CreateWindow(session.title.empty() ? "runtime" : session.title.c_str(), w, h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_VULKAN);
         if (!window) return fail(std::string("SDL: ") + SDL_GetError());
         SDL_SetWindowPosition(window, x, y);
+        to_front(window);
     }
     Uint32 extension_count = 0;
     const char *const *extension_names = SDL_Vulkan_GetInstanceExtensions(&extension_count);
