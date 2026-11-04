@@ -22,6 +22,7 @@ add_library(recomp_runtime STATIC
     src/async_gpu.cpp
     src/decomp.cpp
     src/decomp_options.cpp
+    src/cheats.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -141,6 +142,9 @@ add_test(NAME lighting COMMAND lighting_test)
 add_executable(decomp_test tests/decomp_test.cpp)
 target_link_libraries(decomp_test PRIVATE recomp_runtime)
 add_test(NAME decomp COMMAND decomp_test)
+add_executable(cheats_test tests/cheats_test.cpp)
+target_link_libraries(cheats_test PRIVATE recomp_runtime)
+add_test(NAME cheats COMMAND cheats_test)
 add_executable(program_test tests/program_test.cpp)
 target_link_libraries(program_test PRIVATE recomp_runtime)
 add_test(NAME program COMMAND program_test)

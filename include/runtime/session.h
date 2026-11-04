@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 
+#include "runtime/cheats.h"
 #include "runtime/decomp.h"
 #include "runtime/fs.h"
 #include "runtime/loader.h"
@@ -34,6 +35,10 @@ public:
         std::string user = "user";
         // a folder with the decomp's decomp.bin and decomp.txt, or empty
         std::string decomp;
+        // the player's own changes, or empty: code.ips (Luma's: an IPS
+        // patch of code.bin) and cheats.txt (Gateway codes, as Azahar keeps
+        // them), cheats.h
+        std::string mods;
     };
     Session();
     ~Session();
@@ -53,6 +58,12 @@ public:
     std::unique_ptr<Fs> fs;
     std::unique_ptr<Decomp> decomp;
     std::unique_ptr<System> system;
+    // the mods folder's cheats, as the file has them (on or off); the
+    // player runs the ones on each frame (run_cheats)
+    std::vector<Cheat> cheats;
+    // the enabled ones run once, between two of the game's slices; the
+    // library checks the code again when one wrote into it
+    CheatRun run_cheats(const std::vector<bool> &on, uint32_t buttons);
 };
 
 } // namespace runtime

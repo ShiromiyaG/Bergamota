@@ -23,6 +23,8 @@ void ui_shutdown();
 int32_t option_value(const Settings &settings, const runtime::DecompOption &option);
 // a row for each option, as a checkbox or a slider; true when one moved
 bool option_rows(Settings &settings, const std::vector<runtime::DecompOption> &options);
+// a cheat on, as set in the menu, else as its file marks it
+bool cheat_on(const Settings &settings, const std::string &name, bool marked);
 
 // asks for the game's files and what needs a restart; true to start the
 // game, false when the window closed
@@ -47,6 +49,8 @@ public:
     std::string scene;
     // the port's options (its code's PORT_OPTIONs), in a tab of their own
     const std::vector<runtime::DecompOption> *options = nullptr;
+    // the mods folder's cheats: name, and on as its file has it
+    std::vector<std::pair<std::string, bool>> cheats;
     // the overlay wants the keyboard (the game gets none)
     bool keyboard() const;
 

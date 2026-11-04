@@ -21,7 +21,8 @@ renderer, at full speed on a desktop GPU.
 | Memory: FCRAM regions, VRAM, page tables, the memory syscalls, guards over what the GPU drew | `memory.h`, `src/memory.cpp` | done |
 | The run loop: cooperative threads on one host thread, a virtual clock for reproducible runs | `system.h`, `src/system.cpp` | done |
 | ARM/Thumb/VFPv2 interpreter, for code the C does not have | `interpreter.h` | done |
-| The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`) | `decomp.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
+| The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`), what the library lacks interpreted; the port's options (`option` lines) | `decomp.h`, `decomp_options.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
+| The player's own changes: an IPS patch of the program (`code.ips`), Gateway cheats (`cheats.txt`, Azahar's file) each frame | `cheats.h`, `src/cheats.cpp` | done; tests in `tests/` |
 | Services: srv, APT (with the shared font), cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, ptm, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h`, `shared_font.h` | what USUM and X/Y use |
 | The dumps: NCSD, NCCH, CIA (its TMD), ExeFS, RomFS, BLZ; an update laid out for 3dsrecomp | `dump.h`, `src/dump.cpp` | done |
 | Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer, AAC with FDK AAC | `audio.h`, `aac.h`, `src/audio.cpp`, `src/aac.cpp` | done |

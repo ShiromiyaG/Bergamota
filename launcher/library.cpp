@@ -209,6 +209,11 @@ fs::path update_dir(const std::string &title) {
     return dir.empty() ? dir : dir / "update";
 }
 
+fs::path mods_dir(const std::string &title) {
+    fs::path dir = game_dir(title);
+    return dir.empty() ? dir : dir / "mods";
+}
+
 fs::path user_dir() {
     fs::path dir = data_dir();
     return dir.empty() ? dir : dir / "user";
@@ -248,12 +253,16 @@ fs::path player_settings(const Config &config, std::string &error) {
     // itself; what else it had (the UI's font and art, the scenes) kept
     toml::table game;
     if (const toml::table *before = t["game"].as_table()) game = *before;
-    for (const char *key : {"game", "library", "user", "update", "decomp", "exheader", "code"}) game.erase(key);
+    for (const char *key : {"game", "library", "user", "update", "decomp", "exheader", "code", "mods"}) game.erase(key);
     game.insert("game", utf8(config.game));
     game.insert("library", utf8(library));
     game.insert("user", utf8(user_dir()));
     if (!config.update.empty()) game.insert("update", utf8(config.update));
     if (fs::path decomp = config.decomp_dir(); !decomp.empty()) game.insert("decomp", utf8(decomp));
+    // the player's own changes (code.ips, cheats.txt), beside the game's build
+    fs::path mods = mods_dir(config.title);
+    fs::create_directories(mods, ec);
+    game.insert("mods", utf8(mods));
     t.insert_or_assign("game", std::move(game));
     fs::create_directories(user_dir(), ec);
     return write_toml(path, t, error) ? path : fs::path();

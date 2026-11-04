@@ -25,6 +25,7 @@ gives the same run, and it never sleeps, so it runs as fast as the host can.
 | `RUNTIME_USAGE=file` | the service commands asked for, as Zakuro's `ZAKURO_USAGE` writes them |
 | `RUNTIME_RENDERER=native` | the runtime's Vulkan renderer; `sketch` draws wireframes of the vertex stage on the CPU instead; unset, Zakuro's |
 | `RUNTIME_DECOMP=folder` | the decomp (`decomp.bin`, `decomp.txt`, from decomp-tools' `build.py`) in place of the functions it replaces; a library built without it, or with an older one, runs what differs in the interpreter, see below |
+| `RUNTIME_MODS=folder` | the player's own changes, as the player's `mods` in `[game]`: `code.ips` laid over the program, the cheats of `cheats.txt` run each blank (the ones it marks on; `RUNTIME_CHEATS=all` runs every one), see below |
 
 Always point it at a copy of the saves: the game writes to them.
 
@@ -63,6 +64,33 @@ until the next build takes it in. Changing a port's `native/` code is
 interpreter is slower than the C: fine for wrappers called a few times a
 frame, not for a loop over every vertex). The port's launcher plays a game whose code
 changed at once and builds it again in the background.
+
+## The port's options
+
+A port's code declares what the player may turn on or off
+(`PORT_OPTION(name, default, label, help)` in Solstice's `native/port.h`,
+`PORT_OPTION_RANGE` for a number): build.py writes each as an `option`
+line of `decomp.txt`, and the player lists them in its menu's Port tab, and
+the launcher on its Graphics page, with nothing in either named after the
+option. The value is kept in the settings' `[port]` table by name and
+written into the code's `port_<name>` word, live.
+
+## The player's own changes
+
+The `mods` folder of `[game]` (the launcher's `%APPDATA%\<port>\<title>\mods`)
+takes two files, the ones Luma and Azahar take:
+
+- `code.ips`: an IPS patch of `code.bin`, laid over it as it loads.
+- `cheats.txt`: Gateway (Action Replay) codes, as Azahar keeps them
+  (`[name]`, `*citra_enabled` for the ones on, two words a line), run once a
+  frame between two of the game's slices; the menu's Cheats tab turns each on
+  or off, kept in `[cheats]`. The code types are Azahar's: writes, conditions
+  on a word or a masked halfword, the offset and the data register, a loop,
+  the buttons, a run of bytes (`src/cheats.cpp`).
+
+Neither needs the game recompiled: what they change in the code no longer
+matches the library, and runs in the interpreter (a cheat that writes code
+has the library check it again then).
 
 ## `tools/compare.py`
 

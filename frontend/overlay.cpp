@@ -54,6 +54,11 @@ bool option_rows(Settings &settings, const std::vector<runtime::DecompOption> &o
     return moved;
 }
 
+bool cheat_on(const Settings &settings, const std::string &name, bool marked) {
+    auto it = settings.cheats.find(name);
+    return it == settings.cheats.end() ? marked : it->second;
+}
+
 bool Overlay::keyboard() const { return open && ImGui::GetIO().WantCaptureKeyboard; }
 
 void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path &file, bool &changed) {
@@ -152,6 +157,16 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
         }
         if (options && !options->empty() && ImGui::BeginTabItem("Port")) {
             moved |= option_rows(s, *options);
+            ImGui::EndTabItem();
+        }
+        if (!cheats.empty() && ImGui::BeginTabItem("Cheats")) {
+            ImGui::TextDisabled("cheats.txt in the mods folder, Gateway codes as Azahar keeps them");
+            for (const auto &[name, marked] : cheats) {
+                bool on = cheat_on(s, name, marked);
+                ImGui::PushID(name.c_str());
+                if (ImGui::Checkbox(name.c_str(), &on)) s.cheats[name] = on, moved = true;
+                ImGui::PopID();
+            }
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

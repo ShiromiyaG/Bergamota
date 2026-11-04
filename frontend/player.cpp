@@ -492,7 +492,7 @@ int main(int argc, char **argv) {
     if ((g.record || SDL_getenv("RUNTIME_RECORD")) && !recorder.start(config_file, g.user, config.boot_clock_ms, error)) {
         std::fprintf(stderr, "%s\n", error.c_str());
     }
-    if (!session.open({g.exheader, g.code, g.library, g.game, g.update, g.user, g.decomp}, config, error, on_module)) return fail(error);
+    if (!session.open({g.exheader, g.code, g.library, g.game, g.update, g.user, g.decomp, g.mods}, config, error, on_module)) return fail(error);
     // the scenes, from the port's file
     frontend::Scenes scenes;
     {
@@ -619,6 +619,13 @@ int main(int argc, char **argv) {
         std::atomic<uint32_t> value;
     };
     std::deque<OptionWord> option_words;
+    // the cheats on, as the menu has them (input_lock), run each blank
+    std::vector<bool> cheats_on;
+    for (const Cheat &cheat : session.cheats) {
+        overlay.cheats.emplace_back(cheat.name, cheat.enabled);
+        cheats_on.push_back(frontend::cheat_on(settings, cheat.name, cheat.enabled));
+    }
+    uint64_t cheat_blank = ~0ull;
     // and the battle's bottom screen as the port's code reads it
     // (native/battle_ui.c: port_battle), each blank, for its UI
     frontend::BattleState battle_state;
@@ -642,6 +649,15 @@ int main(int argc, char **argv) {
                 handlers.input = input;
             }
             recorder.take(handlers.vblanks, handlers.input);
+            if (!cheats_on.empty() && handlers.vblanks != cheat_blank) {
+                cheat_blank = handlers.vblanks;
+                std::vector<bool> on;
+                {
+                    std::lock_guard g(input_lock);
+                    on = cheats_on;
+                }
+                session.run_cheats(on, handlers.input.buttons);
+            }
             if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
             for (const OptionWord &word : option_words) system.memory.write32(word.at, word.value.load());
             if (battle_at && handlers.vblanks != battle_blank) {
@@ -810,6 +826,11 @@ int main(int argc, char **argv) {
         view.smooth = settings.video.smooth;
         view.top = top_width(settings);
         top_aspect = view.top > 400 ? view.top / 240 : 0;
+        if (!cheats_on.empty()) {
+            std::lock_guard g(input_lock);
+            for (size_t i = 0; i < session.cheats.size(); i++)
+                cheats_on[i] = frontend::cheat_on(settings, session.cheats[i].name, session.cheats[i].enabled);
+        }
         if (session.decomp) {
             size_t i = 0;
             for (const runtime::DecompOption &option : session.decomp->options) {

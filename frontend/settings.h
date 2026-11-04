@@ -30,6 +30,8 @@ struct Settings {
     // the player
     struct {
         std::string exheader, code, library, game, update, user, decomp, layouts;
+        // the player's own changes: code.ips and cheats.txt (Session::Files)
+        std::string mods;
         // the font of a port's own UI (its battle UI), a .ttf; none: ui.ttf
         // beside the player, else ImGui's. ui_art: the folder of its
         // battle UI's pieces (PNG, pieces.txt); none: ui/battle beside it
@@ -90,6 +92,9 @@ struct Settings {
     // the port's own options (its code's PORT_OPTIONs, decomp.txt's option
     // lines) by name, as set; one not here has the code's default
     std::map<std::string, int64_t> port;
+    // the cheats turned on or off in the menu, by name; one not here is as
+    // its file marks it
+    std::map<std::string, bool> cheats;
 
 
     Settings(); // the default bindings

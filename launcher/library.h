@@ -62,6 +62,9 @@ fs::path game_dir(const std::string &title);
 fs::path lock_file(const std::string &title);
 fs::path build_dir(const std::string &title);
 fs::path update_dir(const std::string &title);
+// the player's own changes to a game: code.ips (an IPS patch of its
+// program) and cheats.txt (Gateway codes, as Azahar keeps them)
+fs::path mods_dir(const std::string &title);
 // the saves of all the port's games, laid out as Zakuro lays them
 fs::path user_dir();
 // the player's settings file

@@ -2,8 +2,11 @@
 
 #include "runtime/session.h"
 
+#include <cstdio>
 #include <fstream>
 #include <iterator>
+
+#include "runtime/cheats.h"
 
 namespace runtime {
 
@@ -30,6 +33,21 @@ std::vector<uint8_t> read_file(const std::string &path) {
 
 Session::Session() = default;
 
+CheatRun Session::run_cheats(const std::vector<bool> &on, uint32_t buttons) {
+    CheatRun run;
+    uint32_t text = exheader.text.address, text_end = text + exheader.text.size;
+    for (size_t i = 0; i < cheats.size() && i < on.size(); i++) {
+        if (on[i]) run_cheat(cheats[i], system->memory, buttons, text, text_end, run);
+    }
+    // a cheat that changed the code: those functions to the interpreter
+    if (run.code) {
+        if (size_t stale = library.check(0, 0, system->memory)) {
+            std::printf("cheats: %zu functions of the executable run in the interpreter\n", stale);
+        }
+    }
+    return run;
+}
+
 Session::~Session() {
     // the system first, while what its threads reach is still there
     system.reset();
@@ -53,6 +71,27 @@ bool Session::open(const Files &files, Config config, std::string &error,
     const size_t whole = size_t(exheader.text.pages + exheader.rodata.pages) * 0x1000 + exheader.data.size;
     if (exheader.compressed && code.size() < whole && !blz_decompress(code, error)) return false;
     exheader.compressed = false;
+    // the player's own changes: the program patched as it loads (what that
+    // changes runs in the interpreter, the library's check finds it), and
+    // the cheats it runs each frame
+    if (!files.mods.empty()) {
+        std::filesystem::path mods = path_of(files.mods);
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(mods / "code.ips", ec)) {
+            std::u8string ips = (mods / "code.ips").u8string();
+            if (!apply_ips(read_file(std::string(ips.begin(), ips.end())), code, error)) {
+                error = "code.ips: " + error;
+                return false;
+            }
+            std::printf("mods: code.ips laid over the program\n");
+        }
+        if (std::filesystem::is_regular_file(mods / "cheats.txt", ec)) {
+            std::u8string file = (mods / "cheats.txt").u8string();
+            std::vector<uint8_t> text = read_file(std::string(file.begin(), file.end()));
+            cheats = parse_cheats(std::string(text.begin(), text.end()));
+            std::printf("mods: %zu cheats\n", cheats.size());
+        }
+    }
     if (!files.game.empty()) title = read_title(path_of(files.game));
     std::string library_path = files.library;
     if (library_path.empty()) {

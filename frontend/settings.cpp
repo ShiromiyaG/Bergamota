@@ -77,6 +77,7 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get(t, "game", "user", s.game.user);
     get(t, "game", "decomp", s.game.decomp);
     get(t, "game", "layouts", s.game.layouts);
+    get(t, "game", "mods", s.game.mods);
     get(t, "game", "ui_font", s.game.ui_font);
     get(t, "game", "ui_art", s.game.ui_art);
     get(t, "game", "record", s.game.record);
@@ -117,6 +118,11 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
             else if (auto n = value.value<int64_t>()) s.port[std::string(key.str())] = *n;
         }
     }
+    if (auto *table = t["cheats"].as_table()) {
+        for (auto &[key, value] : *table) {
+            if (auto b = value.value<bool>()) s.cheats[std::string(key.str())] = *b;
+        }
+    }
     // the bloom's ghosting was a setting of the player's before it was the
     // port's option
     if (!s.port.count("no_ghosting")) {
@@ -126,8 +132,9 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
 }
 
 bool save(const std::filesystem::path &path, const Settings &s, std::string &error) {
-    toml::table keys, pad, port;
+    toml::table keys, pad, port, cheats;
     for (auto &[k, v] : s.port) port.insert(k, v);
+    for (auto &[k, v] : s.cheats) cheats.insert(k, v);
     for (auto &[k, v] : s.keys) keys.insert(k, v);
     for (auto &[k, v] : s.pad) pad.insert(k, v);
     toml::table t{
@@ -139,6 +146,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                              {"user", s.game.user},
                              {"decomp", s.game.decomp},
                              {"layouts", s.game.layouts},
+                             {"mods", s.game.mods},
                              {"ui_font", s.game.ui_font},
                              {"ui_art", s.game.ui_art},
                              {"record", s.game.record}}},
@@ -166,6 +174,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
         {"gamepad", pad},
         {"overlay", toml::table{{"stats", s.stats}}},
         {"port", port},
+        {"cheats", cheats},
     };
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);

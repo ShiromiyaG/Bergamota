@@ -18,7 +18,11 @@
 //                           written to peek-<name>-<blank>.bin (in RUNTIME_SHOTS, else
 //                           here) once the game reaches that vertical blank
 //   RUNTIME_DECOMP=folder   the decomp (decomp.bin, decomp.txt) in place of the
-//                           functions it replaces; the library built with it
+//                           functions it replaces (interpreted where the library
+//                           was built without it)
+//   RUNTIME_MODS=folder     the player's changes: code.ips over the program, the
+//                           cheats in cheats.txt run each blank (those it marks on;
+//                           RUNTIME_CHEATS=all: every one)
 //   RUNTIME_BETWEEN=n       frames drawn between the game's, n pictures a blank: 1 as
 //                           "60 FPS" in the player, 2 as 120 Hz (shots <frame>-<part>-shown)
 //   RUNTIME_SCALE=n         the buffers drawn n times as large each way (2.25: 1080p)
@@ -159,7 +163,8 @@ int main(int argc, char **argv) {
     // (3dsrecomp build --decomp)
     Session session;
     Session::Files files{argv[1], argv[2], argv[3], argc > 5 ? argv[5] : "", argc > 6 ? argv[6] : "",
-                         argc > 7 ? argv[7] : "user", env("RUNTIME_DECOMP") ? env("RUNTIME_DECOMP") : ""};
+                         argc > 7 ? argv[7] : "user", env("RUNTIME_DECOMP") ? env("RUNTIME_DECOMP") : "",
+                         env("RUNTIME_MODS") ? env("RUNTIME_MODS") : ""};
     std::string error;
     // the modules loaded, for the single screen's scene
     std::mutex modules_lock;
@@ -412,8 +417,16 @@ int main(int argc, char **argv) {
             p.bytes = 0;
         }
     };
+    std::vector<bool> cheats_on;
+    const bool every_cheat = env("RUNTIME_CHEATS") && std::string(env("RUNTIME_CHEATS")) == "all";
+    for (const Cheat &cheat : session.cheats) cheats_on.push_back(every_cheat || cheat.enabled);
+    uint64_t cheat_blank = ~0ull, cheat_writes = 0;
     bool went_on = system.run([&] {
         peek();
+        if (!cheats_on.empty() && handlers.vblanks != cheat_blank) {
+            cheat_blank = handlers.vblanks;
+            cheat_writes += session.run_cheats(cheats_on, handlers.input.buttons).writes;
+        }
         auto now = std::chrono::steady_clock::now();
         if (sample_count && !sampling && now >= sample_from) {
             sampling = true;
