@@ -30,7 +30,7 @@ inline void emit(std::string &out, std::format_string<Args...> format, Args &&..
 
 // recomp_abi's: the code generator's version, raised when the code it makes
 // runs much better or does more than before
-constexpr uint32_t GENERATION = 3;
+constexpr uint32_t GENERATION = 4;
 // an entry's owner when code written by hand runs it
 constexpr uint32_t NO_ORIGIN = UINT32_MAX;
 // the start a stale function gets, which nothing starts at

@@ -403,10 +403,11 @@ Line scan(std::string_view line, Set &used, Blocks &blocks) {
             }
         }
         bool guarded = blocks.guarded();
-        if (name == "CALL" || name == "INTERPRET") {
+        // interface 6's svc is a call that comes back, as CALL is
+        if (name == "CALL" || name == "INTERPRET" || name == "SVC") {
             push(Event::Sync, guarded);
         } else if (name == "RETURN" || name == "RETURN_TO" || name == "RETURN_TO_A" || name == "RETURN_TO_T" ||
-                   name == "SVC") {
+                   name == "JUMP_AWAY" || name == "TAIL_CALL") {
             push(Event::Leave, guarded);
         } else if (name == "JUMP_TO") {
             push(Event::Dispatch, guarded);

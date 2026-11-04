@@ -71,6 +71,8 @@ bool body(std::string &out, const Scope &scope, uint32_t a, uint32_t op) {
     case 0b111:
         if ((op & (1u << 24)) != 0) {
             emit(out, "    SVC({}, 0x{:X}u);", scope.at(a + 4), op & 0x00FFFFFF);
+            // interface 6: the thread waits in it, then goes on
+            return true;
             return false;
         }
         if ((op & 0x10) != 0 && (((op >> 8) & 0xF) == 10 || ((op >> 8) & 0xF) == 11)) {

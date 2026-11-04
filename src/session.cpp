@@ -120,6 +120,7 @@ bool Session::open(const Files &files, Config config, std::string &error,
         if (!read_decomp(files.decomp, *decomp, error)) return false;
     }
     open_session = this;
+    config.fibers = library.abi() >= 6;
     system = std::make_unique<System>(config, lookup, serve);
     system->set_redirect(redirect);
     services->on_module = [this, on_module](const std::string &name, uint32_t base) {

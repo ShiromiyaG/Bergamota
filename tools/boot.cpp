@@ -567,6 +567,7 @@ int main(int argc, char **argv) {
                     (unsigned long long)sketch->shaded(), (unsigned long long)sketch->skipped);
     }
     std::printf("interpreted %llu instructions where the C had nothing\n", (unsigned long long)system.interpreted);
+    if (system.unwinds) std::printf("unwound %llu times (interface 6)\n", (unsigned long long)system.unwinds);
     {
         std::vector<std::pair<uint64_t, uint32_t>> top;
         for (auto [at, n] : system.interpreted_at) top.push_back({n, at});

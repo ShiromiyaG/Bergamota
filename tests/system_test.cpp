@@ -97,6 +97,71 @@ Code lookup(uint32_t address) {
     }
 }
 
+// interface 6: each thread's code one function, the syscalls calls that
+// come back to it (the thread waiting inside them on a fiber of its own)
+void main_v6(Context *ctx) {
+    ctx->r[0] = 3; // ControlMemory: allocate
+    ctx->r[1] = WORD;
+    ctx->r[2] = 0;
+    ctx->r[3] = 0x1000;
+    ctx->r[4] = 3;
+    ctx->host->svc(ctx, 0x01);
+    ctx->r[0] = 0;
+    ctx->host->svc(ctx, 0x21); // CreateAddressArbiter
+    mem_write32(ctx, ARBITER, ctx->r[1]);
+    ctx->r[0] = 0x31; // priority, below the main thread's
+    ctx->r[1] = 0x100100;
+    ctx->r[2] = 0;
+    ctx->r[3] = 0x08000800;
+    ctx->r[4] = 0;
+    ctx->host->svc(ctx, 0x08); // CreateThread
+    // waits while the word is below 1, here, until the other thread wakes it
+    ctx->r[0] = mem_read32(ctx, ARBITER);
+    ctx->r[1] = WORD;
+    ctx->r[2] = 1;
+    ctx->r[3] = 1;
+    ctx->host->svc(ctx, 0x22);
+    mem_write32(ctx, WORD + 8, 0xC0DE);
+    ctx->host->svc(ctx, 0x03); // ExitProcess, which never comes back
+}
+
+void other_v6(Context *ctx) {
+    // a while on its own, the budget spent twice over
+    for (int i = 0; i < 3; i++) {
+        ctx->budget = -1;
+        ctx->host->yield(ctx);
+    }
+    mem_write32(ctx, WORD, 1);
+    ctx->r[0] = mem_read32(ctx, ARBITER);
+    ctx->r[1] = WORD;
+    ctx->r[2] = 0; // Signal
+    ctx->r[3] = 1;
+    ctx->host->svc(ctx, 0x22);
+    ctx->r[15] = THREAD_EXIT; // returns from its entry: the thread ends
+}
+
+Code lookup_v6(uint32_t address) {
+    switch (address) {
+    case 0x100000: return main_v6;
+    case 0x100100: return other_v6;
+    default: return nullptr;
+    }
+}
+
+void two_threads_meet_on_fibers() {
+    Config config;
+    config.fibers = true;
+    System system(config, lookup_v6, nullptr);
+    system.start(0x100000, 0x10000000, 0x30);
+    int steps = 0;
+    system.run([&] { return ++steps > 1000; });
+    CHECK(system.kernel.exited());
+    CHECK(system.memory.read32(WORD) == 1);
+    CHECK(system.memory.read32(WORD + 8) == 0xC0DE);
+    CHECK(system.memory.faults().empty());
+    CHECK(steps < 40);
+}
+
 void two_threads_meet() {
     Config config;
     System system(config, lookup, nullptr);
@@ -127,6 +192,7 @@ void memory_layout() {
 
 int main() {
     two_threads_meet();
+    two_threads_meet_on_fibers();
     memory_layout();
     std::printf(failures ? "%d failure(s)\n" : "system: all passed\n", failures);
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define RECOMP_ABI 5
+#define RECOMP_ABI 6
 
 typedef struct Context Context;
 typedef void (*Code)(Context *);
@@ -30,6 +30,16 @@ typedef struct Host {
        it cannot go on there, a system call that would block, and the C has
        to return to the host then. */
     void (*run)(Context *, uint32_t stop);
+    /* interface 6: the code runs on a stack of its thread's own, and these
+       come back where they were, the thread having waited in them when it
+       had to. the system call number (r15 after the svc); the end of the
+       budget, other threads run and the budget is given again; the guest
+       code at r15 the C has no function for (or a stale one's), run until
+       it returns to stop (an address, bit 0 set for Thumb) with the stack
+       at sp. an unwind sets exit, and the C returns then. */
+    void (*svc)(Context *, uint32_t number);
+    void (*yield)(Context *);
+    void (*call)(Context *, uint32_t stop, uint32_t sp);
 } Host;
 
 /* why the code gave control back to the host. */
@@ -686,16 +696,63 @@ static inline void recomp_call_guest(Context *ctx, uint32_t address) {
 static inline void recomp_call(Context *ctx) {
     Code code = ctx->host->lookup(ctx, ctx->r[15] | ctx->thumb);
     if (code) code(ctx);
-    else ctx->exit = EXIT_UNWIND;
+    else ctx->host->call(ctx, ctx->r[14], ctx->r[13]);
 }
 
 /* after a call, anything but a plain return to the next instruction goes
    through dispatch. */
 #define RETURNED(address) \
-    if (UNLIKELY(ctx->r[15] != (address) || ctx->thumb)) { target = ctx->r[15]; goto dispatch; }
+    if (UNLIKELY(ctx->r[15] != (address) || ctx->thumb)) RETURNED_ELSEWHERE()
 
 #define RETURNED_T(address) \
-    if (UNLIKELY(ctx->r[15] != (address) || !ctx->thumb)) { target = ctx->r[15]; goto dispatch; }
+    if (UNLIKELY(ctx->r[15] != (address) || !ctx->thumb)) RETURNED_ELSEWHERE()
+
+/* interface 6: a call that came back somewhere else. to where this function
+   returns, its stack as it came in (a callee that ends its caller's frame
+   too, as a shared epilogue does): it has returned, and so does this one;
+   anywhere else the C frames go (an unwind), and the thread goes on there
+   in the interpreter */
+#define RETURNED_ELSEWHERE() do { \
+    if ((ctx->r[15] | ctx->thumb) == enter_lr_ && ctx->r[13] == enter_sp_) return; \
+    ctx->exit = EXIT_UNWIND; \
+    return; \
+} while (0)
+
+/* interface 6: a tail call that leaves no C frame behind, so that code
+   going round through tail calls (a state machine, a loop of thunks) keeps
+   to the stack, as the guest's does. compilers without musttail make it a
+   call */
+#if defined(__has_attribute)
+#if __has_attribute(musttail)
+#define RECOMP_MUSTTAIL __attribute__((musttail))
+#endif
+#endif
+#ifdef RECOMP_MUSTTAIL
+#define TAIL_CALL(code) do { \
+    SYNC_OUT(); \
+    RECOMP_MUSTTAIL return code(ctx); \
+} while (0)
+#else
+#define TAIL_CALL(code) do { \
+    SYNC_OUT(); \
+    code(ctx); \
+    return; \
+} while (0)
+#endif
+
+/* interface 6: a jump the code cannot follow. to a function there is C
+   for, a tail call; anywhere else the host runs the rest until the function
+   returns to lr with the stack at sp, where it was entered */
+static inline void recomp_jump_away(Context *ctx, uint32_t lr, uint32_t sp) {
+    ctx->host->call(ctx, lr, sp);
+}
+#define JUMP_AWAY(lr, sp) do { \
+    SYNC_OUT(); \
+    Code away_ = ctx->host->lookup(ctx, ctx->r[15] | ctx->thumb); \
+    if (away_) TAIL_CALL(away_); \
+    recomp_jump_away(ctx, (lr), (sp)); \
+    return; \
+} while (0)
 
 /* a return that may switch to Thumb. */
 #define RETURN_TO(value) do { \
@@ -738,28 +795,32 @@ static inline void recomp_call(Context *ctx) {
    with the registers. */
 #define BUDGET_LEFT ctx->budget
 
-/* charges count instructions to the budget, and when they do not fit,
-   leaves for the host to come back at address. code written by hand can use
-   it as it is. */
+/* charges count instructions to the budget, and when it is spent lets
+   the other threads run (interface 6: on the thread's own stack, coming
+   back here), at address. code written by hand can use it as it is. */
 #define BUDGET(address, count) \
     if (UNLIKELY((BUDGET_LEFT -= (count)) < 0)) { \
-        BUDGET_LEFT += (count); \
         SYNC_OUT(); \
         ctx->r[15] = (address); \
-        ctx->exit = EXIT_BUDGET; \
-        return; \
+        ctx->host->yield(ctx); \
+        SYNC_IN(); \
+        BUDGET_LEFT = ctx->budget; \
     }
 
-/* the same at the start of each block of generated code, where the blocks
-   that stop share ways out at the end of the function, with resume where
-   to go on from. each way out stores what its blocks need, and BLOCK goes
-   to the one that stores everything. */
+/* the same where a generated function's loops start, and where it does.
+   the registers stay in its locals: nothing looks at them while the thread
+   waits its turn. way and OUT_OF_BUDGET_AT are interface 5's ways out, no
+   longer taken */
 #define BLOCK_TO(address, count, way) \
     if (UNLIKELY((BUDGET_LEFT -= (count)) < 0)) { \
-        BUDGET_LEFT += (count); \
-        resume = (address); \
-        goto way; \
+        ctx->budget = BUDGET_LEFT; \
+        ctx->r[15] = (address); \
+        ctx->host->yield(ctx); \
+        BUDGET_LEFT = ctx->budget; \
     }
+
+/* interface 6: a block that only counts, the loops and the start looking */
+#define BLOCK_COUNT(count) (BUDGET_LEFT -= (count))
 
 #define BLOCK(address, count) BLOCK_TO(address, count, out_of_budget)
 
@@ -776,8 +837,9 @@ static inline void recomp_call(Context *ctx) {
     SYNC_OUT(); \
     ctx->r[15] = (next); \
     ctx->svc = (number); \
-    ctx->exit = EXIT_SVC; \
-    return; \
+    ctx->host->svc(ctx, (number)); \
+    if (UNLIKELY(ctx->exit)) return; \
+    SYNC_IN(); \
 } while (0)
 
 #define INTERPRET(address, opcode) do { \
@@ -792,7 +854,7 @@ static inline void recomp_call(Context *ctx) {
    was entered at, which r15 holds, for the host to run some other way. its
    registers only went into locals, nothing has to be put back. */
 #define STALE_CHECK(flag) \
-    if (UNLIKELY(flag)) { ctx->exit = EXIT_UNWIND; return; }
+    if (UNLIKELY(flag)) { ctx->host->call(ctx, ctx->r[14], ctx->r[13]); return; }
 
 /* a function written by hand to run instead of the one at address, odd for
    Thumb, or at an offset in a module. see docs/overrides.md. */

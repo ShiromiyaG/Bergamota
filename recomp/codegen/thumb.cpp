@@ -395,7 +395,7 @@ bool block_transfer(std::string &out, uint32_t op) {
 bool conditional_branch(std::string &out, const Scope &scope, uint32_t a, uint32_t op) {
     uint32_t condition = (op >> 8) & 0xF;
     switch (condition) {
-    case 0xF: emit(out, "    SVC({}, 0x{:X}u);", scope.at(a + 2), op & 0xFF); return false;
+    case 0xF: emit(out, "    SVC({}, 0x{:X}u);", scope.at(a + 2), op & 0xFF); return true; // interface 6: the thread waits in it, then goes on
     case 0xE: return interpret(out, scope, a, op);
     default: {
         uint32_t target = (a + 4) + (sign_extend(op & 0xFF, 8) << 1);

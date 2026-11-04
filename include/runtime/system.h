@@ -1,9 +1,12 @@
 // The system: the kernel, the memory and the services together, and the
 // loop that runs the games' code. The code is C (3dsrecomp's, with the
 // decomp's in place of what it has): a function per guest address, found
-// through a lookup the port gives, that runs until a syscall, the end of
-// its time slice or a jump it cannot follow, and comes back with the
-// reason in Context::exit.
+// through a lookup the port gives. Interface 5's runs until a syscall, the
+// end of its time slice or a jump it cannot follow, and comes back with the
+// reason in Context::exit. Interface 6's runs on a fiber of its thread's
+// own and calls the system as it goes: a syscall, the end of its slice and
+// code it has no C for are calls that switch back here and come back where
+// they were (Config::fibers).
 
 #ifndef RUNTIME_SYSTEM_H
 #define RUNTIME_SYSTEM_H
@@ -13,6 +16,11 @@
 #include <map>
 #include <string>
 
+#include <memory>
+#include <unordered_map>
+#include <vector>
+
+#include "runtime/fiber.h"
 #include "runtime/kernel.h"
 #include "runtime/memory.h"
 
@@ -37,6 +45,9 @@ struct Config {
     // time as the code runs, a tick an instruction, as Zakuro counts it: a
     // run plays out the same each time, and never sleeps (for comparing)
     bool virtual_clock = false;
+    // interface 6's code: each thread on a fiber of its own (the session
+    // sets it from the library)
+    bool fibers = false;
 };
 
 class System : private Hooks, private Clock {
@@ -60,6 +71,8 @@ public:
     // the time, in CPU ticks: the host's clock since boot, or the virtual one
     uint64_t ticks() override;
 
+    const Config &config() const { return config_; }
+
     // why run() could not go on, when it could not
     const std::string &error() const { return error_; }
 
@@ -71,8 +84,21 @@ public:
     // runs a context's code from r15 in the interpreter, up to an address
     // the C has, a syscall or a slice's end; false when it cannot go on
     bool interpret(Context &c);
+
+    // interface 6, from the code on its thread's fiber: a syscall (the
+    // thread waiting in it when it waits), the end of a slice (other
+    // threads run), code without C run until it returns to stop (an
+    // address, odd for Thumb) with the stack at sp, and one instruction
+    void guest_svc(Context &c, uint32_t number);
+    void guest_yield(Context &c);
+    void guest_call(Context &c, uint32_t stop, uint32_t sp);
+    void guest_interpret(Context &c, uint32_t address);
     // instructions the interpreter ran, where the C had nothing
     uint64_t interpreted = 0;
+    // interface 6: the times the code unwound to its thread's loop (a call
+    // that came back elsewhere, calls too deep): the rest of the callers
+    // then run in the interpreter
+    uint64_t unwinds = 0;
     // time the host slept, every thread waiting, in seconds
     double idle = 0;
     // where the host's time went, in seconds: the game's code, the
@@ -94,6 +120,23 @@ private:
     uint32_t allocate_tls() override;
     void free_tls(uint32_t address) override { free_tls_.push_back(address); }
     void prepare(Context &context) override;
+
+    // a thread's fiber: the code from r15, again and again, until it ends
+    [[noreturn]] void thread_body(ThreadId id);
+    // the interpreter on a thread's fiber, from r15 to an address the C
+    // has, or to stop with the stack at sp (stop ~0: none): syscalls made
+    // there and then, the slice's end a yield; false when it cannot go on
+    bool interpret_here(Context &c, uint32_t stop, uint32_t sp);
+    // back to the loop from the fiber running now, why given
+    enum class Back { Yield, Svc, Ended, Failed };
+    void back(Back why);
+    bool run_fibers(const std::function<bool()> &stop);
+
+    std::unique_ptr<Fiber> main_fiber_;
+    std::unordered_map<ThreadId, std::unique_ptr<Fiber>> fibers_;
+    Fiber *running_ = nullptr; // the fiber switched to last
+    Back back_ = Back::Yield;
+    double svc_time_ = 0; // of the fiber's turn, taken off the code's
 
     Config config_;
     Lookup lookup_;

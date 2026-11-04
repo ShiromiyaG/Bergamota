@@ -25,6 +25,7 @@ gives the same run, and it never sleeps, so it runs as fast as the host can.
 | `RUNTIME_USAGE=file` | the service commands asked for, as Zakuro's `ZAKURO_USAGE` writes them |
 | `RUNTIME_RENDERER=native` | the runtime's Vulkan renderer; `sketch` draws wireframes of the vertex stage on the CPU instead; unset, Zakuro's |
 | `RUNTIME_DECOMP=folder` | the decomp (`decomp.bin`, `decomp.txt`, from decomp-tools' `build.py`) in place of the functions it replaces; a library built without it, or with an older one, runs what differs in the interpreter, see below |
+| `RUNTIME_TRACE_UNWIND=1` | interface 6: where the code unwound to its thread's loop, and the host's runs that came back with the stack elsewhere (the first few) |
 | `RUNTIME_MODS=folder` | the player's own changes, as the player's `mods` in `[game]`: `code.ips` laid over the program, the cheats of `cheats.txt` run each blank (the ones it marks on; `RUNTIME_CHEATS=all` runs every one), see below |
 
 Always point it at a copy of the saves: the game writes to them.

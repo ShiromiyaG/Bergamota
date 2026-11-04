@@ -86,8 +86,8 @@ bool jump(std::string &out, const Scope &scope, uint32_t target, bool thumb) {
     if (scope.labels.contains(target)) {
         emit(out, "    goto L_{:08X};", target);
     } else if (const std::string *name = scope.function(target, thumb)) {
-        // a tail call
-        emit(out, "    ctx->r[15] = {}; CALL({}); RETURN();", scope.at(target), *name);
+        // a tail call, which interface 6 makes one in C too
+        emit(out, "    ctx->r[15] = {}; TAIL_CALL({});", scope.at(target), *name);
     } else {
         emit(out, "    target = {}; goto dispatch;", scope.at(target));
     }
@@ -305,13 +305,40 @@ void write_origins(std::string &tables, std::string &origins, const std::string 
          count, pieces.size(), prefix, prefix, prefix, prefix, prefix, prefix);
 }
 
-// what a function does, between its braces.
+// the labels a branch comes back to from at or after them: where the
+// function's loops start, where interface 6's code counts its budget and
+// lets the other threads run once it is spent (every cycle has such a
+// branch, falling through only ever goes on)
+std::set<uint32_t> loop_starts(const Program &program, const Function &function) {
+    std::set<uint32_t> out;
+    for (uint32_t address : function.instructions) {
+        Instruction instruction;
+        if (function.mode == Mode::Thumb) {
+            uint16_t op = program.text.read16(address).value_or(0);
+            std::optional<uint16_t> second = program.text.read16(address + 2);
+            instruction = recomp::thumb::decode(op, second, address).first;
+        } else {
+            instruction = recomp::arm::decode(program.text.read32(address).value_or(0), address);
+        }
+        if (instruction.flow.kind != Flow::Branch || instruction.flow.link) continue;
+        uint32_t target = instruction.flow.target;
+        if (target <= address && function.labels.contains(target)) out.insert(target);
+    }
+    return out;
+}
+
+// what a function does, between its braces. inner: the entries of the
+// functions it holds that have no C function of their own, which calls
+// reach through its dispatch
 void write_body(std::string &out, const Program &program, const Scope &scope, uint32_t entry,
-                const Function &function, size_t number) {
+                const Function &function, size_t number, const std::set<uint32_t> &inner) {
     bool thumb = function.mode == Mode::Thumb;
     const char *state = thumb ? "ctx->thumb" : "!ctx->thumb";
     if (scope.relative) emit(out, "    const uint32_t module_base = {}base;", scope.prefix);
     emit(out, "    uint32_t target = ctx->r[15], resume = 0;");
+    // where the function returns to, and its stack then: a jump the code
+    // cannot follow has the host run the rest until it gets there
+    emit(out, "    const uint32_t enter_lr_ = ctx->r[14], enter_sp_ = ctx->r[13];");
     // a function is only ever entered in its own state, callers and the
     // host's lookups see to that, so the entry needs no look at thumb
     // its start comes from memory, where the host puts an address nothing
@@ -326,21 +353,33 @@ void write_body(std::string &out, const Program &program, const Scope &scope, ui
     emit(out, "dispatch:");
     const char *offset = scope.relative ? "target - module_base" : "target";
     emit(out, "    if ({}) switch ({}) {{", state, offset);
-    for (uint32_t label : function.labels) emit(out, "    case 0x{:08X}u: goto L_{:08X};", label, label);
+    // interface 6 never enters a function partway: only the labels an
+    // address the code computes leads to, a table's, and the functions it
+    // holds
+    std::set<uint32_t> dispatched = function.tables;
+    dispatched.insert(inner.begin(), inner.end());
+    dispatched.insert(entry);
+    for (uint32_t label : dispatched) {
+        if (function.labels.contains(label)) emit(out, "    case 0x{:08X}u: goto L_{:08X};", label, label);
+    }
     emit(out, "    }}");
-    // somewhere else, the host knows where
+    // somewhere else: the host runs it until the function would have
+    // returned
     emit(out, "    ctx->r[15] = target;");
-    emit(out, "    CALL(recomp_call);");
-    emit(out, "    RETURN();");
+    emit(out, "    JUMP_AWAY(enter_lr_, enter_sp_);");
 
     const std::vector<uint32_t> &instructions = function.instructions;
+    std::set<uint32_t> loops = loop_starts(program, function);
     for (size_t i = 0; i < instructions.size(); i++) {
         uint32_t address = instructions[i];
         if (function.labels.contains(address)) {
             size_t run = 1;
             for (size_t j = i + 1; j < instructions.size() && !function.labels.contains(instructions[j]); j++) run++;
             emit(out, "L_{:08X}:", address);
-            emit(out, "    BLOCK({}, {});", scope.at(address), run);
+            // the budget looked at where loops start and where the function
+            // does, counted everywhere else
+            if (address == entry || loops.contains(address)) emit(out, "    BLOCK({}, {});", scope.at(address), run);
+            else emit(out, "    BLOCK_COUNT({});", run);
         }
         bool continues;
         uint32_t size;
@@ -358,7 +397,8 @@ void write_body(std::string &out, const Program &program, const Scope &scope, ui
         }
         uint32_t next = address + size;
         if (continues && !(i + 1 < instructions.size() && instructions[i + 1] == next)) {
-            emit(out, "    target = {}; goto dispatch;", scope.at(next));
+            if (function.labels.contains(next)) emit(out, "    goto L_{:08X};", next);
+            else emit(out, "    target = {}; goto dispatch;", scope.at(next));
         }
     }
     emit(out, "    OUT_OF_BUDGET();");
@@ -366,11 +406,12 @@ void write_body(std::string &out, const Program &program, const Scope &scope, ui
 
 // a function, the number-th of its unit.
 void write_function(std::string &out, const Program &program, const Scope &scope, uint32_t entry,
-                    const Function &function, size_t number) {
+                    const Function &function, size_t number,
+                    const std::set<uint32_t> &inner) {
     bool thumb = function.mode == Mode::Thumb;
     emit(out, "void {}(Context *ctx) {{", name(scope.prefix, entry, thumb));
     std::string body;
-    write_body(body, program, scope, entry, function, number);
+    write_body(body, program, scope, entry, function, number, inner);
     out += locals::keep(body);
     emit(out, "}}");
     out += locals::RESET;
@@ -435,6 +476,9 @@ std::vector<std::pair<std::string, std::string>> generate(const std::vector<Unit
             names.insert_or_assign(key(entry, f->mode), name(prefix, home, f->mode == Mode::Thumb));
         }
         std::erase_if(functions, [&](const auto &item) { return containers.contains(item.first); });
+        // what each function holds that has no C function of its own
+        std::map<uint32_t, std::set<uint32_t>> inner;
+        for (auto &[entry, home] : containers) inner[home].insert(entry);
 
         // calls go to the functions written by hand, which reach the
         // generated ones through a function that enters them where they
@@ -487,8 +531,6 @@ std::vector<std::pair<std::string, std::string>> generate(const std::vector<Unit
         // part of it; and how far each stretch's last part has got
         std::map<std::tuple<bool, uint32_t, uint32_t>, std::string> files_of;
         std::map<std::pair<bool, uint32_t>, std::pair<uint32_t, size_t>> filled;
-        // each function's labels with those after what it interprets
-        std::map<uint32_t, std::set<uint32_t>> resumed;
         bool relative = unit.module.has_value();
         for (auto &[entry, function] : functions) {
             size_t number = numbers.at(entry);
@@ -501,26 +543,14 @@ std::vector<std::pair<std::string, std::string>> generate(const std::vector<Unit
             if (source == files_of.end()) {
                 source = files_of.emplace(std::tuple(is_hot, stretch, part.first), "#include \"recomp.h\"\n" + include).first;
             }
-            // written once to see what goes to the interpreter, the code
-            // can stop after any of those, and then again with a label
-            // after each, where the host comes back in. the first time
-            // only needs the lowering, not what locals::keep makes of it
+            // interface 6: nothing comes back in after what the interpreter
+            // runs, the code goes on (or unwinds), so no labels after it
             std::vector<uint32_t> interpreted;
-            {
-                Scope scope{function->labels, names, prefix, relative, interpreted};
-                std::string scratch;
-                write_body(scratch, program, scope, entry, *function, number);
-            }
-            Function resumable = *function;
-            for (uint32_t address : std::exchange(interpreted, {})) {
-                auto at = std::find(function->instructions.begin(), function->instructions.end(), address);
-                if (at != function->instructions.end() && at + 1 != function->instructions.end()) {
-                    resumable.labels.insert(*(at + 1));
-                }
-            }
-            Scope scope{resumable.labels, names, prefix, relative, interpreted};
-            write_function(source->second, program, scope, entry, resumable, number);
-            resumed.insert_or_assign(entry, std::move(resumable.labels));
+            static const std::set<uint32_t> none;
+            auto held = inner.find(entry);
+            Scope scope{function->labels, names, prefix, relative, interpreted};
+            write_function(source->second, program, scope, entry, *function, number,
+                           held != inner.end() ? held->second : none);
         }
         // each program's code in files of its own, named after it and the
         // stretch, so that functions found in one leave the others' as they
@@ -533,17 +563,15 @@ std::vector<std::pair<std::string, std::string>> generate(const std::vector<Unit
             sources.emplace_back(std::move(name), std::move(source));
         }
 
-        // every label the host can resume at, preferring the function that
-        // starts there
+        // where the host enters the code (interface 6: only where functions
+        // start, the ones held inside another through it)
         std::map<uint32_t, std::pair<std::string, uint32_t>> entries;
         for (auto &[entry, function] : functions) {
             std::pair<std::string, uint32_t> owner(name(prefix, entry, function->mode == Mode::Thumb), numbers.at(entry));
-            auto found = resumed.find(entry);
-            const std::set<uint32_t> &labels = found != resumed.end() ? found->second : function->labels;
-            for (uint32_t label : labels) {
-                auto slot = entries.try_emplace(key(label, function->mode), owner).first;
-                if (label == entry) slot->second = owner;
-            }
+            entries.insert_or_assign(key(entry, function->mode), owner);
+            auto held = inner.find(entry);
+            if (held == inner.end()) continue;
+            for (uint32_t label : held->second) entries.try_emplace(key(label, function->mode), owner);
         }
         for (const Override *item : replaced) entries.insert_or_assign(item->address, std::pair(item->name, NO_ORIGIN));
         tables += include;

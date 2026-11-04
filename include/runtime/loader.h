@@ -77,6 +77,8 @@ public:
     size_t check(size_t unit, uint32_t base, Memory &memory);
     bool has_module(const std::string &name) const;
     bool has_origins() const { return origins_ != nullptr; }
+    // the interface the code was made for: 5, or 6 (each thread on a fiber)
+    uint32_t abi() const { return abi_; }
     uint64_t program_id() const { return program_id_; }
     size_t entry_count() const { return count_; }
     // every function's host code and its name (0x00123456, or a module's
@@ -91,6 +93,7 @@ private:
     };
     bool stale(size_t unit, size_t entry) const;
     uint64_t program_id_ = 0;
+    uint32_t abi_ = RECOMP_ABI;
     const Entry *entries_ = nullptr;
     size_t count_ = 0;
     const Module *modules_ = nullptr;

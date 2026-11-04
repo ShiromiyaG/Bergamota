@@ -100,11 +100,13 @@ bool Library::open(const std::string &path, std::string &error) {
         error = path + " is not code 3dsrecomp made";
         return false;
     }
-    if (*abi != RECOMP_ABI) {
-        error = path + " was made for interface " + std::to_string(*abi) + ", the runtime speaks " +
+    // interface 5 runs as it did, 6 with each thread on a fiber of its own
+    if (*abi != RECOMP_ABI && *abi != 5) {
+        error = path + " was made for interface " + std::to_string(*abi) + ", the runtime speaks 5 and " +
                 std::to_string(RECOMP_ABI) + ": recompile the game";
         return false;
     }
+    abi_ = *abi;
     program_id_ = program ? *program : 0;
     count_ = *count;
     module_count_ = modules ? *modules : 0;

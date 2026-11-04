@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 #ifdef _WIN32
@@ -32,6 +33,10 @@ void host_write32(Context *c, uint32_t a, uint32_t v) { system_of(c).memory.cpu_
 // one it cannot run leaves the C for the main loop
 void host_interpret(Context *c, uint32_t address, uint32_t) {
     System &s = system_of(c);
+    if (s.config().fibers) {
+        s.guest_interpret(*c, address);
+        return;
+    }
     Cpu cpu;
     load(*c, cpu);
     cpu.regs[15] = address;
@@ -70,8 +75,18 @@ System::System(const Config &config, Lookup lookup, ServiceHandler services)
     // C calling into the guest (recomp_call_guest, CALL_WHOLE): the code
     // runs on to the stop address on the same thread; a syscall that blocks
     // cannot be waited for there, and leaves it to the main loop
+    // interface 6: on the thread's own fiber, calls that wait when they wait
+    host_.svc = [](Context *c, uint32_t number) { system_of(c).guest_svc(*c, number); };
+    host_.yield = [](Context *c) { system_of(c).guest_yield(*c); };
+    host_.call = [](Context *c, uint32_t stop, uint32_t sp) { system_of(c).guest_call(*c, stop, sp); };
     host_.run = [](Context *c, uint32_t stop) {
         System &s = system_of(c);
+        // interface 6: on the thread's fiber, where a syscall may wait
+        if (s.config().fibers) {
+            s.guest_call(*c, stop & ~1u, ~0u);
+            if (!c->exit) c->exit = EXIT_NONE;
+            return;
+        }
         while (!(c->r[15] == stop && !c->thumb)) {
             Code code = s.find(*c);
             c->exit = EXIT_NONE;
@@ -198,7 +213,198 @@ bool System::interpret(Context &c) {
     return true;
 }
 
+void System::back(Back why) {
+    back_ = why;
+    main_fiber_->switch_from(*running_);
+}
+
+void System::guest_svc(Context &c, uint32_t number) {
+    c.svc = number;
+    auto before = std::chrono::steady_clock::now();
+    kernel.syscall(number);
+    double spent = std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
+    profile.syscalls += spent;
+    profile.by_svc[number & 0xFF] += spent;
+    profile.svcs++;
+    svc_time_ += spent;
+    // the scheduler looks again after every syscall, as with interface 5;
+    // the thread comes back here when it runs again (an ended one never)
+    Thread *self = kernel.current();
+    back(!self || self->status == ThreadStatus::Dead ? Back::Ended : Back::Svc);
+}
+
+void System::guest_yield(Context &) { back(Back::Yield); }
+
+void System::guest_interpret(Context &c, uint32_t address) {
+    Cpu cpu;
+    load(c, cpu);
+    cpu.regs[15] = address;
+    Exit exit = step(cpu, memory);
+    store(cpu, c);
+    interpreted++;
+    uint32_t next = address + (c.thumb ? 2 : 4);
+    if (exit.kind == Exit::Supervisor) {
+        guest_svc(c, exit.value);
+    } else if (exit.kind != Exit::None || c.r[15] != next) {
+        // a branch: the code goes on from r15 (its dispatch, else the host)
+        c.exit = EXIT_UNWIND;
+    }
+}
+
+bool System::interpret_here(Context &c, uint32_t stop, uint32_t sp) {
+    Cpu cpu;
+    load(c, cpu);
+    interpreted_at[c.r[15] | c.thumb]++;
+    for (;;) {
+        Exit exit = step(cpu, memory);
+        interpreted++;
+        c.budget--;
+        if (exit.kind == Exit::Supervisor) {
+            store(cpu, c);
+            guest_svc(c, exit.value);
+            load(c, cpu);
+        } else if (exit.kind != Exit::None) {
+            store(cpu, c);
+            char text[96];
+            std::snprintf(text, sizeof text, "the instruction 0x%08X at 0x%08X cannot run", exit.value,
+                          cpu.regs[15] | cpu.cpsr.thumb);
+            error_ = text;
+            return false;
+        }
+        uint32_t at = cpu.regs[15] | cpu.cpsr.thumb;
+        if ((at == stop && (sp == ~0u || cpu.regs[13] == sp)) || lookup_(at) || (cpu.regs[15] == THREAD_EXIT && !cpu.cpsr.thumb)) {
+            store(cpu, c);
+            return true;
+        }
+        if (c.budget <= 0) {
+            store(cpu, c);
+            guest_yield(c);
+            load(c, cpu);
+        }
+    }
+}
+
+void System::guest_call(Context &c, uint32_t stop, uint32_t sp) {
+    // as deep as the code's own calls go, then an unwind
+    if (++c.depth > RECOMP_DEPTH_LIMIT) {
+        c.depth--;
+        c.exit = EXIT_UNWIND;
+        unwinds++;
+        return;
+    }
+    struct Leave {
+        Context &c;
+        ~Leave() { c.depth--; }
+    } leave{c};
+    for (;;) {
+        if ((c.r[15] | c.thumb) == stop && (sp == ~0u || c.r[13] == sp)) return;
+        static const bool trace = std::getenv("RUNTIME_TRACE_UNWIND") != nullptr;
+        static int traced = 0;
+        if (trace && (c.r[15] | c.thumb) == stop && traced++ < 20)
+            std::fprintf(stderr, "call: back at 0x%08X with sp 0x%08X, not 0x%08X\n", stop, c.r[13], sp);
+        Code code = find(c);
+        c.exit = EXIT_NONE;
+        if (code) {
+            code(&c);
+            // an unwind goes on up to the thread's own loop
+            if (c.exit == EXIT_UNWIND) return;
+        } else if (!interpret_here(c, stop, sp)) {
+            back(Back::Failed);
+        }
+    }
+}
+
+void System::thread_body(ThreadId id) {
+    Context &c = kernel.thread(id).context;
+    for (;;) {
+        if (c.r[15] == THREAD_EXIT && !c.thumb) guest_svc(c, 0x09); // the thread returned from its entry
+        Code code = find(c);
+        c.exit = EXIT_NONE;
+        c.depth = 0;
+        if (code) {
+            code(&c);
+            profile.slices++;
+            if (c.exit == EXIT_UNWIND) unwinds++;
+            static const bool trace = std::getenv("RUNTIME_TRACE_UNWIND") != nullptr;
+            static int traced = 0;
+            if (trace && c.exit == EXIT_UNWIND && traced++ < 40)
+                std::fprintf(stderr, "unwind: thread %u at 0x%08X%s, lr 0x%08X, depth %u\n", id, c.r[15],
+                             c.thumb ? " (thumb)" : "", c.r[14], c.depth);
+        } else if (!interpret_here(c, ~0u, 0)) {
+            back(Back::Failed);
+        }
+        // returned, or unwound: on from r15
+    }
+}
+
+bool System::run_fibers(const std::function<bool()> &stop) {
+    using clock = std::chrono::steady_clock;
+    auto seconds = [](clock::time_point from) { return std::chrono::duration<double>(clock::now() - from).count(); };
+    if (!main_fiber_) main_fiber_ = Fiber::main();
+    // the fibers of threads that ended, let go here, off them
+    std::vector<std::unique_ptr<Fiber>> ended;
+    for (;;) {
+        ended.clear();
+        auto before_stop = clock::now();
+        bool stopping = kernel.exited() || stop();
+        profile.outside += seconds(before_stop);
+        if (stopping) break;
+        auto before_schedule = clock::now();
+        bool scheduled = kernel.schedule();
+        profile.schedule += seconds(before_schedule);
+        if (!scheduled) {
+            auto wake = kernel.next_wakeup();
+            if (config_.virtual_clock) {
+                if (settle && settle()) continue;
+                constexpr uint64_t MS = CPU_CLOCK_HZ / 1000;
+                virtual_ = wake && *wake > virtual_ ? std::min(*wake, virtual_ + MS) : virtual_ + MS;
+                continue;
+            }
+            if (!wake) {
+                auto before = clock::now();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                idle += seconds(before);
+                continue;
+            }
+            uint64_t now = ticks();
+            if (*wake > now) {
+                uint64_t nanos = std::min<uint64_t>((*wake - now) * 1000000000 / CPU_CLOCK_HZ, 1000000);
+                auto before = clock::now();
+                std::this_thread::sleep_for(std::chrono::nanoseconds(nanos));
+                idle += seconds(before);
+            }
+            continue;
+        }
+        Thread &t = *kernel.current();
+        Context &c = t.context;
+        auto &fiber = fibers_[t.id];
+        // a deep stack, the pages taken as it grows: the code calls as deep
+        // as the game does (RECOMP_DEPTH_LIMIT), each call a C frame
+        if (!fiber) fiber = Fiber::make(16u << 20, [this, id = t.id] { thread_body(id); });
+        c.budget = config_.slice;
+        uint64_t interpreted_before = interpreted;
+        svc_time_ = 0;
+        running_ = fiber.get();
+        auto before_code = clock::now();
+        fiber->switch_from(*main_fiber_);
+        double spent = seconds(before_code) - svc_time_;
+        profile.code += spent;
+        profile.by_thread[t.id] += spent;
+        if (config_.virtual_clock) {
+            int64_t used = int64_t(config_.slice) - c.budget;
+            virtual_ += uint64_t(std::max({used, int64_t(interpreted - interpreted_before), int64_t(1)}));
+        }
+        if (back_ == Back::Failed) return false;
+        if (back_ == Back::Ended) {
+            ended.push_back(std::move(fiber));
+            fibers_.erase(t.id);
+        }
+    }
+    return !kernel.exited();
+}
+
 bool System::run(const std::function<bool()> &stop) {
+    if (config_.fibers) return run_fibers(stop);
     using clock = std::chrono::steady_clock;
     auto seconds = [](clock::time_point from) { return std::chrono::duration<double>(clock::now() - from).count(); };
     for (;;) {
