@@ -23,6 +23,7 @@ add_library(recomp_runtime STATIC
     src/decomp.cpp
     src/decomp_options.cpp
     src/cheats.cpp
+    src/fiber.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -139,12 +140,49 @@ add_test(NAME system COMMAND system_test)
 add_executable(lighting_test tests/lighting_test.cpp)
 target_link_libraries(lighting_test PRIVATE recomp_runtime)
 add_test(NAME lighting COMMAND lighting_test)
+# the recompiler (recomp/, translated from 3dsrecomp's Rust): a title's code
+# as C against recomp.h, compiled into the library the runtime loads; the
+# interface is third_party/recomp.h, built in. Nothing of SDL or Vulkan
+set(RECOMP_GEN ${CMAKE_CURRENT_BINARY_DIR}/recomp)
+add_custom_command(
+    OUTPUT ${RECOMP_GEN}/recomp_header.inc
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/third_party/recomp.h
+            -DOUT=${RECOMP_GEN}/recomp_header.inc -DNAME=RECOMP_HEADER -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake
+    DEPENDS third_party/recomp.h cmake/embed_binary.cmake
+    VERBATIM)
+# and the bundled hints, where players' runs went into code the analysis
+# does not find (3dsrecomp's hints.txt)
+add_custom_command(
+    OUTPUT ${RECOMP_GEN}/hints.inc
+    COMMAND ${CMAKE_COMMAND} -DIN=${CMAKE_CURRENT_SOURCE_DIR}/recomp/hints.txt
+            -DOUT=${RECOMP_GEN}/hints.inc -DNAME=RECOMP_HINTS -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed_binary.cmake
+    DEPENDS recomp/hints.txt cmake/embed_binary.cmake
+    VERBATIM)
+file(GLOB RECOMP_SOURCES CONFIGURE_DEPENDS recomp/*.cpp recomp/codegen/*.cpp)
+list(FILTER RECOMP_SOURCES EXCLUDE REGEX "recomp/main\\.cpp$")
+add_library(recomp_tool STATIC ${RECOMP_SOURCES} ${RECOMP_GEN}/recomp_header.inc ${RECOMP_GEN}/hints.inc)
+target_include_directories(recomp_tool PUBLIC recomp ${RECOMP_GEN})
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/recomp/main.cpp)
+    add_executable(3dsrecomp recomp/main.cpp)
+    target_link_libraries(3dsrecomp PRIVATE recomp_tool)
+endif()
+file(GLOB RECOMP_TESTS CONFIGURE_DEPENDS tests/recomp_*_test.cpp)
+foreach(test ${RECOMP_TESTS})
+    get_filename_component(name ${test} NAME_WE)
+    add_executable(${name} ${test})
+    target_link_libraries(${name} PRIVATE recomp_tool)
+    add_test(NAME ${name} COMMAND ${name})
+endforeach()
+
 add_executable(decomp_test tests/decomp_test.cpp)
 target_link_libraries(decomp_test PRIVATE recomp_runtime)
 add_test(NAME decomp COMMAND decomp_test)
 add_executable(cheats_test tests/cheats_test.cpp)
 target_link_libraries(cheats_test PRIVATE recomp_runtime)
 add_test(NAME cheats COMMAND cheats_test)
+add_executable(fiber_test tests/fiber_test.cpp)
+target_link_libraries(fiber_test PRIVATE recomp_runtime)
+add_test(NAME fiber COMMAND fiber_test)
 add_executable(program_test tests/program_test.cpp)
 target_link_libraries(program_test PRIVATE recomp_runtime)
 add_test(NAME program COMMAND program_test)

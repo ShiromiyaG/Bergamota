@@ -28,6 +28,7 @@ renderer, at full speed on a desktop GPU.
 | Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer, AAC with FDK AAC | `audio.h`, `aac.h`, `src/audio.cpp`, `src/aac.cpp` | done |
 | Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | to the field, with fragment lighting, fog, logic ops, mipmaps, scissor, the procedural texture, cube maps, shadows, the geometry shader, a resolution scale and a pipeline cache on disk; what a game asks for that is not done is counted ([plan](docs/vulkan-renderer.md)) |
 | The player: SDL3 window, keyboard, gamepad, mouse as the stylus, `config.toml`, a launcher and an ImGui overlay (F1) | `frontend/` | done |
+| The recompiler: 3dsrecomp in C++ (translated from the Rust, its C byte for byte the Rust's), the game's code as C and the library the runtime loads | `recomp/`, `3dsrecomp` ([docs](docs/recompiler.md)) | done; tests in `tests/` |
 | The ports' launcher: port.toml, the games set up and recompiled with 3dsrecomp (Zig fetched when there is no C compiler), the player's settings and controls, drawn with ImGui on SDL's renderer | `launcher/`, `tests/launcher_test.cpp` | done |
 
 ## Building
@@ -73,11 +74,12 @@ where they part (screens, service calls, saves).
 
 - [`docs/vulkan-renderer.md`](docs/vulkan-renderer.md): the renderer's design and milestones.
 - [`docs/tools.md`](docs/tools.md): `boot`, `compare.py`, the environment variables.
+- [`docs/recompiler.md`](docs/recompiler.md): the recompiler, `recomp/`.
 - What each game asks of the system, and why the lists are what they are:
   `docs/lean-runtime.md` in the Solstice repository.
 
 ## License
 
 Written by ShiromiyaG with Claude (Anthropic). MIT (`LICENSE`). Parts are translated from Zakuro (MIT, Copyright (c) 2026
-fearkov, `LICENSE-zakuro`); each such file says so at its top. Nothing
+fearkov, `LICENSE-zakuro`) and the recompiler from 3dsrecomp (MIT, the same author, `LICENSE-3dsrecomp`); each such file says so at its top. Nothing
 derived from any game is in this repository.
