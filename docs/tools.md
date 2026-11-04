@@ -141,8 +141,9 @@ how its hashes were taken and how its files lie:
 A folder without a `pack.json` reads a little more than Azahar does: Azahar
 takes it for a legacy pack (the legacy hash only, DDS passed over); here
 each name is looked up by either hash (64 bits each, they never meet) and
-its DDS are read too, so a folder of DDS named by the new hash, as other
-tools dump them, works without a `pack.json`. A pack that works in Azahar
+its DDS are read too, in the dumps' orientation (made straight from a dump,
+not turned over as an Azahar pack's must be), so a folder of DDS named by
+the new hash, as other tools dump them, works without a `pack.json`. A pack that works in Azahar
 works the same here.
 
 Rows: Azahar keeps a texture's rows from the last in memory to the first,

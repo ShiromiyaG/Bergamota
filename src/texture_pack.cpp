@@ -314,7 +314,7 @@ size_t TexturePacks::add_folder(const fs::path &folder) {
     std::sort(files.begin(), files.end(), [](const fs::path &a, const fs::path &b) { return lower(utf8(a)) < lower(utf8(b)); });
     size_t taken = 0;
     auto give = [&](std::map<uint64_t, PackFile> &to, uint64_t hash, const fs::path &path, bool is_azahar) {
-        return to.try_emplace(hash, PackFile{path, is_azahar, options.flip_png_files}).second;
+        return to.try_emplace(hash, PackFile{path, is_azahar, options.flip_png_files, has_json}).second;
     };
     // an Azahar file: by its pack.json's hash; without one by either (Azahar
     // takes the legacy one alone there; a tool that names files by the new

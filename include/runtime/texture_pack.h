@@ -37,6 +37,11 @@ struct PackFile {
     // The runtime's own tex_ files go the other way for both
     bool azahar = false;
     bool flip_png = true;
+    // a DDS or KTX stored the other way round from the dumps, as Azahar
+    // takes them (a pack with a pack.json); without one, as dumped: such a
+    // folder's DDS were made for the runtime (Azahar passes them over), most
+    // likely straight from a dump
+    bool dds_turned = true;
 };
 
 // what a pack.json says, as Azahar reads it. a folder without one, which

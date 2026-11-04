@@ -202,7 +202,7 @@ Impl::Replacement Impl::read_replacement(const PackFile &pack) const {
             // the other way from the game's here, and it is sampled with v
             // turned over (RGBA8 and blocks alike)
             if (!rgba8) r.format = format;
-            r.upside_down = pack.azahar;
+            r.upside_down = pack.azahar && pack.dds_turned;
         }
         return r;
     }
