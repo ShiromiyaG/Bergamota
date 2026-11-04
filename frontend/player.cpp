@@ -612,18 +612,28 @@ int main(int argc, char **argv) {
     // the shape the player shows it at, 0 for the 3DS's own, written into the
     // game's memory on its thread
     std::atomic<float> top_aspect{0};
-    // and no bloom ghosting (Solstice's native/ghosting.c: port_no_ghosting)
-    std::atomic<uint32_t> no_ghosting{0};
+    // and the port's options (its code's PORT_OPTIONs, as Solstice's no
+    // bloom ghosting), each word as the settings have it
+    struct OptionWord {
+        uint32_t at;
+        std::atomic<uint32_t> value;
+    };
+    std::deque<OptionWord> option_words;
     // and the battle's bottom screen as the port's code reads it
     // (native/battle_ui.c: port_battle), each blank, for its UI
     frontend::BattleState battle_state;
     uint64_t battle_blank = ~0ull, battle_seen = 0;
     uint32_t battle_serial = 0;
-    uint32_t top_aspect_at = 0, no_ghosting_at = 0, battle_at = 0;
+    uint32_t top_aspect_at = 0, battle_at = 0;
     if (session.decomp) {
         if (auto it = session.decomp->symbols.find("port_top_aspect"); it != session.decomp->symbols.end()) top_aspect_at = it->second;
-        if (auto it = session.decomp->symbols.find("port_no_ghosting"); it != session.decomp->symbols.end()) no_ghosting_at = it->second;
         if (auto it = session.decomp->symbols.find("port_battle"); it != session.decomp->symbols.end()) battle_at = it->second;
+        for (const runtime::DecompOption &option : session.decomp->options) {
+            auto it = session.decomp->symbols.find(option.symbol);
+            if (it == session.decomp->symbols.end()) continue;
+            option_words.emplace_back(it->second, uint32_t(frontend::option_value(settings, option)));
+        }
+        overlay.options = &session.decomp->options;
     }
     std::thread game([&] {
         system.run([&] {
@@ -633,7 +643,7 @@ int main(int argc, char **argv) {
             }
             recorder.take(handlers.vblanks, handlers.input);
             if (top_aspect_at) system.memory.write32(top_aspect_at, std::bit_cast<uint32_t>(top_aspect.load()));
-            if (no_ghosting_at) system.memory.write32(no_ghosting_at, no_ghosting.load());
+            for (const OptionWord &word : option_words) system.memory.write32(word.at, word.value.load());
             if (battle_at && handlers.vblanks != battle_blank) {
                 battle_blank = handlers.vblanks;
                 frontend::BattleState read = frontend::read_battle(system.memory, battle_at);
@@ -800,7 +810,13 @@ int main(int argc, char **argv) {
         view.smooth = settings.video.smooth;
         view.top = top_width(settings);
         top_aspect = view.top > 400 ? view.top / 240 : 0;
-        no_ghosting = settings.video.no_ghosting ? 1 : 0;
+        if (session.decomp) {
+            size_t i = 0;
+            for (const runtime::DecompOption &option : session.decomp->options) {
+                if (!session.decomp->symbols.count(option.symbol)) continue;
+                option_words[i++].value = uint32_t(frontend::option_value(settings, option));
+            }
+        }
         vulkan.top_wide = view.top / 400;
         view.vsync = settings.video.vsync;
         view.antialias = settings.video.antialias;

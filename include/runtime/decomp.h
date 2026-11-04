@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "runtime/cro.h"
+#include "runtime/decomp_options.h"
 #include "runtime/memory.h"
 
 namespace runtime {
@@ -57,10 +58,12 @@ struct Decomp {
     // words of the executable's changed as it loads (a vtable's entry
     // pointed at a port's wrapper): address, value
     std::vector<std::pair<uint32_t, uint32_t>> patches;
+    // the port's options, in the order the code has them
+    std::vector<DecompOption> options;
 };
 
 // decomp.txt's lines: base, entry, hook, module_hook, module_import, symbol,
-// patch
+// patch, option
 bool parse_decomp(const std::string &text, Decomp &out, std::string &error);
 // dir/decomp.bin and dir/decomp.txt, dir in UTF-8
 bool read_decomp(const std::string &dir, Decomp &out, std::string &error);

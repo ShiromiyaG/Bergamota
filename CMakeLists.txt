@@ -21,6 +21,7 @@ add_library(recomp_runtime STATIC
     src/loader.cpp
     src/async_gpu.cpp
     src/decomp.cpp
+    src/decomp_options.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -203,7 +204,7 @@ if(RUNTIME_PLAYER)
             VERBATIM)
     endforeach()
     set(LAUNCHER_SOURCES launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp
-                         launcher/pages.cpp frontend/settings.cpp src/dump.cpp
+                         launcher/pages.cpp frontend/settings.cpp src/dump.cpp src/decomp_options.cpp
                          ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
     add_executable(launcher WIN32 launcher/main.cpp ${LAUNCHER_SOURCES})
     target_include_directories(launcher PRIVATE include ${LAUNCHER_GEN})

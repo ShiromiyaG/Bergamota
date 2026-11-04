@@ -93,7 +93,6 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     s.video.panel_size = float(std::clamp(panel_size, 0.25, 1.0));
     get(t, "video", "panel_corner", s.video.panel_corner);
     get(t, "video", "panel_shown", s.video.panel_shown);
-    get(t, "video", "no_ghosting", s.video.no_ghosting);
     get(t, "video", "battle_on_top", s.video.battle_on_top);
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
@@ -112,11 +111,23 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     get_map(t, "keyboard", s.keys);
     get_map(t, "gamepad", s.pad);
     get(t, "overlay", "stats", s.stats);
+    if (auto *table = t["port"].as_table()) {
+        for (auto &[key, value] : *table) {
+            if (auto b = value.value_exact<bool>()) s.port[std::string(key.str())] = *b;
+            else if (auto n = value.value<int64_t>()) s.port[std::string(key.str())] = *n;
+        }
+    }
+    // the bloom's ghosting was a setting of the player's before it was the
+    // port's option
+    if (!s.port.count("no_ghosting")) {
+        if (auto old = t["video"]["no_ghosting"].value<bool>()) s.port["no_ghosting"] = *old;
+    }
     return true;
 }
 
 bool save(const std::filesystem::path &path, const Settings &s, std::string &error) {
-    toml::table keys, pad;
+    toml::table keys, pad, port;
+    for (auto &[k, v] : s.port) port.insert(k, v);
     for (auto &[k, v] : s.keys) keys.insert(k, v);
     for (auto &[k, v] : s.pad) pad.insert(k, v);
     toml::table t{
@@ -141,7 +152,6 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"panel_size", double(s.video.panel_size)},
                               {"panel_corner", s.video.panel_corner},
                               {"panel_shown", s.video.panel_shown},
-                              {"no_ghosting", s.video.no_ghosting},
                               {"battle_on_top", s.video.battle_on_top},
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},
@@ -155,6 +165,7 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
         {"keyboard", keys},
         {"gamepad", pad},
         {"overlay", toml::table{{"stats", s.stats}}},
+        {"port", port},
     };
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);

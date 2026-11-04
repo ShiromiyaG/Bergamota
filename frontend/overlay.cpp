@@ -3,6 +3,8 @@
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 
+#include <algorithm>
+
 namespace frontend {
 
 bool Overlay::event(const SDL_Event &event) {
@@ -25,6 +27,31 @@ bool Overlay::event(const SDL_Event &event) {
     }
     ImGui_ImplSDL3_ProcessEvent(&event);
     return open && (ImGui::GetIO().WantCaptureKeyboard || ImGui::GetIO().WantCaptureMouse);
+}
+
+int32_t option_value(const Settings &settings, const runtime::DecompOption &option) {
+    auto it = settings.port.find(option.name);
+    int64_t value = it == settings.port.end() ? option.value : it->second;
+    if (option.toggle) return value ? 1 : 0;
+    return int32_t(std::clamp<int64_t>(value, option.min, option.max));
+}
+
+bool option_rows(Settings &settings, const std::vector<runtime::DecompOption> &options) {
+    bool moved = false;
+    for (const runtime::DecompOption &option : options) {
+        ImGui::PushID(option.symbol.c_str());
+        int value = option_value(settings, option);
+        if (option.toggle) {
+            bool on = value != 0;
+            if (ImGui::Checkbox(option.label.c_str(), &on)) settings.port[option.name] = on, moved = true;
+        } else if (ImGui::SliderInt(option.label.c_str(), &value, option.min, option.max)) {
+            settings.port[option.name] = value;
+            moved = true;
+        }
+        if (!option.help.empty()) ImGui::TextDisabled("%s", option.help.c_str());
+        ImGui::PopID();
+    }
+    return moved;
 }
 
 bool Overlay::keyboard() const { return open && ImGui::GetIO().WantCaptureKeyboard; }
@@ -109,7 +136,6 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("HD textures (textures folder; on the next start)", &s.video.hd_textures);
             moved |= ImGui::Checkbox("Preload the HD textures (no stutter, more memory; on the next start)", &s.video.preload_textures);
             moved |= ImGui::Checkbox("Dump the textures the game uses (texture-dump folder; on the next start)", &s.video.dump_textures);
-            moved |= ImGui::Checkbox("No bloom ghosting (the trail behind what moves outside)", &s.video.no_ghosting);
             static const char *OUTLINES[] = {"auto", "original", "thin", "none"};
             int outlines = 0;
             for (int i = 0; i < 4; i++) {
@@ -122,6 +148,10 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             }
             moved |= ImGui::SliderFloat("Sharpening", &s.video.sharpen, 0.0f, 1.0f, "%.2f");
             moved |= ImGui::Checkbox("Frame times in the corner", &s.stats);
+            ImGui::EndTabItem();
+        }
+        if (options && !options->empty() && ImGui::BeginTabItem("Port")) {
+            moved |= option_rows(s, *options);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Audio")) {

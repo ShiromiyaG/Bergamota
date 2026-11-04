@@ -59,9 +59,6 @@ struct Settings {
         // the single screen in battle: the port's own battle UI on the top
         // screen (Sword and Shield's layout, frontend/battle_ui.h), no panel
         bool battle_on_top = false; // off: the panel, lifted over the message box
-        // the bloom's ghosting (a trail behind what moves outside) left out,
-        // through the port's code (port_no_ghosting)
-        bool no_ghosting = true;
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
         std::string aspect = "original";
@@ -90,6 +87,9 @@ struct Settings {
     // button name)
     std::map<std::string, std::string> keys, pad;
     bool stats = false; // the overlay's corner with the frame times
+    // the port's own options (its code's PORT_OPTIONs, decomp.txt's option
+    // lines) by name, as set; one not here has the code's default
+    std::map<std::string, int64_t> port;
 
 
     Settings(); // the default bindings

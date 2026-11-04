@@ -24,6 +24,8 @@
 
 #include <mutex>
 
+#include "runtime/decomp_options.h"
+
 namespace launcher {
 
 namespace {
@@ -140,6 +142,19 @@ private:
     Library library_;
     std::optional<Tools> tools_;
     PlayerPages pages_;
+    // the port's options for the game chosen, read from its code's
+    // decomp.txt when the choice changes
+    std::vector<runtime::DecompOption> options_;
+    std::optional<std::string> options_for_;
+    const std::vector<runtime::DecompOption> &options() {
+        if (options_for_ != selected_) {
+            options_for_ = selected_;
+            auto found = library_.games.find(selected_);
+            fs::path dir = found != library_.games.end() ? found->second.decomp_dir() : Config{selected_}.decomp_dir();
+            options_ = dir.empty() ? std::vector<runtime::DecompOption>() : runtime::read_options(utf8(dir));
+        }
+        return options_;
+    }
     Tab tab_ = Tab::Home;
     Page page_ = Page::Home;
     std::string selected_;
@@ -569,7 +584,7 @@ void App::frame() {
             else if (page_ == Page::Update) update_page();
             else build_page();
         } else if (tab_ == Tab::Graphics) {
-            pages_.graphics(acc);
+            pages_.graphics(acc, options());
         } else if (tab_ == Tab::Controls) {
             pages_.controls(acc);
         } else {

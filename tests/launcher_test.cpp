@@ -7,7 +7,9 @@
 #include "build.h"
 #include "check.h"
 
+#include "runtime/decomp_options.h"
 #include "runtime/dump.h"
+#include "../frontend/settings.h"
 
 #include <SDL3/SDL.h>
 
@@ -64,6 +66,21 @@ int main(int, char **) {
     CHECK(Update{2048}.tested(sun) && !Update{1040}.tested(sun));
     CHECK(Update{1040}.tested(Game{sun.program_id, sun.name, std::nullopt, ""}));
     CHECK(title_of(0x0004000000055D00ull) == "0004000000055D00");
+
+    // the port's options: kept in [port], the old [video] no_ghosting taken in
+    fs::path toml = fs::temp_directory_path() / "launcher-test-player.toml";
+    std::ofstream(toml, std::ios::binary) << "[video]\nno_ghosting = false\n";
+    frontend::Settings old;
+    CHECK(frontend::load(toml, old, error) && old.port.count("no_ghosting") && old.port["no_ghosting"] == 0);
+    old.port["speed"] = 3;
+    CHECK(frontend::save(toml, old, error));
+    frontend::Settings again;
+    CHECK(frontend::load(toml, again, error) && again.port == old.port);
+    fs::remove(toml);
+    runtime::DecompOption option;
+    CHECK(runtime::parse_option("option port_speed int 2 1 4 Speed|How fast", option) && option.name == "speed" &&
+          !option.toggle && option.max == 4 && option.help == "How fast");
+    CHECK(!runtime::parse_option("option port_speed float 2 Speed", option));
 
     fs::path abc = fs::temp_directory_path() / "launcher-test-abc.txt";
     std::ofstream(abc, std::ios::binary) << "abc";

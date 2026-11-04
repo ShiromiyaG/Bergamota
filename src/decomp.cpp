@@ -87,6 +87,14 @@ bool parse_decomp(const std::string &text, Decomp &out, std::string &error) {
         } else if (kind == "patch") {
             uint32_t at = number(1), value = number(2);
             out.patches.emplace_back(at, value);
+        } else if (kind == "option") {
+            DecompOption option;
+            if (parse_option(line, option)) {
+                out.options.push_back(option);
+            } else {
+                error = "decomp.txt: '" + line + "' is not an option it knows";
+                ok = false;
+            }
         }
         // entry lines are for 3dsrecomp, anything else for a newer host
         if (!ok) return false;

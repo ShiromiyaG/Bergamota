@@ -5,6 +5,7 @@
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <utility>
 
 namespace launcher {
@@ -85,7 +86,7 @@ std::string PlayerPages::summary() const {
            (v.fullscreen ? "Fullscreen" : "Windowed");
 }
 
-void PlayerPages::graphics(ImU32 accent) {
+void PlayerPages::graphics(ImU32 accent, const std::vector<runtime::DecompOption> &options) {
     const float s = look::scale(), wide = 230 * s, box = ImGui::GetFrameHeight();
     auto &v = settings_.video;
     bool changed = false;
@@ -131,7 +132,27 @@ void PlayerPages::graphics(ImU32 accent) {
     look::row("Dump textures", "Every texture the game uses written to texture-dump, for making HD ones.", box,
               [&] { check("##dump_textures", v.dump_textures); });
     look::row("Sharpen", "", wide, [&] { changed |= ImGui::SliderFloat("##sharpen", &v.sharpen, 0, 1, "%.2f"); });
-    look::row("No bloom ghosting", "Leaves out the trail the bloom draws behind what moves.", box, [&] { check("##ghosting", v.no_ghosting); });
+
+    if (!options.empty()) {
+        look::section("The port's own", accent);
+        for (const runtime::DecompOption &option : options) {
+            ImGui::PushID(option.symbol.c_str());
+            auto it = settings_.port.find(option.name);
+            int value = int(it == settings_.port.end() ? option.value : it->second);
+            if (option.toggle) {
+                look::row(option.label.c_str(), option.help.c_str(), box, [&] {
+                    bool on = value != 0;
+                    if (ImGui::Checkbox("##on", &on)) settings_.port[option.name] = on, changed = true;
+                });
+            } else {
+                look::row(option.label.c_str(), option.help.c_str(), wide, [&] {
+                    value = std::clamp(value, int(option.min), int(option.max));
+                    if (ImGui::SliderInt("##value", &value, option.min, option.max)) settings_.port[option.name] = value, changed = true;
+                });
+            }
+            ImGui::PopID();
+        }
+    }
 
     look::section("Motion", accent);
     look::row("60 FPS", "A frame drawn between each two of the game's, for the scenes it draws at 30.", box, [&] { check("##between", v.between); });

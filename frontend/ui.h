@@ -9,12 +9,20 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
+
+#include "runtime/decomp_options.h"
 
 namespace frontend {
 
 // Dear ImGui on the window, for both
 void ui_init(SDL_Window *window, SDL_Renderer *renderer);
 void ui_shutdown();
+
+// an option's value as set, else the code's default, within its range
+int32_t option_value(const Settings &settings, const runtime::DecompOption &option);
+// a row for each option, as a checkbox or a slider; true when one moved
+bool option_rows(Settings &settings, const std::vector<runtime::DecompOption> &options);
 
 // asks for the game's files and what needs a restart; true to start the
 // game, false when the window closed
@@ -37,6 +45,8 @@ public:
     bool open = false;
     // the single screen's scene and its layout, shown in the Video tab
     std::string scene;
+    // the port's options (its code's PORT_OPTIONs), in a tab of their own
+    const std::vector<runtime::DecompOption> *options = nullptr;
     // the overlay wants the keyboard (the game gets none)
     bool keyboard() const;
 

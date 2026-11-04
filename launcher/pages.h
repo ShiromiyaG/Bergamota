@@ -10,6 +10,9 @@
 #include <imgui.h>
 
 #include <string>
+#include <vector>
+
+#include "runtime/decomp_options.h"
 
 union SDL_Event;
 
@@ -23,7 +26,8 @@ public:
     bool record() const { return settings_.game.record; }
     void set_record(bool on);
 
-    void graphics(ImU32 accent);
+    // options: the port's for the game chosen (its code's PORT_OPTIONs)
+    void graphics(ImU32 accent, const std::vector<runtime::DecompOption> &options);
     void controls(ImU32 accent);
     // a key or gamepad button being chosen takes the event; true when it did
     bool event(const SDL_Event &event);

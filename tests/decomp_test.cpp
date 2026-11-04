@@ -35,7 +35,9 @@ void reads_every_line() {
                        "module_hook Bag.cro 0x00000180 0x07800020 void\n"
                        "module_import AppDemo.cro 0x00000188 0x07AE7BC4\n"
                        "module_import AppDemo.cro 0x00000010 0x07AE7BC8 seg2\n"
-                       "symbol solstice_panels 0x07900000\n",
+                       "symbol solstice_panels 0x07900000\n"
+                       "option port_no_ghosting bool 1 No bloom ghosting|The trail behind what moves, left out\n"
+                       "option port_speed int 2 1 4 Speed\n",
                        d, error));
     CHECK(error.empty());
     CHECK(d.base == 0x07800000);
@@ -47,6 +49,14 @@ void reads_every_line() {
           d.module_imports[0].segment == -1 && d.module_imports[1].segment == 2 &&
           d.module_imports[1].slot == 0x07AE7BC8);
     CHECK(d.symbols["solstice_panels"] == 0x07900000);
+    CHECK(d.options.size() == 2);
+    if (d.options.size() == 2) {
+        CHECK(d.options[0].symbol == "port_no_ghosting" && d.options[0].name == "no_ghosting" && d.options[0].toggle &&
+              d.options[0].value == 1 && d.options[0].label == "No bloom ghosting" &&
+              d.options[0].help == "The trail behind what moves, left out");
+        CHECK(!d.options[1].toggle && d.options[1].value == 2 && d.options[1].min == 1 && d.options[1].max == 4 &&
+              d.options[1].label == "Speed" && d.options[1].help.empty());
+    }
 }
 
 void refuses_what_it_cannot_use() {
