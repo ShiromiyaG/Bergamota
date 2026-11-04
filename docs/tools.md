@@ -139,10 +139,16 @@ how its hashes were taken and how its files lie:
 
 `textures` gives hashes to files by name (`"114BFC385ED72F15": "logo.png"`).
 A folder without a `pack.json` is a legacy pack: the legacy hash, PNGs as
-dumped, DDS passed over. A DDS or KTX is read as it is stored, the other
-way round from a PNG (its first row the texture's last in memory); the
-blocks are not turned over but sampled with v turned over (`TEX_FLIP`,
-`src/vk/draw.cpp`, `pica.frag`), so BC7 needs nothing done to it. Read: PNG,
+dumped, DDS passed over.
+
+Rows: Azahar keeps a texture's rows from the last in memory to the first,
+the runtime first to last (and samples with v turned over). So the same
+files take opposite steps here and come out the same: Azahar turns a PNG
+over as it reads it (`flip_png_files`) and the runtime takes it as it is;
+Azahar takes a DDS or KTX as it is stored (its first row the texture's last
+in memory), and so does the runtime, RGBA8 and blocks alike, nothing of it
+moved, sampling it with v the other way (`TEX_FLIP`, `src/vk/draw.cpp`,
+`pica.frag`). Read: PNG,
 DDS and KTX 1 of RGBA8, BC1, BC3, BC5 and BC7 (their first level). Not:
 normal maps (`.norm.`), ASTC, the mips of a pack (the runtime draws the
 first level only). The runtime's own files from before, `tex_<...>_<hash>_<...>`

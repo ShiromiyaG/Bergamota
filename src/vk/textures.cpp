@@ -120,12 +120,14 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
     return t.image.view;
 }
 
-// an HD texture read, its rows as the game's go (empty for a file that
-// would not read): an Azahar pack's PNG as it is (its first row the
-// texture's first in memory; turned over without flip_png_files), the
-// runtime's own turned over; a DDS or KTX as it is stored, which for an
-// Azahar pack is the other way round (Replacement::upside_down; the runtime's
-// own already keep the game's order)
+// an HD texture read (empty for a file that would not read). The runtime
+// keeps a texture's rows as memory has them, first row first, where Azahar
+// keeps them the other way round: so an Azahar pack's PNG, which Azahar
+// turns over as it reads it (flip_png_files), is taken here as it is (and
+// turned over without flip_png_files), and its DDS or KTX, which Azahar
+// takes as it is stored, is taken as it is too and sampled with v turned
+// over (Replacement::upside_down). The runtime's own tex_ files from before
+// go the other way: a PNG turned over, a DDS as it is
 Impl::Replacement Impl::read_replacement(const PackFile &pack) const {
     Replacement r;
     const std::filesystem::path &file = pack.path;
@@ -194,14 +196,11 @@ Impl::Replacement Impl::read_replacement(const PackFile &pack) const {
         } else {
             r.rgba.assign(d.begin() + long(data), d.begin() + long(data + size));
             r.width = w, r.height = h;
-            if (rgba8) {
-                // an Azahar pack's, turned over here; blocks are turned over
-                // where they are sampled
-                if (pack.azahar) turn_over(r.rgba, w, h);
-            } else {
-                r.format = format;
-                r.upside_down = pack.azahar;
-            }
+            // as Azahar does, nothing of it moved: an Azahar pack's rows go
+            // the other way from the game's here, and it is sampled with v
+            // turned over (RGBA8 and blocks alike)
+            if (!rgba8) r.format = format;
+            r.upside_down = pack.azahar;
         }
         return r;
     }
