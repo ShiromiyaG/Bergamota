@@ -246,18 +246,29 @@ bool Library::has_module(const std::string &name) const {
 }
 
 bool link_code(Library &library, Memory &memory, const Decomp *decomp, std::string &error) {
-    if (decomp && !library.has_module(DECOMP_MODULE)) {
-        error = "the library was recompiled without the decomp: build it again with 3dsrecomp --decomp";
-        return false;
+    // a library recompiled without the decomp, or with an older one, still
+    // runs it: the functions it hooks no longer match what was recompiled and
+    // go to the interpreter, which takes the jumps, and the decomp's code the
+    // library lacks runs there too, until the game is recompiled with it
+    bool with = decomp && library.has_module(DECOMP_MODULE);
+    if (decomp && !library.has_origins()) {
+        if (!with) {
+            error = "the library is too old to tell what the decomp changes: build it again with 3dsrecomp --decomp";
+            return false;
+        }
+        if (!decomp->module_hooks.empty()) {
+            std::fprintf(stderr, "decomp: the library is too old to check, the modules' %zu functions stay the game's\n",
+                         decomp->module_hooks.size());
+        }
     }
-    if (decomp && !library.has_origins() && !decomp->module_hooks.empty()) {
-        std::fprintf(stderr, "decomp: the library is too old to check, the modules' %zu functions stay the game's\n",
-                     decomp->module_hooks.size());
+    if (decomp && !with) {
+        std::printf("decomp: the library was recompiled without it, its code runs in the interpreter until the game "
+                    "is recompiled with it\n");
     }
     if (size_t stale = library.check(0, 0, memory)) {
         std::printf("%zu functions of the executable run in the interpreter: changed since it was recompiled\n", stale);
     }
-    if (decomp) library.place(DECOMP_MODULE, decomp->base, &memory);
+    if (with) library.place(DECOMP_MODULE, decomp->base, &memory);
     return true;
 }
 

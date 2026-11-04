@@ -120,8 +120,10 @@ struct Decomp;
 void load(System &system, const ExHeader &exheader, const std::vector<uint8_t> &code,
           const Decomp *decomp = nullptr);
 // after load: the executable's code checked against the library, and the
-// decomp's recompiled code placed at its base; false when the library was
-// not recompiled with the decomp
+// decomp's recompiled code placed at its base. A library recompiled without
+// the decomp, or with an older one, runs it in the interpreter where the two
+// differ (the hooked functions changed, the decomp's new code not in it);
+// false only when the library is too old to be checked
 bool link_code(Library &library, Memory &memory, const Decomp *decomp, std::string &error);
 // ldr:ro loaded module name at base, or unloads it (base 0): the decomp's
 // jumps and addresses in it first, then the library told and the module's

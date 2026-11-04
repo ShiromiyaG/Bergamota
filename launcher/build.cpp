@@ -435,16 +435,21 @@ void build_full(const std::string &title_in) {
     // a fast compile: the hot code optimized, the rest not
     fs::path hot = hot_list(title);
     bool fast = library.fast && !hot.empty();
+    // the port's code as it is now goes in (it may have changed since the
+    // game was built: the object cache keeps the rest)
+    fs::path dir = config.decomp_dir();
+    const std::optional<uint64_t> with = dir.empty() ? std::nullopt : fingerprint(dir);
     auto job = Job::start(*tools, config, fast ? hot : fs::path(), fast);
     job->wait();
     const bool built = job->stage().kind == Stage::Done;
-    // the player may have chosen other files, or the port's code was built
-    // again, meanwhile
+    // the player may have chosen other files meanwhile; the port's code
+    // changing again leaves it not current, built again on the next start
     Library now = Library::load();
     if (auto it = now.games.find(title); built && it != now.games.end()) {
         Config &c = it->second;
-        if (c.game == config.game && c.update == config.update && c.decomp_built == config.decomp_built) {
+        if (c.game == config.game && c.update == config.update) {
             c.full = true;
+            c.decomp_built = with;
             std::string error;
             now.save(error);
         }
@@ -453,7 +458,7 @@ void build_full(const std::string &title_in) {
 }
 
 void finish_in_background(const Config &config) {
-    if (config.full) return;
+    if (config.full && config.current()) return;
     std::vector<std::string> args{utf8(exe())};
     if (auto named = arg_after("--port")) args.insert(args.end(), {"--port", *named});
     args.insert(args.end(), {"--build-full", config.title});

@@ -67,9 +67,12 @@ fs::path config_toml() {
 
 bool Config::ready() const {
     std::error_code ec;
+    return built && fs::is_regular_file(game, ec) && (update.empty() || fs::is_regular_file(update, ec));
+}
+
+bool Config::current() const {
     fs::path dir = decomp_dir();
-    return built && fs::is_regular_file(game, ec) && (update.empty() || fs::is_regular_file(update, ec)) &&
-           decomp_built == (dir.empty() ? std::nullopt : fingerprint(dir));
+    return decomp_built == (dir.empty() ? std::nullopt : fingerprint(dir));
 }
 
 fs::path Config::decomp_dir() const {

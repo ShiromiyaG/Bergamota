@@ -170,14 +170,47 @@ void the_library_has_to_have_the_decomp() {
     Decomp d;
     d.base = 0x07800000;
     std::string error;
-    Library without;
-    without.linked(entries, 1, nullptr, 0, nullptr);
-    CHECK(!link_code(without, memory, &d, error) && !error.empty());
-    CHECK(link_code(without, memory, nullptr, error)); // without a decomp, any library
+    // too old to be checked: what the decomp hooks would run the game's code
+    Library old;
+    old.linked(entries, 1, nullptr, 0, nullptr);
+    CHECK(!link_code(old, memory, &d, error) && !error.empty());
+    CHECK(link_code(old, memory, nullptr, error)); // without a decomp, any library
     Library library;
     library.linked(entries, 1, with, 1, nullptr);
     CHECK(link_code(library, memory, &d, error));
     CHECK(decomp_base == 0x07800000 && library.lookup(0x07800000) == code_b);
+}
+
+void a_library_without_the_decomp_interprets_it() {
+    Memory memory(false, 64u << 20);
+    uint32_t paddr = map_page(memory, 0x00100000, READ | EXECUTE);
+    uint8_t *page = memory.host(paddr, map::PAGE_SIZE);
+    for (int i = 0; i < 16; i++) page[i] = uint8_t(i);
+    Piece pieces[] = {{0x00100000, 0x00100008, fnv(page, 8)}, {0x00100008, 0x00100010, fnv(page + 8, 8)}};
+    Run runs[] = {{0, 1}, {1, 2}};
+    Origin functions[] = {{0, 1, 0x00100000}, {1, 1, 0x00100008}};
+    uint32_t owners[] = {0, 1};
+    uint8_t stale[2] = {};
+    uint32_t starts[2] = {0x00100000, 0x00100008};
+    Origins origins = {2, 2, pieces, functions, runs, owners, stale, starts};
+    Entry entries[] = {{0x00100000, code_a}, {0x00100008, code_b}};
+    Library library;
+    library.linked(entries, 2, nullptr, 0, &origins);
+    // the loader wrote the jump over the second function, as it does with
+    // the decomp's hook lines
+    Decomp d;
+    d.base = 0x07800000;
+    d.hooks = {{0x00100008, 0x07800010}};
+    std::vector<uint8_t> text(page, page + 16);
+    patch_text(d, 0x00100000, text);
+    std::memcpy(page, text.data(), text.size());
+    std::string error;
+    CHECK(link_code(library, memory, &d, error));
+    // the hooked function to the interpreter, which takes the jump; the
+    // decomp's code, not in the library, there as well
+    CHECK(stale[1] == 1 && library.lookup(0x00100008) == nullptr);
+    CHECK(library.lookup(0x00100000) == code_a);
+    CHECK(library.lookup(0x07800010) == nullptr);
 }
 
 void hooked_module_functions_go_to_the_decomp() {
@@ -204,6 +237,7 @@ void hooked_module_functions_go_to_the_decomp() {
 int main() {
     hooked_module_functions_go_to_the_decomp();
     the_library_has_to_have_the_decomp();
+    a_library_without_the_decomp_interprets_it();
     stale_functions_are_skipped();
     modules_get_their_jumps();
     reads_every_line();

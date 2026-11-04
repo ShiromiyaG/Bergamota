@@ -226,7 +226,8 @@ void App::home(ImVec2 min, ImVec2 max) {
         if (!config->update.empty())
             chips.emplace_back(info && !info->update_name.empty() ? "Update " + info->update_name : "Update", look::GOOD);
         else chips.emplace_back("No update", look::WARN);
-        if (!ready) chips.emplace_back("Its files moved, or the port's code changed", look::BAD);
+        if (!ready) chips.emplace_back("Its files moved", look::BAD);
+        else if (!config->current()) chips.emplace_back("The port's code changed: slower until rebuilt", look::WARN);
         if (!config->decomp_dir().empty()) chips.emplace_back("The port's own code", look::GOOD);
     } else {
         chips.emplace_back("Not set up yet", look::WEAK);

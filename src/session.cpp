@@ -74,8 +74,8 @@ bool Session::open(const Files &files, Config config, std::string &error,
     }
     if (!files.update.empty()) fs->update_romfs = find_romfs(path_of(files.update), error);
     services->fs = fs.get();
-    // the decomp in place of the functions it replaces, with a library
-    // recompiled with it
+    // the decomp in place of the functions it replaces: recompiled with the
+    // library, or in the interpreter where the library does not have it
     if (!files.decomp.empty()) {
         decomp = std::make_unique<Decomp>();
         if (!read_decomp(files.decomp, *decomp, error)) return false;

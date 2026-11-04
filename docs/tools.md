@@ -24,7 +24,7 @@ gives the same run, and it never sleeps, so it runs as fast as the host can.
 | `RUNTIME_SHOT_EVERY=n` | every n frames (100) |
 | `RUNTIME_USAGE=file` | the service commands asked for, as Zakuro's `ZAKURO_USAGE` writes them |
 | `RUNTIME_RENDERER=native` | the runtime's Vulkan renderer; `sketch` draws wireframes of the vertex stage on the CPU instead; unset, Zakuro's |
-| `RUNTIME_DECOMP=folder` | the decomp (`decomp.bin`, `decomp.txt`, from decomp-tools' `build.py`) in place of the functions it replaces; the library has to be built with it, see below |
+| `RUNTIME_DECOMP=folder` | the decomp (`decomp.bin`, `decomp.txt`, from decomp-tools' `build.py`) in place of the functions it replaces; a library built without it, or with an older one, runs what differs in the interpreter, see below |
 
 Always point it at a copy of the saves: the game writes to them.
 
@@ -53,6 +53,16 @@ the decomp's recompiled code takes over. The player reads the folder from
 The same check finds anything else that changed since the library was made
 (a mod, another update): what changed runs in the interpreter, and `boot`
 says how many functions did.
+
+So the decomp does not need the game recompiled to run. With a library
+built without it, or with an older one, the functions it hooks no longer
+match and go to the interpreter, which takes their jumps, and the decomp's
+code the library lacks (new, or changed since) runs in the interpreter too,
+until the next build takes it in. Changing a port's `native/` code is
+`build.py` and starting the game; only speed waits for the build (the
+interpreter is slower than the C: fine for wrappers called a few times a
+frame, not for a loop over every vertex). The port's launcher plays a game whose code
+changed at once and builds it again in the background.
 
 ## `tools/compare.py`
 

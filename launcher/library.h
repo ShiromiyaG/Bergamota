@@ -22,9 +22,12 @@ struct Config {
     fs::path decomp;    // the port's code for the game's ARM11, when not the folder port.toml names
     std::optional<uint64_t> decomp_built; // the fingerprint of the port's code it was built with
 
-    // everything in place to play: built, its files where they were, with
-    // the port's code there is now
+    // everything in place to play: built, its files where they were. The
+    // port's code may have changed since: the runtime runs what changed in
+    // its interpreter until the game is built again with it (current())
     bool ready() const;
+    // built with the port's code there is now
+    bool current() const;
     // the port's code the game is built and played with, empty for none
     fs::path decomp_dir() const;
     bool operator==(const Config &) const = default;

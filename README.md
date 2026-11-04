@@ -60,7 +60,8 @@ Settings live in `%APPDATA%\runtime\config.toml` (or the platform's own
 place); F1 opens the overlay, F11 switches fullscreen. `RUNTIME_STATS=1`
 prints where each second went. `decomp` in `[game]` (the launcher's
 "Decomp folder") runs the decomp's C in place of the functions it
-replaces, with a library recompiled with it (`docs/tools.md`, "The decomp").
+replaces, in the interpreter where the library was recompiled without it
+or with an older one (`docs/tools.md`, "The decomp").
 
 `build/boot` runs a game without a window, for measuring and checking:
 `docs/tools.md` lists what it takes, and `tools/compare.py`, which runs a
