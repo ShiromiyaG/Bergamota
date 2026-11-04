@@ -201,6 +201,11 @@ void Impl::render(Pica &p) {
     if (vsize + in_size + index_size + before_size + 1024 > VERTEX_RING) return;
     State st{};
     for (size_t i = 0; i < std::size(STATE_REGS); i++) st.regs[i] = r[STATE_REGS[i]];
+    // the units whose texture is sampled with v turned over (an Azahar pack's
+    // DDS or KTX), by their views, which the frames between draw again too
+    if (!upside_down_views.empty()) {
+        for (int u = 0; u < 3; u++) st.regs[TEX_FLIP] |= uint32_t(upside_down_views.count(views[u])) << u;
+    }
     st.depth[0] = f24(r[DEPTH_RANGE]);
     st.depth[1] = f24(r[DEPTH_NEAR]);
     st.depth[2] = float(r[DEPTHMAP_ENABLE] & 1);

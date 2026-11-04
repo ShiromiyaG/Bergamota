@@ -87,30 +87,32 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
         t.checked_list = p.transfers;
         uint64_t hash = hash_bytes(bytes, size);
         if (hash != t.hash || !t.image.image) {
-            // ours in its place, at its own size, or the game's
-            const Replacement *r = replacement_files.empty() ? nullptr : replacement(hash);
+            // a pack's in its place, at its own size, or the game's
+            const PackFile *file = packs.empty() ? nullptr : packs.find(format, bytes, w, h, hash);
+            const Replacement *r = file ? replacement(*file) : nullptr;
             const uint32_t iw = r ? r->width : w, ih = r ? r->height : h;
             const VkFormat f = r ? r->format : VK_FORMAT_R8G8B8A8_UNORM;
-            if (t.image.image && (t.image.width != iw || t.image.height != ih || t.format != f)) let_go(t.image), t.image = {};
+            if (t.image.image && (t.image.width != iw || t.image.height != ih || t.format != f)) {
+                upside_down_views.erase(t.image.view);
+                let_go(t.image), t.image = {};
+            }
             if (!t.image.image) {
                 t.image = f == VK_FORMAT_R8G8B8A8_UNORM ? image(iw, ih, f, false) : compressed_image(iw, ih, f);
                 t.format = f;
             }
+            t.upside_down = r && r->upside_down;
+            if (t.upside_down) upside_down_views.insert(t.image.view);
+            else upside_down_views.erase(t.image.view);
             if (r) {
                 upload_color(t.image, r->rgba.data(), r->rgba.size());
             } else {
                 std::vector<uint8_t> rgba(size_t(w) * h * 4);
                 decode_texture(format, bytes, w, h, rgba.data());
                 upload_color(t.image, rgba.data(), rgba.size());
-                if (save_image && dumped.insert(hash).second) {
-                    // upright, as texdump writes them: the PICA's rows bottom first
-                    std::vector<uint8_t> upright(rgba.size());
-                    for (uint32_t y = 0; y < h; y++)
-                        std::memcpy(&upright[size_t(y) * w * 4], &rgba[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
-                    char name[96];
-                    std::snprintf(name, sizeof name, "tex_%ux%u_%016llX_%u.png", w, h, (unsigned long long)hash, format);
-                    save_image(dump_folder / name, upright.data(), w, h);
-                }
+                // dumped as Azahar dumps them: named by the new hash, its
+                // first row the first in memory, as packs take them
+                const uint64_t key = save_image ? raw_texture_hash(bytes, size) : 0;
+                if (save_image && dumped.insert(key).second) save_image(dump_folder / dump_name(w, h, key, format), rgba.data(), w, h);
             }
             t.hash = hash;
         }
@@ -118,80 +120,120 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
     return t.image.view;
 }
 
-// an HD texture read, its rows turned over to the PICA's (empty for a
-// file that would not read)
-Impl::Replacement Impl::read_replacement(const std::filesystem::path &file) const {
+// an HD texture read, its rows as the game's go (empty for a file that
+// would not read): an Azahar pack's PNG as it is (its first row the
+// texture's first in memory; turned over without flip_png_files), the
+// runtime's own turned over; a DDS or KTX as it is stored, which for an
+// Azahar pack is the other way round (Replacement::upside_down; the runtime's
+// own already keep the game's order)
+Impl::Replacement Impl::read_replacement(const PackFile &pack) const {
     Replacement r;
+    const std::filesystem::path &file = pack.path;
     std::string ext = file.extension().string();
     for (char &c : ext) c = char(std::tolower(uint8_t(c)));
-    if (ext == ".dds") {
-        // its first level only, its rows as they are: a DDS for the runtime
-        // keeps the bottom row first, as the PICA does (the chain of
-        // tools/make_upscale_chain.py turns the image over before saving)
+    auto turn_over = [](std::vector<uint8_t> &rgba, uint32_t w, uint32_t h) {
+        std::vector<uint8_t> row(size_t(w) * 4);
+        for (uint32_t y = 0; y < h / 2; y++) {
+            uint8_t *a = &rgba[size_t(y) * w * 4], *b = &rgba[size_t(h - 1 - y) * w * 4];
+            std::memcpy(row.data(), a, row.size()), std::memcpy(a, b, row.size()), std::memcpy(b, row.data(), row.size());
+        }
+    };
+    if (ext == ".dds" || ext == ".ktx") {
+        // the first image only: its first level, its rows as they are
         std::ifstream in(file, std::ios::binary);
         std::vector<uint8_t> d((std::istreambuf_iterator<char>(in)), {});
         auto u32 = [&](size_t at) { return at + 4 <= d.size() ? uint32_t(d[at] | d[at + 1] << 8 | d[at + 2] << 16 | uint32_t(d[at + 3]) << 24) : 0u; };
-        size_t data = 128;
-        uint32_t block = 0;
-        VkFormat format = VK_FORMAT_UNDEFINED;
-        const uint32_t fourcc = u32(84);
         auto cc = [](const char *s) { return uint32_t(uint8_t(s[0]) | uint8_t(s[1]) << 8 | uint8_t(s[2]) << 16 | uint32_t(uint8_t(s[3])) << 24); };
-        if (fourcc == cc("DX10")) {
-            data += 20;
-            // sRGB or not, the bits are the same: the game's values, as they are
-            switch (u32(128)) {
-            case 71: case 72: format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8; break;
-            case 77: case 78: format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16; break;
-            case 98: case 99: format = VK_FORMAT_BC7_UNORM_BLOCK, block = 16; break;
+        size_t data = 0;
+        uint32_t block = 0, w = 0, h = 0;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        bool rgba8 = false;
+        if (ext == ".dds" && d.size() >= 128 && u32(0) == cc("DDS ")) {
+            h = u32(12), w = u32(16);
+            data = 128;
+            const uint32_t fourcc = u32(84);
+            if (fourcc == cc("DX10")) {
+                data += 20;
+                // sRGB or not, the bits are the same: the game's values, as they are
+                switch (u32(128)) {
+                case 28: case 29: rgba8 = true; break;
+                case 71: case 72: format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8; break;
+                case 77: case 78: format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16; break;
+                case 83: format = VK_FORMAT_BC5_UNORM_BLOCK, block = 16; break;
+                case 98: case 99: format = VK_FORMAT_BC7_UNORM_BLOCK, block = 16; break;
+                }
+            } else if (fourcc == cc("DXT1")) {
+                format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8;
+            } else if (fourcc == cc("DXT5") || fourcc == cc("DXT4")) {
+                format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16;
+            } else if (fourcc == cc("ATI2") || fourcc == cc("BC5U")) {
+                format = VK_FORMAT_BC5_UNORM_BLOCK, block = 16;
+            } else if ((u32(80) & 0x40) && u32(88) == 32 && u32(92) == 0xFF && u32(96) == 0xFF00 && u32(100) == 0xFF0000 &&
+                       u32(104) == 0xFF000000u) {
+                rgba8 = true; // 32 bits, R in the low byte: as RGBA8 is
             }
-        } else if (fourcc == cc("DXT1")) {
-            format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8;
-        } else if (fourcc == cc("DXT5")) {
-            format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16;
+        } else if (ext == ".ktx" && d.size() >= 64 && std::memcmp(d.data(), "\xABKTX 11\xBB\r\n\x1A\n", 12) == 0 && u32(12) == 0x04030201) {
+            // KTX 1: its header, its key and value data, then the first
+            // level's size and bytes
+            const uint32_t internal = u32(28);
+            w = u32(36), h = u32(40);
+            data = 64 + size_t(u32(60)) + 4;
+            switch (internal) {
+            case 0x8058: case 0x1908: rgba8 = true; break;
+            case 0x83F0: case 0x83F1: format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK, block = 8; break;
+            case 0x83F3: format = VK_FORMAT_BC3_UNORM_BLOCK, block = 16; break;
+            case 0x8C72: case 0x8DBD: format = VK_FORMAT_BC5_UNORM_BLOCK, block = 16; break;
+            case 0x8E8C: format = VK_FORMAT_BC7_UNORM_BLOCK, block = 16; break;
+            }
         }
-        const uint32_t h = u32(12), w = u32(16);
-        const size_t size = size_t((w + 3) / 4) * ((h + 3) / 4) * block;
-        if (d.size() < 128 || u32(0) != cc("DDS ") || !block || !w || !h || w > 8192 || h > 8192 || data + size > d.size()) {
-            std::fprintf(stderr, "runtime: %s is not a DDS of BC1, BC3 or BC7\n", file.string().c_str());
-        } else if (!bc_textures) {
+        const size_t size = rgba8 ? size_t(w) * h * 4 : size_t((w + 3) / 4) * ((h + 3) / 4) * block;
+        if ((!block && !rgba8) || !w || !h || w > 8192 || h > 8192 || data + size > d.size()) {
+            std::fprintf(stderr, "runtime: %s is not a DDS or KTX of RGBA8, BC1, BC3, BC5 or BC7\n", file.string().c_str());
+        } else if (!rgba8 && !bc_textures) {
             std::fprintf(stderr, "runtime: %s passed over: the GPU has no BC textures\n", file.string().c_str());
         } else {
-            r.rgba.assign(d.begin() + data, d.begin() + data + size);
-            r.width = w, r.height = h, r.format = format;
+            r.rgba.assign(d.begin() + long(data), d.begin() + long(data + size));
+            r.width = w, r.height = h;
+            if (rgba8) {
+                // an Azahar pack's, turned over here; blocks are turned over
+                // where they are sampled
+                if (pack.azahar) turn_over(r.rgba, w, h);
+            } else {
+                r.format = format;
+                r.upside_down = pack.azahar;
+            }
         }
         return r;
     }
-    std::vector<uint8_t> upright;
     uint32_t w = 0, h = 0;
-    if (load_image && load_image(file, upright, w, h) && w && h && w <= 8192 && h <= 8192 && upright.size() >= size_t(w) * h * 4) {
+    if (load_image && load_image(file, r.rgba, w, h) && w && h && w <= 8192 && h <= 8192 && r.rgba.size() >= size_t(w) * h * 4) {
         r.rgba.resize(size_t(w) * h * 4);
-        for (uint32_t y = 0; y < h; y++) std::memcpy(&r.rgba[size_t(y) * w * 4], &upright[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
+        if (!pack.azahar || !pack.flip_png) turn_over(r.rgba, w, h);
         r.width = w, r.height = h;
     } else {
+        r.rgba.clear();
         std::fprintf(stderr, "runtime: %s would not read as an image\n", file.string().c_str());
     }
     return r;
 }
 
-// an HD texture for a hash: read already (preloaded, or asked for before),
-// else read now. a Replacement stays where it is once in the map
-const Impl::Replacement *Impl::replacement(uint64_t hash) {
-    auto file = replacement_files.find(hash);
-    if (file == replacement_files.end()) return nullptr;
+// an HD texture for a pack's file: read already (preloaded, or asked for
+// before), else read now. a Replacement stays where it is once in the map
+const Impl::Replacement *Impl::replacement(const PackFile &file) {
     {
         std::lock_guard g(replacements_lock);
-        if (auto it = replacements.find(hash); it != replacements.end()) return it->second.rgba.empty() ? nullptr : &it->second;
+        if (auto it = replacements.find(&file); it != replacements.end()) return it->second.rgba.empty() ? nullptr : &it->second;
     }
-    Replacement read = read_replacement(file->second);
+    Replacement read = read_replacement(file);
     std::lock_guard g(replacements_lock);
-    Replacement &r = replacements.try_emplace(hash, std::move(read)).first->second;
+    Replacement &r = replacements.try_emplace(&file, std::move(read)).first->second;
     return r.rgba.empty() ? nullptr : &r;
 }
 
 // every HD texture read on threads of their own, those the game asked for
 // first left alone
 void Impl::preload_replacements() {
-    std::vector<std::pair<uint64_t, std::filesystem::path>> files(replacement_files.begin(), replacement_files.end());
+    std::vector<const PackFile *> files = packs.files();
     auto next = std::make_shared<std::atomic<size_t>>(0);
     const size_t workers = std::clamp<size_t>(std::thread::hardware_concurrency() / 2, 1, 8);
     for (size_t k = 0; k < workers; k++) {
@@ -199,11 +241,11 @@ void Impl::preload_replacements() {
             for (size_t i; !stop_preloading && (i = (*next)++) < files.size();) {
                 {
                     std::lock_guard g(replacements_lock);
-                    if (replacements.count(files[i].first)) continue;
+                    if (replacements.count(files[i])) continue;
                 }
-                Replacement read = read_replacement(files[i].second);
+                Replacement read = read_replacement(*files[i]);
                 std::lock_guard g(replacements_lock);
-                replacements.try_emplace(files[i].first, std::move(read));
+                replacements.try_emplace(files[i], std::move(read));
             }
         });
     }

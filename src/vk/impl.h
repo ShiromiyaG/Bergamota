@@ -9,6 +9,7 @@
 #include "runtime/vulkan_renderer.h"
 #include "runtime/memory.h"
 #include "runtime/pica_lighting.h"
+#include "runtime/texture_pack.h"
 #include "../pica/texture.h"
 #include "translate.h"
 #include "../pica/vertex.h"
@@ -99,6 +100,8 @@ struct State {
 // a register no game's GPU uses: what a draw is, as a port's override tags
 // it (between.cpp, match)
 constexpr uint32_t DRAW_TAG = 0x00F;
+// State's slot (past STATE_REGS's) for the units sampled with v turned over
+constexpr size_t TEX_FLIP = 63;
 constexpr uint32_t STATE_REGS[] = {
     0x0C0, 0x0C1, 0x0C2, 0x0C3, 0x0C4, 0x0C8, 0x0C9, 0x0CA, 0x0CB, 0x0CC, 0x0D0, 0x0D1, 0x0D2, 0x0D3, 0x0D4,
     0x0D8, 0x0D9, 0x0DA, 0x0DB, 0x0DC, 0x0F0, 0x0F1, 0x0F2, 0x0F3, 0x0F4, 0x0F8, 0x0F9, 0x0FA, 0x0FB, 0x0FC,
@@ -164,6 +167,9 @@ struct Surface {
 struct Texture {
     Image image;
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM; // an HD texture's may be compressed
+    // its rows the other way round from the game's (an Azahar pack's DDS or
+    // KTX): sampled with v turned over (draw's flips, pica.frag's TEX_FLIP)
+    bool upside_down = false;
     uint64_t hash = 0, checked_list = ~0ull;
 };
 
@@ -233,22 +239,25 @@ struct VulkanRenderer::Impl {
     // of the frames between, or drawn with no depth, and flashed
     std::vector<std::unique_ptr<Surface>> retired;
     std::map<std::tuple<uint32_t, uint32_t, uint32_t, uint32_t>, Texture> textures;
-    // HD textures (VulkanRenderer::textures_from): the files by the hash of
-    // what they replace, and those read so far (upright rows turned over to
-    // the PICA's, empty for one that would not read)
+    // HD textures (VulkanRenderer::textures_from): the packs' files by the
+    // hash of what they replace, and those read so far (their rows as the
+    // game's are, empty for one that would not read)
     struct Replacement {
-        std::vector<uint8_t> rgba; // RGBA8, or a DDS's blocks
+        std::vector<uint8_t> rgba; // RGBA8, or a DDS's or KTX's blocks
         uint32_t width = 0, height = 0;
         VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+        bool upside_down = false; // blocks stored the other way round
     };
-    std::map<uint64_t, std::filesystem::path> replacement_files;
-    std::map<uint64_t, Replacement> replacements; // under replacements_lock while preloading
+    TexturePacks packs;
+    std::map<const PackFile *, Replacement> replacements; // under replacements_lock while preloading
+    // the views of textures sampled with v turned over
+    std::unordered_set<VkImageView> upside_down_views;
     std::mutex replacements_lock;
     std::vector<std::thread> preloaders;
     std::atomic<bool> stop_preloading{false};
     VulkanRenderer::LoadImage load_image;
-    const Replacement *replacement(uint64_t hash);
-    Replacement read_replacement(const std::filesystem::path &file) const;
+    const Replacement *replacement(const PackFile &file);
+    Replacement read_replacement(const PackFile &file) const;
     Image compressed_image(uint32_t w, uint32_t h, VkFormat format);
     void preload_replacements();
     // and the dump (VulkanRenderer::dump_textures)

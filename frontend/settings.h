@@ -69,11 +69,15 @@ struct Settings {
         // window's own); the 3DS's pixels then scale by a fraction
         std::string resolution = "native";
         bool antialias = false; // FXAA over the screens
-        // HD textures: the PNGs in textures/ beside the settings in place of
-        // the game's (VulkanRenderer::textures_from); and every texture the
-        // game uses written to texture-dump/ (dump_textures). on the next start
+        // texture packs, Azahar's as they are (load/textures/<title id>
+        // beside the settings, Azahar's own, textures/ from before;
+        // docs/tools.md), in place of the game's textures; and every texture
+        // the game uses dumped as Azahar dumps them, to dump/textures/<title
+        // id> (dump_textures). on the next start
         bool hd_textures = true;
         bool preload_textures = false; // all of them read from the start, not as the game first uses each
+        // also the packs installed for Azahar (its load/textures/<title id>)
+        bool azahar_textures = true;
         bool dump_textures = false;
         float sharpen = 0;      // 0-1
         // the outlines around the characters: "auto" (the game's at the

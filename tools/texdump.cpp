@@ -7,14 +7,17 @@
 //
 //   texdump <game .3ds> [update .cia] <out folder>
 //
-// Each is named tex_<width>x<height>_<hash>_<format>.png: the hash is the
-// runtime's hash_bytes (src/vk/impl.h) over the texture's first level as
-// the GPU reads it (8x8 tiles), the bytes a loader of replacements will
-// see in memory; format is the PICA's (0 RGBA8 ... 13 ETC1A4). The image
-// is upright: the PICA keeps the bottom row first. Textures made while the
-// game runs (the font, what it draws into) are not in its files.
+// Each is named as Azahar names its dumps, tex1_<width>x<height>_<hash>_
+// <format>_mip0.png: the hash is its new one (CityHash64 over the
+// texture's first level as the GPU reads it, 8x8 tiles, the bytes the
+// runtime sees in memory; runtime/texture_pack.h), format the PICA's (0
+// RGBA8 ... 13 ETC1A4), the PNG's first row the first in memory, and a
+// pack.json beside them, so the folder is a pack (the runtime's and
+// Azahar's) as it is. Textures made while the game runs (the font, what it
+// draws into) are not in its files.
 
 #include "runtime/dump.h"
+#include "runtime/texture_pack.h"
 #include "../src/pica/texture.h"
 
 #include <algorithm>
@@ -34,22 +37,6 @@ using Bytes = std::vector<uint8_t>;
 uint32_t u16(const uint8_t *p) { return p[0] | p[1] << 8; }
 uint32_t u32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | uint32_t(p[3]) << 24; }
 
-// the same as src/vk/impl.h's hash_bytes: the two must agree
-uint64_t hash_bytes(const uint8_t *p, size_t n) {
-    uint64_t lane[4] = {0x9E3779B97F4A7C15ull, 0xC2B2AE3D27D4EB4Full, 0x165667B19E3779F9ull, 0x27D4EB2F165667C5ull};
-    size_t i = 0;
-    for (; i + 32 <= n; i += 32) {
-        for (int k = 0; k < 4; k++) {
-            uint64_t w;
-            std::memcpy(&w, p + i + k * 8, 8);
-            lane[k] = (lane[k] ^ w) * 0x9E3779B97F4A7C15ull;
-            lane[k] ^= lane[k] >> 31;
-        }
-    }
-    uint64_t h = lane[0] ^ lane[1] * 3 ^ lane[2] * 5 ^ lane[3] * 7 ^ n;
-    for (; i < n; i++) h = (h ^ p[i]) * 0x100000001b3ull;
-    return h;
-}
 
 // --- PNG, stored (no compression): small to write, any viewer reads it
 
@@ -119,17 +106,14 @@ struct Dumper {
         if (format > 13 || w < 8 || h < 8 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1))) return;
         const size_t size = size_t(w) * h * runtime::pica::texture_bits(format) / 8;
         if (size > avail) return;
-        const uint64_t hash = hash_bytes(data, size);
+        const uint64_t hash = runtime::raw_texture_hash(data, size);
         if (!seen.insert(hash).second) {
             repeated++;
             return;
         }
-        std::vector<uint8_t> rgba(size_t(w) * h * 4), upright(rgba.size());
+        std::vector<uint8_t> rgba(size_t(w) * h * 4);
         runtime::pica::decode_texture(format, data, w, h, rgba.data());
-        for (uint32_t y = 0; y < h; y++) std::memcpy(&upright[size_t(y) * w * 4], &rgba[size_t(h - 1 - y) * w * 4], size_t(w) * 4);
-        char name[96];
-        std::snprintf(name, sizeof name, "tex_%ux%u_%016llX_%u.png", w, h, (unsigned long long)hash, format);
-        if (write_png(out / name, upright.data(), w, h)) written++, by_kind[kind]++;
+        if (write_png(out / runtime::dump_name(w, h, hash, format), rgba.data(), w, h)) written++, by_kind[kind]++;
     }
 
     // BCH: its textures are the GPU's commands for texture unit 0 (size,
@@ -402,6 +386,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> dumps(argv + 1, argv + argc - 1);
     Dumper dumper{argv[argc - 1]};
     std::filesystem::create_directories(dumper.out);
+    runtime::write_pack_template(dumper.out);
     // each path from the last dump that has it: the update over the game
     struct Source {
         RomFs fs;

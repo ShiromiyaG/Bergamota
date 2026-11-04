@@ -23,6 +23,7 @@
 #include "ui.h"
 
 #include "runtime/decomp.h"
+#include "runtime/texture_pack.h"
 #include "runtime/async_gpu.h"
 #include "runtime/fs.h"
 #include "runtime/pica.h"
@@ -58,6 +59,29 @@
 #include <thread>
 
 using namespace runtime;
+
+namespace {
+
+// where Azahar keeps its user folder, which holds load/textures: a user\
+// beside its program is not known here, its own place for its data is
+std::vector<std::filesystem::path> azahar_folders() {
+    std::vector<std::filesystem::path> out;
+    auto var = [](const char *name) -> std::filesystem::path {
+        const char *v = SDL_getenv(name);
+        return v && *v ? frontend::path_of(v) : std::filesystem::path();
+    };
+#ifdef _WIN32
+    if (auto appdata = var("APPDATA"); !appdata.empty()) out.push_back(appdata / "Azahar");
+#elif defined(__APPLE__)
+    if (auto home = var("HOME"); !home.empty()) out.push_back(home / "Library/Application Support/Azahar");
+#else
+    if (auto data = var("XDG_DATA_HOME"); !data.empty()) out.push_back(data / "azahar-emu");
+    else if (auto home = var("HOME"); !home.empty()) out.push_back(home / ".local/share/azahar-emu");
+#endif
+    return out;
+}
+
+} // namespace
 using frontend::Settings;
 
 
@@ -550,10 +574,18 @@ int main(int argc, char **argv) {
     ImFont *ui_font = start_overlay(window, presenter, font_file, battle_art, art_folder);
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
-    // HD textures beside the settings (any folders in textures/), and the dump
+    // texture packs: Azahar's layout beside the settings (load/textures/<title
+    // id>), the packs installed for Azahar itself, and the runtime's own
+    // textures/ from before; and the dump, in Azahar's layout too
+    const std::string title_id = runtime::title_folder(session.exheader.program_id);
     if (settings.video.hd_textures) {
-        vulkan.textures_from(config_file.parent_path() / "textures", [](const std::filesystem::path &file, std::vector<uint8_t> &rgba,
-                                                                        uint32_t &w, uint32_t &h) {
+        std::vector<std::filesystem::path> folders{config_file.parent_path() / "load" / "textures" / title_id};
+        if (settings.video.azahar_textures) {
+            for (const std::filesystem::path &azahar : azahar_folders()) folders.push_back(azahar / "load" / "textures" / title_id);
+        }
+        folders.push_back(config_file.parent_path() / "textures");
+        vulkan.textures_from(folders, [](const std::filesystem::path &file, std::vector<uint8_t> &rgba,
+                                         uint32_t &w, uint32_t &h) {
             SDL_Surface *loaded = SDL_LoadPNG(frontend::utf8(file).c_str());
             if (!loaded) return false;
             SDL_Surface *s = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_ABGR8888); // bytes R, G, B, A
@@ -568,8 +600,8 @@ int main(int argc, char **argv) {
         }, settings.video.preload_textures);
     }
     if (settings.video.dump_textures) {
-        vulkan.dump_textures(config_file.parent_path() / "texture-dump", [](const std::filesystem::path &file, const uint8_t *rgba,
-                                                                           uint32_t w, uint32_t h) {
+        vulkan.dump_textures(config_file.parent_path() / "dump" / "textures" / title_id, [](const std::filesystem::path &file,
+                                                                                            const uint8_t *rgba, uint32_t w, uint32_t h) {
             SDL_Surface *s = SDL_CreateSurfaceFrom(int(w), int(h), SDL_PIXELFORMAT_ABGR8888, const_cast<uint8_t *>(rgba), int(w * 4));
             bool saved = s && SDL_SavePNG(s, frontend::utf8(file).c_str());
             SDL_DestroySurface(s);

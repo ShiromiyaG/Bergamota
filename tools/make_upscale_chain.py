@@ -1,8 +1,11 @@
 """A chaiNNer chain (.chn) that upscales a folder of textures (texdump's, or
-the player's texture-dump) with a PyTorch model and saves them under the
-same names and folders, ready for the player's textures/ folder: as DDS in
-BC7 (a byte a pixel on disk and on the GPU; turned upside down, as the
-runtime takes a DDS's rows bottom first), or with --png as PNG.
+the player's dump/textures, Azahar's layout both) with a PyTorch model and
+saves them under the same names and folders, a texture pack for the player
+and for Azahar alike (load/textures/<title id>/): as DDS in BC7 (a byte a
+pixel on disk and on the GPU; turned upside down, as Azahar keeps a DDS's
+rows the other way round from its PNGs), or with --png as PNG. Its
+pack.json is written beside them (for DDS skip_mipmap off, or Azahar
+passes them over).
 
     python -I make_upscale_chain.py <textures folder> <out folder> <chain.chn> [model .pth/.safetensors] [--png]
 
@@ -13,6 +16,7 @@ padding is Wrap (Tile), as most of a game's textures repeat.
 
 import hashlib
 import json
+import os
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -97,6 +101,12 @@ def main():
     }
     with open(chain, "w", encoding="utf-8") as f:
         f.write(json.dumps(saved, separators=(",", ":"), ensure_ascii=False))
+    # the pack's options, as Azahar reads them: the new hash (the dumps'),
+    # PNGs as dumped; a DDS's mips are its own (one level), so not made
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, "pack.json"), "w", encoding="utf-8") as f:
+        json.dump({"author": "", "version": "1.0.0", "description": "Upscaled with chaiNNer",
+                   "options": {"skip_mipmap": png, "flip_png_files": True, "use_new_hash": True}}, f, indent=4)
     print(chain)
 
 

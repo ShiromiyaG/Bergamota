@@ -140,7 +140,8 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("Anti-aliasing (FXAA)", &s.video.antialias);
             moved |= ImGui::Checkbox("HD textures (textures folder; on the next start)", &s.video.hd_textures);
             moved |= ImGui::Checkbox("Preload the HD textures (no stutter, more memory; on the next start)", &s.video.preload_textures);
-            moved |= ImGui::Checkbox("Dump the textures the game uses (texture-dump folder; on the next start)", &s.video.dump_textures);
+            moved |= ImGui::Checkbox("Dump the textures the game uses (dump/textures, as Azahar dumps; on the next start)", &s.video.dump_textures);
+            moved |= ImGui::Checkbox("Use the texture packs installed for Azahar too (on the next start)", &s.video.azahar_textures);
             static const char *OUTLINES[] = {"auto", "original", "thin", "none"};
             int outlines = 0;
             for (int i = 0; i < 4; i++) {

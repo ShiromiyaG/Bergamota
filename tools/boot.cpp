@@ -65,6 +65,8 @@
 #include "runtime/session.h"
 #include "runtime/system.h"
 #ifdef BOOT_LAYOUTS
+#include <SDL3/SDL.h>
+
 #include "../frontend/battle_ui.h"
 #include "../frontend/layouts.h"
 #include "../frontend/scenes.h"
@@ -75,6 +77,7 @@
 #include <functional>
 #include <memory>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -230,6 +233,45 @@ int main(int argc, char **argv) {
             if (env("RUNTIME_SCALE")) vulkan->scale = float(std::atof(env("RUNTIME_SCALE")));
             // RUNTIME_SHADER_CACHE=folder: the translated vertex programs kept across runs
             if (env("RUNTIME_SHADER_CACHE")) vulkan->cache_in(env("RUNTIME_SHADER_CACHE"));
+            // RUNTIME_TEXTURES=folder[;folder...]: texture packs, as the player
+            // reads them (PNGs where boot has SDL); RUNTIME_DUMP_TEXTURES=folder:
+            // the dump, as the player writes it
+            if (const char *packs = env("RUNTIME_TEXTURES")) {
+                std::vector<std::filesystem::path> folders;
+                std::stringstream list(packs);
+                for (std::string folder; std::getline(list, folder, ';');) {
+                    if (!folder.empty()) folders.push_back(std::filesystem::u8path(folder));
+                }
+                vulkan->textures_from(folders, [](const std::filesystem::path &file, std::vector<uint8_t> &rgba, uint32_t &w, uint32_t &h) {
+#ifdef BOOT_LAYOUTS
+                    SDL_Surface *loaded = SDL_LoadPNG(file.string().c_str());
+                    if (!loaded) return false;
+                    SDL_Surface *c = SDL_ConvertSurface(loaded, SDL_PIXELFORMAT_ABGR8888);
+                    SDL_DestroySurface(loaded);
+                    if (!c) return false;
+                    w = uint32_t(c->w), h = uint32_t(c->h);
+                    rgba.resize(size_t(w) * h * 4);
+                    for (uint32_t y = 0; y < h; y++)
+                        std::memcpy(&rgba[size_t(y) * w * 4], static_cast<const uint8_t *>(c->pixels) + size_t(y) * c->pitch, size_t(w) * 4);
+                    SDL_DestroySurface(c);
+                    return true;
+#else
+                    (void)file, (void)rgba, (void)w, (void)h;
+                    return false;
+#endif
+                });
+            }
+#ifdef BOOT_LAYOUTS
+            if (const char *dump = env("RUNTIME_DUMP_TEXTURES")) {
+                vulkan->dump_textures(std::filesystem::u8path(dump), [](const std::filesystem::path &file, const uint8_t *rgba, uint32_t w,
+                                                                        uint32_t h) {
+                    SDL_Surface *c = SDL_CreateSurfaceFrom(int(w), int(h), SDL_PIXELFORMAT_ABGR8888, const_cast<uint8_t *>(rgba), int(w * 4));
+                    bool saved = c && SDL_SavePNG(c, file.string().c_str());
+                    SDL_DestroySurface(c);
+                    return saved;
+                });
+            }
+#endif
         }
 #endif
         std::printf("drawing with the runtime's renderer\n");

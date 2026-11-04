@@ -125,11 +125,13 @@ void PlayerPages::graphics(ImU32 accent, const std::vector<runtime::DecompOption
     });
     look::row("Smooth scaling", "Off: sharp pixels.", box, [&] { check("##smooth", v.smooth); });
     look::row("Anti-aliasing (FXAA)", "", box, [&] { check("##antialias", v.antialias); });
-    look::row("HD textures", "The PNGs in the textures folder beside the settings, in place of the game's.", box,
+    look::row("Texture packs", "Azahar's packs as they are: in load/textures/<title id> beside the settings, and Azahar's own.", box,
               [&] { check("##hd_textures", v.hd_textures); });
+    look::row("Azahar's packs", "The texture packs installed for Azahar, read from its folder too.", box,
+              [&] { check("##azahar_textures", v.azahar_textures); });
     look::row("Preload HD textures", "All of them read from the start: no stutter the first time one shows, more memory.", box,
               [&] { check("##preload_textures", v.preload_textures); });
-    look::row("Dump textures", "Every texture the game uses written to texture-dump, for making HD ones.", box,
+    look::row("Dump textures", "Every texture the game uses written to dump/textures, as Azahar dumps them, for making packs.", box,
               [&] { check("##dump_textures", v.dump_textures); });
     look::row("Sharpen", "", wide, [&] { changed |= ImGui::SliderFloat("##sharpen", &v.sharpen, 0, 1, "%.2f"); });
 

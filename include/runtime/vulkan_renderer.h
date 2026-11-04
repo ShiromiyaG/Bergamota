@@ -80,7 +80,7 @@ public:
     // game first uses them, or, preload, all of them from the start on
     // threads of their own (the game asking for one not read yet reads it
     // itself); before the game starts
-    void textures_from(const std::filesystem::path &folder, LoadImage load, bool preload = false);
+    void textures_from(const std::vector<std::filesystem::path> &folders, LoadImage load, bool preload = false);
     // every texture the game uses written to folder once, named as texdump
     // names them (those only the running game makes too: the font, what it
     // draws into and reads back); before the game starts

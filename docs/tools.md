@@ -109,32 +109,69 @@ python -I tools/compare.py <exheader.bin> <code.bin> <library> <game .3ds> <upda
 Needs Pillow. The two clocks count alike but not the same, so timed scenes
 (the intro movie) can differ by a few frames without anything being wrong.
 
-## `texdump` and HD textures
+## Texture packs (HD textures) and `texdump`
 
-`texdump <game .3ds> [update .cia] <out folder>` writes a game's textures as
-PNG without running it: its RomFS (the update's files over the game's),
-through GARC, LZ11, Game Freak's two-letter packs and darc, to the textures in
-BCH, CLIM/FLIM, CTPK and Sun and Moon's GFTexture. Each is named
-`tex_<w>x<h>_<hash>_<format>.png`: the hash is `hash_bytes` (`src/vk/impl.h`)
-over the texture's first level as memory has it, the image upright. Two
-games of a pair go into one folder (the same texture, the same name). What
-only the running game makes (the font, what it draws into) is not in its
-files: the player's `video.dump_textures` writes every texture the game uses
-to `texture-dump/` beside the settings, named the same way.
+The player takes texture packs made for Azahar (and Citra) as they are,
+and writes its dumps the way Azahar does, so a pack made with either works
+in both. Written from a description of how Azahar behaves (its folders,
+names, options and hashes), none of its code; the hash is Google's
+CityHash64 v1.1, `src/texture_pack.cpp`.
 
-The player draws the PNGs in `textures/` beside the settings (any folders in
-it, any size, the 16 hex digits of the hash in the name) in place of the
-textures they name (`video.hd_textures`, on by default), read the first time
-the game uses each (`VulkanRenderer::textures_from`, `src/vk/textures.cpp`),
-or all of them from the start on threads of their own with
-`video.preload_textures` (no stutter, but every one kept in memory).
+**Where.** A game's packs are `load/textures/<title id>/` beside the
+player's settings (the title id as 16 upper-case hex digits, the game's
+own, never the update's: `00040000001B5000` for Ultra Sun), then the same
+folder in Azahar's own user folder (`%APPDATA%\Azahar`, `video.azahar_textures`,
+on by default), then `textures/` beside the settings (the runtime's packs
+from before). Every folder in them is searched; the first file found for a
+texture keeps it (folders in that order, files in name order).
 
-`tools/make_upscale_chain.py <textures> <out> <chain.chn> [model]` writes a chaiNNer
-(0.26) chain that upscales a folder of them with a PyTorch model and saves
-each under its own name and folder, ready for `textures/`: as DDS in BC7 (a
-byte a pixel on disk and on the GPU, kept compressed; turned upside down
-first, since the runtime takes a DDS's rows bottom first, as the PICA keeps
-them), or with `--png` as PNG. The player reads DDSs of BC1, BC3 and BC7.
+**A pack's files.** `tex1_<w>x<h>_<hash>_<format>...png` (or `.dds`, `.ktx`):
+only the hash counts, the size, format and `_mipN` in the name are left
+alone, and the file may be any size. A `pack.json` at the pack's top says
+how its hashes were taken and how its files lie:
+
+| `options` | | |
+| --- | --- | --- |
+| `use_new_hash` | true | the hash of the texture's first level as memory has it (8x8 tiles, the PICA's own encoding) |
+| | false | the legacy hash: the same decoded, its rows from the last in memory to the first, formats 0-4 their texels' own bytes, 5-13 R, G, B, A |
+| `flip_png_files` | true | a PNG's first row is the texture's first in memory, as dumps are |
+| `skip_mipmap` | true | DDS files are passed over (Azahar makes the mips from the base, which a DDS cannot have) |
+
+`textures` gives hashes to files by name (`"114BFC385ED72F15": "logo.png"`).
+A folder without a `pack.json` is a legacy pack: the legacy hash, PNGs as
+dumped, DDS passed over. A DDS or KTX is read as it is stored, the other
+way round from a PNG (its first row the texture's last in memory); the
+blocks are not turned over but sampled with v turned over (`TEX_FLIP`,
+`src/vk/draw.cpp`, `pica.frag`), so BC7 needs nothing done to it. Read: PNG,
+DDS and KTX 1 of RGBA8, BC1, BC3, BC5 and BC7 (their first level). Not:
+normal maps (`.norm.`), ASTC, the mips of a pack (the runtime draws the
+first level only). The runtime's own files from before, `tex_<...>_<hash>_<...>`
+with its own hash and the other orientation, still read, in any folder.
+
+**Reading.** As the game first uses each texture, or all of them from the
+start on threads of their own with `video.preload_textures` (no stutter,
+but every one kept in memory). `boot` takes `RUNTIME_TEXTURES=folder;folder`.
+
+**Dumping.** `video.dump_textures` writes every texture the game uses to
+`dump/textures/<title id>/` beside the settings as Azahar does: named
+`tex1_<w>x<h>_<hash>_<format>_mip0.png` by the new hash, the PNG's first row
+the first in memory, and a `pack.json` saying so, so the folder is a pack
+as it is (`boot`: `RUNTIME_DUMP_TEXTURES=folder`). `texdump <game .3ds>
+[update .cia] <out folder>` writes the same without playing: the game's
+RomFS (the update's files over the game's), through GARC, LZ11, Game
+Freak's two-letter packs and darc, to the textures in BCH, CLIM/FLIM, CTPK
+and Sun and Moon's GFTexture. Two games of a pair go into one folder (the
+same texture, the same name). What only the running game makes (the font,
+what it draws into) is not in its files.
+
+`tools/make_upscale_chain.py <textures> <out> <chain.chn> [model]` writes a
+chaiNNer (0.26) chain that upscales a dump with a PyTorch model and saves
+each under its own name and folder, with the pack's `pack.json`: as DDS in
+BC7 (a byte a pixel on disk and on the GPU, kept compressed; turned upside
+down first, as Azahar keeps a DDS), or with `--png` as PNG.
+
+Checked on Ultra Sun's intro: its dump used as a pack draws the same
+pictures, as PNG and as an RGBA8 DDS, and a BC3 DDS the right way up.
 
 ## The player
 

@@ -111,7 +111,8 @@ uint shape_lookups(int i) { switch (i) { case 0: return K40; case 1: return K41;
 // the registers, by the slots renderer.cpp puts them in
 uint reg(int slot) { return s.regs[slot >> 2][slot & 3]; }
 const int TEV = 0, TEV_UPDATE = 30, TEV_BUFFER = 31, ALPHA_TEST = 32, TEX_CONFIG = 33, TEX_PARAMS = 34, TEX_BORDER = 37,
-          FOG_COLOR = 40, PROCTEX = 41, TEX_SHADOW = 47, SHADOW_OUTPUT = 48; // the procedural texture's six: configuration, noise u, v, frequency, table, offset
+          FOG_COLOR = 40, PROCTEX = 41, TEX_SHADOW = 47, SHADOW_OUTPUT = 48,
+          TEX_FLIP = 63; // the units whose texture's rows go the other way (draw.cpp) // the procedural texture's six: configuration, noise u, v, frequency, table, offset
 
 // what the shape fixes, from the constants or the blocks
 uint stage_reg(int stage, int k) {
@@ -390,7 +391,8 @@ vec4 texel(int unit, vec2 uv) {
     if ((border_s && (uv.x < 0.0 || uv.x > 1.0)) || (border_t && (uv.y < 0.0 || uv.y > 1.0))) {
         return unpack(reg(TEX_BORDER + unit));
     }
-    return texture(textures[unit], vec2(uv.x, 1.0 - uv.y));
+    bool turned = ((reg(TEX_FLIP) >> unit) & 1u) != 0u;
+    return texture(textures[unit], vec2(uv.x, turned ? uv.y : 1.0 - uv.y));
 }
 
 // texture 0 as a cube map: the face the direction (u, v, w) points at most,

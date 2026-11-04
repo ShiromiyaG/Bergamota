@@ -24,6 +24,7 @@ add_library(recomp_runtime STATIC
     src/decomp_options.cpp
     src/cheats.cpp
     src/fiber.cpp
+    src/texture_pack.cpp
     src/interpreter.cpp
     src/cro.cpp
     src/gpu.cpp
@@ -48,6 +49,19 @@ add_library(recomp_runtime STATIC
     src/service_list.cpp
     src/sampler.cpp
 )
+# CityHash v1.1.1 (Google's, MIT): the hash Azahar's (and Citra's) texture
+# packs name textures by (texture_pack.h). Its configure only writes a
+# config.h, which nothing in city.cc needs
+include(FetchContent)
+FetchContent_Declare(cityhash GIT_REPOSITORY https://github.com/google/cityhash.git
+                     GIT_TAG f5dc54147fcce12cefd16548c8e760d68ac04226)
+FetchContent_MakeAvailable(cityhash)
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/cityhash/config.h "/* CityHash's configure would write this; city.cc needs nothing of it */\n")
+add_library(cityhash STATIC ${cityhash_SOURCE_DIR}/src/city.cc)
+target_include_directories(cityhash PUBLIC ${cityhash_SOURCE_DIR}/src PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/cityhash)
+target_compile_options(cityhash PRIVATE -w)
+target_link_libraries(recomp_runtime PUBLIC cityhash)
+
 # the audio firmware's AAC decoder (X and Y, Omega Ruby and Alpha Sapphire
 # play their music through it): Fraunhofer's FDK AAC, static, built here
 option(RUNTIME_AAC "the DSP's AAC decoder, with FDK AAC (fetched)" ON)
@@ -183,6 +197,9 @@ add_test(NAME cheats COMMAND cheats_test)
 add_executable(fiber_test tests/fiber_test.cpp)
 target_link_libraries(fiber_test PRIVATE recomp_runtime)
 add_test(NAME fiber COMMAND fiber_test)
+add_executable(texture_pack_test tests/texture_pack_test.cpp)
+target_link_libraries(texture_pack_test PRIVATE recomp_runtime)
+add_test(NAME texture_pack COMMAND texture_pack_test)
 add_executable(program_test tests/program_test.cpp)
 target_link_libraries(program_test PRIVATE recomp_runtime)
 add_test(NAME program COMMAND program_test)

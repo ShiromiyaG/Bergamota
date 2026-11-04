@@ -36,38 +36,25 @@ void VulkanRenderer::translation_counts(uint64_t &compiled, uint64_t &loaded, ui
     compiled = impl_->translator->compiled, loaded = impl_->translator->loaded, failed = impl_->translator->failed;
 }
 
-void VulkanRenderer::textures_from(const std::filesystem::path &folder, LoadImage load, bool preload) {
+void VulkanRenderer::textures_from(const std::vector<std::filesystem::path> &folders, LoadImage load, bool preload) {
     if (!ready()) return;
     Impl &d = *impl_;
     d.load_image = std::move(load);
-    std::error_code e;
-    for (auto it = std::filesystem::recursive_directory_iterator(folder, e); !e && it != std::filesystem::recursive_directory_iterator();
-         it.increment(e)) {
-        if (!it->is_regular_file(e)) continue;
-        std::string ext = it->path().extension().string();
-        for (char &c : ext) c = char(std::tolower(uint8_t(c)));
-        if (ext != ".png" && ext != ".dds") continue;
-        // the hash: 16 hex digits on their own in the name
-        const std::string stem = it->path().stem().string();
-        for (size_t i = 0; i + 16 <= stem.size(); i++) {
-            auto hex = [&](size_t k) { return k < stem.size() && std::isxdigit(uint8_t(stem[k])); };
-            if ((i && hex(i - 1)) || hex(i + 16)) continue;
-            bool all = true;
-            for (size_t k = i; k < i + 16 && all; k++) all = hex(k);
-            if (!all) continue;
-            d.replacement_files[std::stoull(stem.substr(i, 16), nullptr, 16)] = it->path();
-            break;
-        }
+    // each folder a pack of its own (its pack.json, or a legacy pack's
+    // rules), the first to give a hash a file keeping it
+    for (const std::filesystem::path &folder : folders) {
+        if (size_t taken = d.packs.add_folder(folder))
+            std::fprintf(stderr, "runtime: %zu textures of our own in %s\n", taken, folder.string().c_str());
     }
-    if (!d.replacement_files.empty())
-        std::fprintf(stderr, "runtime: %zu textures of our own in %s\n", d.replacement_files.size(), folder.string().c_str());
-    if (preload && !d.replacement_files.empty()) d.preload_replacements();
+    if (preload && !d.packs.empty()) d.preload_replacements();
 }
 
 void VulkanRenderer::dump_textures(const std::filesystem::path &folder, SaveImage save) {
     if (!ready()) return;
     std::error_code e;
     std::filesystem::create_directories(folder, e);
+    // a pack as it is: Azahar's pack.json beside the dumps (the new hash)
+    write_pack_template(folder);
     impl_->dump_folder = folder;
     impl_->save_image = std::move(save);
 }
