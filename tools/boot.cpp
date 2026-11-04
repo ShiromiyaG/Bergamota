@@ -583,6 +583,9 @@ int main(int argc, char **argv) {
         std::printf("vulkan: %llu draws, %llu triangles, %llu uploads, %llu write-backs, %llu submits\n",
                     (unsigned long long)vulkan->stats.draws, (unsigned long long)vulkan->stats.triangles, (unsigned long long)vulkan->stats.uploads,
                     (unsigned long long)vulkan->stats.write_backs, (unsigned long long)vulkan->stats.submits);
+        if (vulkan->stats.replaced)
+            std::printf("texture packs: %llu textures replaced, by %llu files\n", (unsigned long long)vulkan->stats.replaced,
+                        (unsigned long long)vulkan->stats.replacements);
         std::printf("vulkan time: vertices %.1f s, draws %.1f s, syncs %.1f s; the host's GPU %.1f s\n", vulkan->stats.time_vertices,
                     vulkan->stats.time_render, vulkan->stats.time_sync, vulkan->stats.gpu_seconds);
         std::printf("the host's GPU: passes %.1f s, frames between %.1f s (copies %.1f s), screens %.1f s\n", vulkan->stats.gpu_parts[0],

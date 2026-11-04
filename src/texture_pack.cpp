@@ -312,10 +312,19 @@ size_t TexturePacks::add_folder(const fs::path &folder) {
         if (it->is_regular_file(ec)) files.push_back(it->path());
     }
     std::sort(files.begin(), files.end(), [](const fs::path &a, const fs::path &b) { return lower(utf8(a)) < lower(utf8(b)); });
-    auto &azahar = options.use_new_hash ? raw_ : decoded_;
     size_t taken = 0;
     auto give = [&](std::map<uint64_t, PackFile> &to, uint64_t hash, const fs::path &path, bool is_azahar) {
-        if (to.try_emplace(hash, PackFile{path, is_azahar, options.flip_png_files}).second) taken++;
+        return to.try_emplace(hash, PackFile{path, is_azahar, options.flip_png_files}).second;
+    };
+    // an Azahar file: by its pack.json's hash; without one by either (Azahar
+    // takes the legacy one alone there; a tool that names files by the new
+    // one, as dumps from a pack.json are, then works too, and the two never
+    // meet: 64 bits each)
+    auto give_azahar = [&](uint64_t hash, const fs::path &path) {
+        bool given = false;
+        if (!has_json || options.use_new_hash) given |= give(raw_, hash, path, true);
+        if (!has_json || !options.use_new_hash) given |= give(decoded_, hash, path, true);
+        return given;
     };
     // the files the aliases name, by their leaf name
     std::map<std::string, std::vector<uint64_t>> aliased;
@@ -336,17 +345,21 @@ size_t TexturePacks::add_folder(const fs::path &folder) {
         if (ext != "png" && ext != "dds" && ext != "ktx") continue;
         // normal maps (name.norm.png) are not drawn here
         if (parts.size() == 3 && lower(parts[1]) == "norm") continue;
-        // where mips are made from the base (skip_mipmap, a legacy pack's
-        // rule), Azahar passes a DDS over
-        const bool dds_out = ext == "dds" && options.skip_mipmap;
+        // where a pack.json has mips made from the base (skip_mipmap),
+        // Azahar passes a DDS over; a folder without one, which Azahar
+        // takes for a legacy pack and passes every DDS over in, has its
+        // DDS read here (the runtime draws the first level only)
+        const bool dds_out = ext == "dds" && has_json && options.skip_mipmap;
+        bool given = false;
         if (auto alias = aliased.find(leaf); alias != aliased.end() && !dds_out) {
-            for (uint64_t hash : alias->second) give(azahar, hash, path, true);
+            for (uint64_t hash : alias->second) given |= give_azahar(hash, path);
         }
         if (auto hash = azahar_hash(parts[0])) {
-            if (!dds_out) give(azahar, *hash, path, true);
+            if (!dds_out) given |= give_azahar(*hash, path);
         } else if (parts[0].rfind("tex1_", 0) != 0) {
-            if (auto own = own_hash(parts[0])) give(own_, *own, path, false);
+            if (auto own = own_hash(parts[0])) given |= give(own_, *own, path, false);
         }
+        taken += given;
     }
     return taken;
 }

@@ -252,6 +252,8 @@ struct VulkanRenderer::Impl {
     std::map<const PackFile *, Replacement> replacements; // under replacements_lock while preloading
     // the views of textures sampled with v turned over
     std::unordered_set<VkImageView> upside_down_views;
+    // the files put in some texture's place so far (Stats::replacements)
+    std::unordered_set<const PackFile *> used_files;
     std::mutex replacements_lock;
     std::vector<std::thread> preloaders;
     std::atomic<bool> stop_preloading{false};

@@ -105,6 +105,8 @@ VkImageView Impl::texture_at(Pica &p, int unit, uint32_t address) {
             else upside_down_views.erase(t.image.view);
             if (r) {
                 upload_color(t.image, r->rgba.data(), r->rgba.size());
+                self.stats.replaced++;
+                if (used_files.insert(file).second) self.stats.replacements++;
             } else {
                 std::vector<uint8_t> rgba(size_t(w) * h * 4);
                 decode_texture(format, bytes, w, h, rgba.data());

@@ -138,8 +138,12 @@ how its hashes were taken and how its files lie:
 | `skip_mipmap` | true | DDS files are passed over (Azahar makes the mips from the base, which a DDS cannot have) |
 
 `textures` gives hashes to files by name (`"114BFC385ED72F15": "logo.png"`).
-A folder without a `pack.json` is a legacy pack: the legacy hash, PNGs as
-dumped, DDS passed over.
+A folder without a `pack.json` reads a little more than Azahar does: Azahar
+takes it for a legacy pack (the legacy hash only, DDS passed over); here
+each name is looked up by either hash (64 bits each, they never meet) and
+its DDS are read too, so a folder of DDS named by the new hash, as other
+tools dump them, works without a `pack.json`. A pack that works in Azahar
+works the same here.
 
 Rows: Azahar keeps a texture's rows from the last in memory to the first,
 the runtime first to last (and samples with v turned over). So the same

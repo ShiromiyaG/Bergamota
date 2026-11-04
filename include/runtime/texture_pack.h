@@ -39,8 +39,9 @@ struct PackFile {
     bool flip_png = true;
 };
 
-// what a pack.json says, as Azahar reads it; a folder without one is a
-// legacy pack (the legacy hash, mips made from the base, DDS passed over)
+// what a pack.json says, as Azahar reads it. a folder without one, which
+// Azahar takes for a legacy pack (the legacy hash only, DDS passed over),
+// has its names looked up here by either hash and its DDS read too
 struct PackOptions {
     bool skip_mipmap = true, flip_png_files = true, use_new_hash = false;
     // hashes given to files by name (pack.json's "textures")

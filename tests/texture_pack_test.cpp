@@ -118,8 +118,9 @@ void folders() {
     const PackFile *found = packs.find(0, tex.data(), 8, 8, 0);
     CHECK(found && found->azahar && found->path.filename().string().find(".dds") != std::string::npos);
 
-    // a legacy pack (no pack.json): the decoded hash, DDS passed over, a PNG
-    // taken; and the runtime's own tex_ names with its own hash
+    // no pack.json: a name by either hash, DDS read too (where Azahar takes
+    // the legacy hash alone and passes DDS over); and the runtime's own tex_
+    // names with its own hash
     fs::path b = fs::temp_directory_path() / "runtime-texture-pack-b";
     fs::remove_all(b);
     fs::create_directories(b);
@@ -129,7 +130,13 @@ void folders() {
     touch(b / name);
     touch(b / "tex_8x8_00000000000000AB_0.png");
     TexturePacks legacy_packs;
-    CHECK(legacy_packs.add_folder(b) == 2);
+    std::vector<uint8_t> second(tex.size(), 9);
+    std::snprintf(name, sizeof name, "tex1_8x8_%016llX_0_mip0.dds", (unsigned long long)raw_texture_hash(second.data(), second.size()));
+    touch(b / "sub" / name);
+    CHECK(legacy_packs.add_folder(b) == 4);
+    // the one named by the new hash, a DDS, found
+    const PackFile *by_new = legacy_packs.find(0, second.data(), 8, 8, 0);
+    CHECK(by_new && by_new->azahar && by_new->path.extension() == ".dds");
     const PackFile *png = legacy_packs.find(0, tex.data(), 8, 8, 0);
     CHECK(png && png->azahar && png->flip_png);
     const PackFile *own = legacy_packs.find(0, tex.data(), 8, 8, 0xAB);

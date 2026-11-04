@@ -63,6 +63,9 @@ public:
         uint64_t lacking[2]{};
         // write-backs by cause: the CPU (guards), the front end, a fill, a texture
         uint64_t write_back_causes[4]{};
+        // textures a pack's file was put in place of, and the files of
+        // those (each counted once)
+        uint64_t replaced = 0, replacements = 0;
     } stats;
     void translation_counts(uint64_t &compiled, uint64_t &loaded, uint64_t &failed) const;
     // the translated shaders and the driver's pipelines kept in folder
