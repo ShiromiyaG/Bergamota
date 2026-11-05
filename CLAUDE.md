@@ -1,7 +1,7 @@
-# runtime — instruções para o Claude
+# Kumquat (tools/runtime) — instruções para o Claude
 
 Sistema 3DS enxuto para os ports (Solstice, Duality, Tidefall): só as syscalls e os serviços que
-esses jogos usam. Repositório privado `ShiromiyaG/recomp-runtime`; commits locais de rotina permitidos, push só
+esses jogos usam. Repositório privado `ShiromiyaG/Kumquat` (até 2026-11-05 `recomp-runtime`); commits locais de rotina permitidos, push só
 quando o dono pedir. Docs em inglês.
 
 - C++20, interface em C puro (`include/runtime/runtime.h`); CMake + Ninja + clang (decidido em

@@ -1,10 +1,11 @@
-# runtime
+# Kumquat
 
-A lean 3DS system for the recompiled Pokémon ports (Solstice, Duality,
-Tidefall): the kernel calls, system services, sound and graphics these games
-use, made to measure, in place of a whole emulator. C++20 with a plain C
-interface (`include/runtime/runtime.h`), so the games' C (a decomp's, else
-[3dsrecomp](https://github.com/fearkov/3dsrecomp)'s) calls it directly.
+A lean 3DS system for statically recompiled 3DS games: the kernel calls,
+system services, sound and graphics the games use, made to measure, in place
+of a whole emulator. C++20 with a plain C interface
+(`include/runtime/runtime.h`), so a game's C (a decomp's, else
+[3dsrecomp](https://github.com/fearkov/3dsrecomp)'s) calls it directly. Its
+first users are the Pokémon ports (Solstice, Duality, Tidefall).
 
 No game is included or needed to build it. To run anything you need your own
 copy of a game, its update, and a library of its code recompiled locally.
