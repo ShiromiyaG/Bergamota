@@ -1,42 +1,64 @@
 # Kumquat
 
-A lean 3DS system for statically recompiled 3DS games: the kernel calls,
-system services, sound and graphics the games use, made to measure, in place
-of a whole emulator. C++20 with a plain C interface
-(`include/runtime/runtime.h`), so a game's C (a decomp's, else
-[3dsrecomp](https://github.com/fearkov/3dsrecomp)'s) calls it directly. Its
-first users are the Pokémon ports (Solstice, Duality, Tidefall).
+Kumquat runs Nintendo 3DS games natively on the PC, from the games' own code
+recompiled to C. It is not an emulator: instead of a whole console, it gives a
+game only what the game uses (a 3DS kernel, the system services, sound and a
+Vulkan renderer). It comes with the recompiler, a player and a launcher.
 
-No game is included or needed to build it. To run anything you need your own
-copy of a game, its update, and a library of its code recompiled locally.
+**No game is included, and none is needed to build Kumquat.** To play, you
+need your own copy of a game and its update, which are recompiled on your
+computer.
 
-## What works
+Kumquat was made for three Pokémon ports, each in a repository of its own:
+**Solstice** (Ultra Sun / Ultra Moon), **Duality** (X / Y) and **Tidefall**
+(Omega Ruby / Alpha Sapphire).
 
-Pokémon Ultra Sun runs on it, in a window, from the intro movie through the
-title and the save to the field, with sound, on the runtime's own Vulkan
-renderer, at full speed on a desktop GPU.
+## How it works
 
-| Part | Where | State |
+1. **The recompiler** (`3dsrecomp`) reads a game and its update and turns the
+   game's ARM code (its executable and its CRO modules) into C.
+2. **A C compiler** (clang, or Zig when there is none) builds that C into a
+   library.
+3. **The player** loads the library and runs it on Kumquat. Each of the game's
+   threads runs on a fiber, its system calls go to Kumquat's kernel and its GPU
+   commands go to the Vulkan renderer. Code the library does not have (code
+   found only at run time, or changed by a mod) runs in a built-in ARM
+   interpreter.
+4. **A port** adds what belongs to its games: a `port.toml` that tells the
+   launcher which games it is for and, when needed, C for the game's own CPU
+   (`native/`) that changes the game, such as widescreen.
+
+## Status
+
+- **Pokémon Ultra Sun** plays from the intro movie through the title screen
+  and the save to the field, with sound, at full speed on a desktop GPU.
+  Ultra Moon's intro plays too. Battles and later scenes still need checking.
+- **X, Y, Omega Ruby and Alpha Sapphire** recompile, and Kumquat already has
+  what they need beyond Ultra Sun, such as the AAC decoder their music goes
+  through. Their ports come after Solstice.
+
+## What is in it
+
+| Part | What it does | Where |
 | --- | --- | --- |
-| Kernel: threads, objects, waits, the address arbiter, 32 syscalls | `kernel.h`, `src/kernel.cpp`, `src/svc.cpp` | done; tests in `tests/` |
-| Memory: FCRAM regions, VRAM, page tables, the memory syscalls, guards over what the GPU drew | `memory.h`, `src/memory.cpp` | done |
-| The run loop: cooperative threads on one host thread, a virtual clock for reproducible runs | `system.h`, `src/system.cpp` | done |
-| ARM/Thumb/VFPv2 interpreter, for code the C does not have | `interpreter.h` | done |
-| The decomp: its segment mapped, the jumps over the functions it replaces, a module's hooked as it loads, code checked against what was recompiled (`recomp_origins`), what the library lacks interpreted; the port's options (`option` lines) | `decomp.h`, `decomp_options.h`, `src/decomp.cpp`, `src/loader.cpp` | done; tests in `tests/` |
-| The player's own changes: an IPS patch of the program (`code.ips`), Gateway cheats (`cheats.txt`, Azahar's file) each frame | `cheats.h`, `src/cheats.cpp` | done; tests in `tests/` |
-| Services: srv, APT (with the shared font), cfg, fs (RomFS from the .3ds and update .cia, saves as folders), hid, ldr:ro with the CRO loader, y2r, gsp, ptm, offline answers for the online services | `services.h`, `src/services/`, `fs.h`, `cro.h`, `shared_font.h` | what USUM and X/Y use |
-| The dumps: NCSD, NCCH, CIA (its TMD), ExeFS, RomFS, BLZ; an update laid out for 3dsrecomp | `dump.h`, `src/dump.cpp` | done |
-| Sound: the DSP's 24 voices (PCM8/16, ADPCM, filters) and mixer, AAC with FDK AAC | `audio.h`, `aac.h`, `src/audio.cpp`, `src/aac.cpp` | done |
-| Graphics: the PICA200 front end, the vertex stage on the CPU, a Vulkan back end | `pica.h`, `src/pica/`, `vulkan_renderer.h`, `src/vk/` | to the field, with fragment lighting, fog, logic ops, mipmaps, scissor, the procedural texture, cube maps, shadows, the geometry shader, a resolution scale and a pipeline cache on disk; what a game asks for that is not done is counted ([plan](docs/vulkan-renderer.md)) |
-| The player: SDL3 window, keyboard, gamepad, mouse as the stylus, `config.toml`, a launcher and an ImGui overlay (F1) | `frontend/` | done |
-| The recompiler: 3dsrecomp in C++ (translated from the Rust, its C byte for byte the Rust's), the game's code as C and the library the runtime loads | `recomp/`, `3dsrecomp` ([docs](docs/recompiler.md)) | done; tests in `tests/` |
-| The ports' launcher: port.toml, the games set up and recompiled with 3dsrecomp (Zig fetched when there is no C compiler), the player's settings and controls, drawn with ImGui on SDL's renderer | `launcher/`, `tests/launcher_test.cpp` | done |
+| Recompiler | turns ARM, Thumb and VFP code into C, CRO modules included; a C++ translation of [3dsrecomp](https://github.com/fearkov/3dsrecomp) | `recomp/` ([docs](docs/recompiler.md)) |
+| Kernel and memory | threads, waits, the address arbiter, the memory regions and the system calls the games make | `src/kernel.cpp`, `src/svc.cpp`, `src/memory.cpp` |
+| Interpreter | ARM, Thumb and VFPv2, for code the library does not have | `include/runtime/interpreter.h` |
+| Services | srv, APT (with the shared font), cfg, fs, hid, ldr:ro (which loads the CRO modules), y2r, gsp and ptm; offline answers for the online services | `src/services/` |
+| Game files | reads `.3ds` and `.cia` dumps (NCSD, NCCH, CIA, ExeFS, RomFS) and unpacks updates | `src/dump.cpp` |
+| Sound | the DSP's 24 voices and its mixer; AAC through FDK AAC | `src/audio.cpp`, `src/aac.cpp` |
+| Graphics | the PICA200 GPU on Vulkan: its vertex shaders translated for the GPU, a resolution scale, widescreen, extra frames for 60 FPS and above, texture packs in Azahar's format | `src/pica/`, `src/vk/` ([docs](docs/vulkan-renderer.md)) |
+| Mods | a port's native code, `code.ips` patches and Gateway cheats (`cheats.txt`), none of which needs the game recompiled | `src/decomp.cpp`, `src/cheats.cpp` |
+| Player | an SDL3 window; keyboard, gamepad, and the mouse as the stylus; a settings overlay (F1); single-screen layouts | `frontend/` |
+| Launcher | sets up a port's games, recompiles them, and edits the player's graphics and controls | `launcher/` |
+
+The C interface that the games' code calls is `include/runtime/runtime.h`.
 
 ## Building
 
-Needs CMake 3.25+, Ninja, clang (or MSVC), the [Vulkan SDK](https://vulkan.lunarg.com/)
-(for `glslc` and the headers).
-SDL3, Dear ImGui and toml++ are fetched by CMake at configure time.
+You need CMake 3.25+, Ninja, clang (or MSVC) and the
+[Vulkan SDK](https://vulkan.lunarg.com/) (for `glslc` and the headers).
+CMake downloads SDL3, Dear ImGui, toml++ and FDK AAC by itself.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
@@ -44,43 +66,75 @@ cmake --build build
 ctest --test-dir build
 ```
 
-Builds are optimized unless a build type is given (a Debug runtime runs the
-games several times slower). Options: `RUNTIME_VULKAN` (the runtime's
-renderer), `RUNTIME_PLAYER` (the window).
+| Program | What it is |
+| --- | --- |
+| `build/player` | runs a game in a window |
+| `build/launcher` | the ports' launcher; each port's package renames it (`Solstice.exe`, ...) |
+| `build/3dsrecomp` | the recompiler |
+| `build/boot` | runs a game without a window, for measuring and testing |
 
-A port adds it with `add_subdirectory(../runtime runtime)` and links
-`recomp_runtime`.
+Builds are optimized unless you pick another build type; a Debug build runs
+games several times slower. CMake options: `RUNTIME_VULKAN` (the Vulkan
+renderer, on when the SDK is found), `RUNTIME_PLAYER` (the player and the
+launcher), `RUNTIME_AAC` (the AAC decoder).
+
+The ports include Kumquat as a submodule (`external/runtime`), and their
+package scripts build these programs from it. To link the library into a
+program of your own, `add_subdirectory` this folder and link `recomp_runtime`.
 
 ## Running
 
+The usual way is through a port: its launcher asks for your game and its
+update, recompiles them and opens the player.
+
+The player also runs on its own:
+
 ```sh
-# the window: asks for the game's files the first time (or with --setup)
-build/player
-build/player <exheader.bin> <code.bin> <recompiled library> <game .3ds> <update .cia> <saves folder>
+build/player                  # asks for the game's files the first time
+build/player --setup          # asks for them again
+build/player --config <file>  # uses another settings file
 ```
 
-Settings live in `%APPDATA%\runtime\config.toml` (or the platform's own
-place); F1 opens the overlay, F11 switches fullscreen. `RUNTIME_STATS=1`
-prints where each second went. `decomp` in `[game]` (the launcher's
-"Decomp folder") runs the decomp's C in place of the functions it
-replaces, in the interpreter where the library was recompiled without it
-or with an older one (`docs/tools.md`, "The decomp").
+Its settings are in `%APPDATA%\runtime\config.toml` (on other systems, the
+platform's usual place). While playing, **F1** opens the settings and
+**F11** switches fullscreen.
 
-`build/boot` runs a game without a window, for measuring and checking:
-`docs/tools.md` lists what it takes, and `tools/compare.py`, which runs a
-stretch of a game here and on Zakuro with the same recorded input and reports
-where they part (screens, service calls, saves).
+To recompile a game by hand (all the options are in
+[`docs/recompiler.md`](docs/recompiler.md)):
+
+```sh
+build/3dsrecomp build <game .3ds> <output folder> --mods <update, unpacked>
+```
+
+## Tools for development
+
+- `build/boot` runs a game without a window and reports how far it got and
+  where the time went. It can run on a virtual clock (the same input gives
+  the same run), replay recorded input and save screenshots.
+- `tools/compare.py` runs a stretch of a game here and on Zakuro with the same
+  input and reports where they differ (screens, service calls, saves).
+- `RUNTIME_STATS=1` makes the player print where each second went.
+
+All of them, with the environment variables: [`docs/tools.md`](docs/tools.md).
 
 ## Documents
 
-- [`docs/vulkan-renderer.md`](docs/vulkan-renderer.md): the renderer's design and milestones.
-- [`docs/tools.md`](docs/tools.md): `boot`, `compare.py`, the environment variables.
-- [`docs/recompiler.md`](docs/recompiler.md): the recompiler, `recomp/`.
-- What each game asks of the system, and why the lists are what they are:
-  `docs/lean-runtime.md` in the Solstice repository.
+| File | About |
+| --- | --- |
+| [`docs/recompiler.md`](docs/recompiler.md) | the recompiler and the interface its C runs against |
+| [`docs/vulkan-renderer.md`](docs/vulkan-renderer.md) | the renderer's design and milestones |
+| [`docs/tools.md`](docs/tools.md) | `boot`, `compare.py`, the environment variables, mods and texture packs |
+| [`docs/problems.md`](docs/problems.md) | known problems, and how the solved ones were found |
+| [`docs/organization.md`](docs/organization.md) | the plan for organizing the code |
+
+What each game asks of the system, and so why Kumquat has what it has, is in
+Solstice's `docs/lean-runtime.md`.
 
 ## License
 
-Written by ShiromiyaG with Claude (Anthropic). MIT (`LICENSE`). Parts are translated from Zakuro (MIT, Copyright (c) 2026
-fearkov, `LICENSE-zakuro`) and the recompiler from 3dsrecomp (MIT, the same author, `LICENSE-3dsrecomp`); each such file says so at its top. Nothing
-derived from any game is in this repository.
+MIT (`LICENSE`), written by ShiromiyaG with Claude (Anthropic). Parts are
+translated from Zakuro (MIT, © 2026 fearkov, `LICENSE-zakuro`) and the
+recompiler from 3dsrecomp (MIT, by the same author, `LICENSE-3dsrecomp`); each
+translated file says so at its top. Nothing derived from any game is in this
+repository. Nintendo 3DS is a trademark of Nintendo; Kumquat is not affiliated
+with Nintendo.

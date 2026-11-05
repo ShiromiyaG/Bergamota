@@ -1,14 +1,14 @@
-# Kumquat (tools/runtime) — instruções para o Claude
+# Kumquat (tools/runtime) — instructions for Claude
 
-Sistema 3DS enxuto para os ports (Solstice, Duality, Tidefall): só as syscalls e os serviços que
-esses jogos usam. Repositório privado `ShiromiyaG/Kumquat` (até 2026-11-05 `recomp-runtime`); commits locais de rotina permitidos, push só
-quando o dono pedir. Docs em inglês.
+A lean 3DS system for the ports (Solstice, Duality, Tidefall): only the syscalls and services
+these games use. Private repository `ShiromiyaG/Kumquat` (`recomp-runtime` until 2026-11-05);
+routine local commits allowed, push only when the owner asks. Docs in English.
 
-- C++20, interface em C puro (`include/runtime/runtime.h`); CMake + Ninja + clang (decidido em
-  2026-10-26: os ports são C/C++, com SDL3, Vulkan e Dear ImGui).
-- Listas e motivos: `ports/Solstice/docs/lean-runtime.md`.
-- As threads do jogo são cooperativas numa thread do host; o GPU roda na sua (`AsyncGpu`), e o
-  player mostra os quadros na thread principal.
-- Código traduzido do Zakuro (Rust, MIT): aviso de copyright no topo de cada arquivo traduzido;
-  conferir contra o Zakuro na mesma sessão.
-- Nada derivado dos jogos entra aqui.
+- C++20, plain C interface (`include/runtime/runtime.h`); CMake + Ninja + clang (decided
+  2026-10-26: the ports are C/C++, with SDL3, Vulkan and Dear ImGui).
+- Lists and reasons: `ports/Solstice/docs/lean-runtime.md`.
+- The game's threads are cooperative, each on a fiber (interface 6), on a host thread of their
+  own; the GPU runs on its own (`AsyncGpu`), and the player shows the frames on the main thread.
+- Code translated from Zakuro (Rust, MIT): copyright notice at the top of each translated file;
+  check it against Zakuro in the same session.
+- Nothing derived from the games goes in here.
