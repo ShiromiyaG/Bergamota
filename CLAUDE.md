@@ -1,8 +1,9 @@
-# Kumquat (tools/runtime) — instructions for Claude
+# Bergamota (tools/runtime) — instructions for Claude
 
 A lean 3DS system for the ports (Solstice, Duality, Tidefall): only the syscalls and services
-these games use. Private repository `ShiromiyaG/Kumquat` (`recomp-runtime` until 2026-11-05);
-routine local commits allowed, push only when the owner asks. Docs in English.
+these games use. Private repository `ShiromiyaG/Bergamota` (`recomp-runtime` until 2026-11-05,
+`Kumquat` until 2026-11-06); routine local commits allowed, push only when the owner asks.
+Docs in English.
 
 - C++20, plain C interface (`include/runtime/runtime.h`); CMake + Ninja + clang (decided
   2026-10-26: the ports are C/C++, with SDL3, Vulkan and Dear ImGui).

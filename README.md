@@ -1,15 +1,15 @@
-# Kumquat
+# Bergamota
 
-Kumquat runs Nintendo 3DS games natively on the PC, from the games' own code
+Bergamota runs Nintendo 3DS games natively on the PC, from the games' own code
 recompiled to C. It is not an emulator: instead of a whole console, it gives a
 game only what the game uses (a 3DS kernel, the system services, sound and a
 Vulkan renderer). It comes with the recompiler, a player and a launcher.
 
-**No game is included, and none is needed to build Kumquat.** To play, you
+**No game is included, and none is needed to build Bergamota.** To play, you
 need your own copy of a game and its update, which are recompiled on your
 computer.
 
-Kumquat was made for three Pokémon ports, each in a repository of its own:
+Bergamota was made for three Pokémon ports, each in a repository of its own:
 **Solstice** (Ultra Sun / Ultra Moon), **Duality** (X / Y) and **Tidefall**
 (Omega Ruby / Alpha Sapphire).
 
@@ -19,9 +19,9 @@ Kumquat was made for three Pokémon ports, each in a repository of its own:
    game's ARM code (its executable and its CRO modules) into C.
 2. **A C compiler** (clang, or Zig when there is none) builds that C into a
    library.
-3. **The player** loads the library and runs it on Kumquat. Each of the game's
-   threads runs on a fiber, its system calls go to Kumquat's kernel and its GPU
-   commands go to the Vulkan renderer. Code the library does not have (code
+3. **The player** loads the library and runs it on Bergamota. Each of the game's
+   threads runs on a fiber, its system calls go to Bergamota's kernel and its
+   GPU commands go to the Vulkan renderer. Code the library does not have (code
    found only at run time, or changed by a mod) runs in a built-in ARM
    interpreter.
 4. **A port** adds what belongs to its games: a `port.toml` that tells the
@@ -33,7 +33,7 @@ Kumquat was made for three Pokémon ports, each in a repository of its own:
 - **Pokémon Ultra Sun** plays from the intro movie through the title screen
   and the save to the field, with sound, at full speed on a desktop GPU.
   Ultra Moon's intro plays too. Battles and later scenes still need checking.
-- **X, Y, Omega Ruby and Alpha Sapphire** recompile, and Kumquat already has
+- **X, Y, Omega Ruby and Alpha Sapphire** recompile, and Bergamota already has
   what they need beyond Ultra Sun, such as the AAC decoder their music goes
   through. Their ports come after Solstice.
 
@@ -78,7 +78,7 @@ games several times slower. CMake options: `RUNTIME_VULKAN` (the Vulkan
 renderer, on when the SDK is found), `RUNTIME_PLAYER` (the player and the
 launcher), `RUNTIME_AAC` (the AAC decoder).
 
-The ports include Kumquat as a submodule (`external/runtime`), and their
+The ports include Bergamota as a submodule (`external/runtime`), and their
 package scripts build these programs from it. To link the library into a
 program of your own, `add_subdirectory` this folder and link `recomp_runtime`.
 
@@ -127,7 +127,7 @@ All of them, with the environment variables: [`docs/tools.md`](docs/tools.md).
 | [`docs/problems.md`](docs/problems.md) | known problems, and how the solved ones were found |
 | [`docs/organization.md`](docs/organization.md) | the plan for organizing the code |
 
-What each game asks of the system, and so why Kumquat has what it has, is in
+What each game asks of the system, and so why Bergamota has what it has, is in
 Solstice's `docs/lean-runtime.md`.
 
 ## License
@@ -136,5 +136,5 @@ MIT (`LICENSE`), written by ShiromiyaG with Claude (Anthropic). Parts are
 translated from Zakuro (MIT, © 2026 fearkov, `LICENSE-zakuro`) and the
 recompiler from 3dsrecomp (MIT, by the same author, `LICENSE-3dsrecomp`); each
 translated file says so at its top. Nothing derived from any game is in this
-repository. Nintendo 3DS is a trademark of Nintendo; Kumquat is not affiliated
+repository. Nintendo 3DS is a trademark of Nintendo; Bergamota is not affiliated
 with Nintendo.
