@@ -12,6 +12,8 @@
 //   name = "movie"
 //   modules = ["MovieLib"]   # all loaded; none: any time
 //   layout = "stacked"
+//   lift = 46                # "panel": a bottom corner's panel that many of
+//                            # the top screen's 240 rows up (over a message box)
 //
 // The first scene whose modules are all loaded is the one; with none, "panel".
 #ifndef FRONTEND_SCENES_H
@@ -27,6 +29,7 @@ namespace frontend {
 struct Scene {
     std::string name, layout;
     std::vector<std::string> modules;
+    float lift = 0;
 };
 
 struct Scenes {

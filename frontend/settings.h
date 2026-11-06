@@ -32,9 +32,9 @@ struct Settings {
         std::string exheader, code, library, game, update, user, decomp, layouts;
         // the player's own changes: code.ips and cheats.txt (Session::Files)
         std::string mods;
-        // the font of a port's own UI (its battle UI), a .ttf; none: ui.ttf
+        // the font of a port's own UI (port_ui.h), a .ttf; none: ui.ttf
         // beside the player, else ImGui's. ui_art: the folder of its
-        // battle UI's pieces (PNG, pieces.txt); none: ui/battle beside it
+        // pictures; none: the port's own beside the player
         std::string ui_font, ui_art;
         // the input recorded from the start, with a copy of the saves as they
         // were, into recordings/ beside the settings (for boot to play back)
@@ -58,9 +58,6 @@ struct Settings {
         // the panel out (the bottom screen shown) once a movie or cutscene
         // shown stacked is past; Tab and L3 switch it and it is kept so
         bool panel_shown = true;
-        // the single screen in battle: the port's own battle UI on the top
-        // screen (Sword and Shield's layout, frontend/battle_ui.h), no panel
-        bool battle_on_top = false; // off: the panel, lifted over the message box
         // the top screen's shape: "original" (5:3), "16:9" or "21:9", the
         // game framing a wider scene when its port has a widescreen override
         std::string aspect = "original";

@@ -94,7 +94,6 @@ bool load(const std::filesystem::path &path, Settings &s, std::string &error) {
     s.video.panel_size = float(std::clamp(panel_size, 0.25, 1.0));
     get(t, "video", "panel_corner", s.video.panel_corner);
     get(t, "video", "panel_shown", s.video.panel_shown);
-    get(t, "video", "battle_on_top", s.video.battle_on_top);
     get(t, "video", "aspect", s.video.aspect);
     get(t, "video", "resolution", s.video.resolution);
     get(t, "video", "antialias", s.video.antialias);
@@ -161,7 +160,6 @@ bool save(const std::filesystem::path &path, const Settings &s, std::string &err
                               {"panel_size", double(s.video.panel_size)},
                               {"panel_corner", s.video.panel_corner},
                               {"panel_shown", s.video.panel_shown},
-                              {"battle_on_top", s.video.battle_on_top},
                               {"aspect", s.video.aspect},
                               {"resolution", s.video.resolution},
                               {"antialias", s.video.antialias},

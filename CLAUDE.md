@@ -13,3 +13,7 @@ Docs in English.
 - Code translated from Zakuro (Rust, MIT): copyright notice at the top of each translated file;
   check it against Zakuro in the same session.
 - Nothing derived from the games goes in here.
+- Nothing made for one game either (decided 2026-11-06): it goes in its port, as data the
+  runtime reads (`single-screen.toml`, `port.toml`, `decomp.txt`'s options) or as host code
+  through `frontend/port_ui.h` (built in with `RUNTIME_PORT_UI=<port>/frontend`; Solstice's
+  battle UI).

@@ -76,7 +76,9 @@ ctest --test-dir build
 Builds are optimized unless you pick another build type; a Debug build runs
 games several times slower. CMake options: `RUNTIME_VULKAN` (the Vulkan
 renderer, on when the SDK is found), `RUNTIME_PLAYER` (the player and the
-launcher), `RUNTIME_AAC` (the AAC decoder).
+launcher), `RUNTIME_AAC` (the AAC decoder), `RUNTIME_PORT_UI` (a port's
+folder with a UI of its own for the player and `boot`, as Solstice's
+`frontend/`; `frontend/port_ui.h`).
 
 The ports include Bergamota as a submodule (`external/runtime`), and their
 package scripts build these programs from it. To link the library into a

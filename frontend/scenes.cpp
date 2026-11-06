@@ -25,6 +25,7 @@ bool Scenes::read(const std::filesystem::path &file, std::string &error) {
             Scene scene;
             scene.name = (*s)["name"].value_or(std::string());
             scene.layout = (*s)["layout"].value_or(std::string("panel"));
+            scene.lift = float((*s)["lift"].value_or(0.0));
             if (const toml::array *modules = (*s)["modules"].as_array()) {
                 for (const toml::node &m : *modules) {
                     if (auto name = m.value<std::string>()) scene.modules.push_back(*name);

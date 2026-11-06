@@ -45,10 +45,11 @@
 //                           single-screen.toml); RUNTIME_PANEL=1 the panel out,
 //                           RUNTIME_PANEL_SIZE=n (0.35), RUNTIME_PANEL_CORNER=c
 //                           (bottom-right), RUNTIME_SWAP=1 the screens swapped (L2),
-//                           RUNTIME_BATTLE_UI=1 the port's battle UI drawn over it while
-//                           the port's code reads a battle (port_battle; the top screen
-//                           alone then), in RUNTIME_UI_FONT (a .ttf) and RUNTIME_UI_ART
-//                           (its pieces' folder) if given
+//                           and a port's own UI over it while up, as the player has it
+//                           (frontend/port_ui.h; Solstice's battle UI with
+//                           RUNTIME_PORT=port_battle_on_top=1; the top screen alone
+//                           then), in RUNTIME_UI_FONT (a .ttf) and RUNTIME_UI_ART (its
+//                           pictures' folder) if given
 //                           Scene changes printed as the player does
 
 #include "runtime/decomp.h"
@@ -67,8 +68,9 @@
 #ifdef BOOT_LAYOUTS
 #include <SDL3/SDL.h>
 
-#include "../frontend/battle_ui.h"
 #include "../frontend/layouts.h"
+#include "../frontend/port_ui.h"
+#include "../frontend/raster_ui.h"
 #include "../frontend/scenes.h"
 #endif
 
@@ -309,43 +311,41 @@ int main(int argc, char **argv) {
     if (env("RUNTIME_LAYOUTS") && !scenes.read(env("RUNTIME_LAYOUTS"), error)) std::fprintf(stderr, "%s\n", error.c_str());
     const frontend::Scene *scene_shown = nullptr;
     bool scene_told = false;
+    // the port's own UI, when its code has one
+    std::unique_ptr<frontend::PortUi> port_ui = session.decomp ? frontend::make_port_ui(*session.decomp) : nullptr;
     auto save_composed = [&](const std::string &name, const Picture &top, const Picture &bottom) {
         if (layout_wanted.empty() || top.rgba.empty()) return;
         std::string layout = layout_wanted;
+        // the scene for its lift, and with "single" for its layout
+        const frontend::Scene *scene;
+        {
+            std::lock_guard g(modules_lock);
+            scene = scenes.pick(modules);
+        }
         if (layout == "single") {
-            const frontend::Scene *scene;
-            {
-                std::lock_guard g(modules_lock);
-                scene = scenes.pick(modules);
-            }
             layout = scene ? scene->layout : "panel";
             if (scene != scene_shown || !scene_told) {
                 scene_shown = scene, scene_told = true;
                 std::printf("scene: %s (%s)\n", scene ? scene->name.c_str() : "none", layout.c_str());
             }
         }
-        // the port's battle UI: the top screen alone, the UI over it
-        frontend::BattleState battle;
-        static uint32_t battle_at = ~0u;
-        if (battle_at == ~0u) {
-            battle_at = 0;
-            if (session.decomp)
-                if (auto it = session.decomp->symbols.find("port_battle"); it != session.decomp->symbols.end()) battle_at = it->second;
+        // the port's UI, up: the top screen alone, the UI over it
+        bool ui_up = false;
+        if (port_ui) {
+            port_ui->blank(system.memory, handlers.vblanks);
+            port_ui->frame();
+            ui_up = port_ui->up(layout);
+            if (ui_up) layout = "top";
         }
-        if (env("RUNTIME_BATTLE_UI") && battle_at) battle = frontend::read_battle(system.memory, battle_at);
-        if (battle.mode) layout = "top";
         VulkanPresenter::View view;
         view.width = 1920, view.height = 1080;
         view.top = float(top.width);
         frontend::place(view, layout, env("RUNTIME_PANEL") ? 1.0f : 0.0f,
                         env("RUNTIME_PANEL_SIZE") ? float(std::atof(env("RUNTIME_PANEL_SIZE"))) : 0.35f,
-                        env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right", [&] {
-                            std::lock_guard g(modules_lock);
-                            return modules.count("Battle") ? 46.0f : 0.0f; // over a battle's message box, as the player
-                        }());
+                        env("RUNTIME_PANEL_CORNER") ? env("RUNTIME_PANEL_CORNER") : "bottom-right", scene ? scene->lift : 0.0f);
         if (env("RUNTIME_SWAP")) frontend::swap_screens(view);
         Picture picture = frontend::compose(view, top, bottom);
-        if (battle.mode) {
+        if (ui_up) {
             // the composed picture drawn larger, the UI's shapes and words
             // need the pixels
             const uint32_t k = 3;
@@ -355,21 +355,19 @@ int main(int argc, char **argv) {
             for (uint32_t y = 0; y < big.height; y++)
                 for (uint32_t x = 0; x < big.width; x++)
                     std::memcpy(&big.rgba[(size_t(y) * big.width + x) * 4], &picture.rgba[(size_t(y / k) * picture.width + x / k) * 4], 4);
-            static ImFont *font = nullptr;
-            static frontend::BattleArt art;
             if (!ImGui::GetCurrentContext()) {
                 ImGui::CreateContext();
+                ImFont *font = nullptr;
                 if (const char *f = env("RUNTIME_UI_FONT")) font = ImGui::GetIO().Fonts->AddFontFromFileTTF(f, 48.0f);
-                if (const char *a = env("RUNTIME_UI_ART")) art.load(a);
-                art.finish();
+                const char *base = SDL_GetBasePath();
+                port_ui->start(font, base ? std::filesystem::path(std::u8string(base, base + std::strlen(base))) : std::filesystem::path(),
+                               env("RUNTIME_UI_ART") ? env("RUNTIME_UI_ART") : "");
             }
             ImGuiIO &io = ImGui::GetIO();
             io.DisplaySize = ImVec2(float(big.width), float(big.height));
             io.DeltaTime = 1.0f / 60;
             ImGui::NewFrame();
-            std::vector<frontend::BattleHit> hits;
-            frontend::draw_battle(ImGui::GetForegroundDrawList(), font, art, battle, battle.selected, 0, 0, float(big.width),
-                                  float(big.height), hits);
+            port_ui->draw(ImGui::GetForegroundDrawList(), {{0, 0, float(big.width), float(big.height)}});
             ImGui::Render();
             frontend::raster_ui(ImGui::GetDrawData(), big);
             picture = std::move(big);

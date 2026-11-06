@@ -245,9 +245,20 @@ if(RUNTIME_PLAYER)
         ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
     target_link_libraries(imgui PUBLIC SDL3::SDL3-static Vulkan::Vulkan)
+    # a port's own UI over the game's screens (frontend/port_ui.h): a folder
+    # whose CMakeLists.txt makes the port_ui library (Solstice's frontend/);
+    # none, the player and boot have none
+    set(RUNTIME_PORT_UI "" CACHE PATH "a port's own UI for the player and boot (frontend/port_ui.h)")
+    if(RUNTIME_PORT_UI)
+        add_subdirectory(${RUNTIME_PORT_UI} ${CMAKE_CURRENT_BINARY_DIR}/port_ui)
+    else()
+        add_library(port_ui STATIC frontend/port_ui_none.cpp)
+    endif()
+    target_include_directories(port_ui PUBLIC frontend)
+    target_link_libraries(port_ui PUBLIC recomp_runtime imgui SDL3::SDL3-static)
     add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
-                          frontend/layouts.cpp frontend/battle_ui.cpp)
-    target_link_libraries(player PRIVATE recomp_runtime SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
+                          frontend/layouts.cpp)
+    target_link_libraries(player PRIVATE recomp_runtime port_ui SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
     # the ports' launcher (launcher/, docs in main.cpp): Nunito built in, the
     # player's settings code and the dumps' readers compiled along, drawn on
     # SDL's renderer
@@ -274,8 +285,8 @@ if(RUNTIME_PLAYER)
     add_test(NAME launcher COMMAND launcher_test)
     # boot's shots of the single screen, composed as the player shows it
     if(RUNTIME_VULKAN)
-        target_sources(boot PRIVATE frontend/layouts.cpp frontend/scenes.cpp frontend/battle_ui.cpp)
-        target_link_libraries(boot PRIVATE tomlplusplus::tomlplusplus imgui SDL3::SDL3-static)
+        target_sources(boot PRIVATE frontend/layouts.cpp frontend/scenes.cpp frontend/raster_ui.cpp)
+        target_link_libraries(boot PRIVATE port_ui tomlplusplus::tomlplusplus imgui SDL3::SDL3-static)
         target_compile_definitions(boot PRIVATE BOOT_LAYOUTS=1)
     endif()
 endif()
