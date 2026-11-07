@@ -3,7 +3,10 @@
 Bergamota runs Nintendo 3DS games natively on the PC, from the games' own code
 recompiled to C. It is not an emulator: instead of a whole console, it gives a
 game only what the game uses (a 3DS kernel, the system services, sound and a
-Vulkan renderer). It comes with the recompiler, a player and a launcher.
+Vulkan renderer). It comes with the recompiler, a player and a launcher,
+and it is an SDK for ports: a port of a game is a small repository of its
+own, with only what is the port's, and Bergamota does the rest
+([`docs/porting.md`](docs/porting.md)).
 
 **No game is included, and none is needed to build Bergamota.** To play, you
 need your own copy of a game and its update, which are recompiled on your
@@ -26,7 +29,8 @@ Bergamota was made for three Pokémon ports, each in a repository of its own:
    interpreter.
 4. **A port** adds what belongs to its games: a `port.toml` that tells the
    launcher which games it is for and, when needed, C for the game's own CPU
-   (`native/`) that changes the game, such as widescreen.
+   (`native/`) that changes the game, such as widescreen. `sdk/port.py`
+   builds, plays and packages it ([`docs/porting.md`](docs/porting.md)).
 
 ## Status
 
@@ -51,6 +55,7 @@ Bergamota was made for three Pokémon ports, each in a repository of its own:
 | Mods | a port's native code, `code.ips` patches and Gateway cheats (`cheats.txt`), none of which needs the game recompiled | `src/decomp.cpp`, `src/cheats.cpp` |
 | Player | an SDL3 window; keyboard, gamepad, and the mouse as the stylus; a settings overlay (F1); single-screen layouts | `frontend/` |
 | Launcher | sets up a port's games, recompiles them, and edits the player's graphics and controls | `launcher/` |
+| SDK | the port tool (`port.py`: new, check, symbols, native, build, play, boot, package), the header and builder for a port's native code, the template of a new port | `sdk/` ([docs](docs/porting.md)) |
 
 The C interface that the games' code calls is `include/runtime/runtime.h`.
 
@@ -80,8 +85,9 @@ launcher), `RUNTIME_AAC` (the AAC decoder), `RUNTIME_PORT_UI` (a port's
 folder with a UI of its own for the player and `boot`, as Solstice's
 `frontend/`; `frontend/port_ui.h`).
 
-The ports include Bergamota as a submodule (`external/runtime`), and their
-package scripts build these programs from it. To link the library into a
+The ports include Bergamota as a submodule (`external/runtime`), and its
+port tool (`sdk/port.py package`) builds these programs from it for their
+packages. To link the library into a
 program of your own, `add_subdirectory` this folder and link `recomp_runtime`.
 
 ## Running
@@ -123,6 +129,7 @@ All of them, with the environment variables: [`docs/tools.md`](docs/tools.md).
 
 | File | About |
 | --- | --- |
+| [`docs/porting.md`](docs/porting.md) | porting a game: a port's files, the port tool, native code, the package, what stays stable |
 | [`docs/recompiler.md`](docs/recompiler.md) | the recompiler and the interface its C runs against |
 | [`docs/vulkan-renderer.md`](docs/vulkan-renderer.md) | the renderer's design and milestones |
 | [`docs/tools.md`](docs/tools.md) | `boot`, `compare.py`, the environment variables, mods and texture packs |

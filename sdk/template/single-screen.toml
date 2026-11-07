@@ -1,0 +1,13 @@
+# The single screen's scenes for @GAMES@ (the runtime's player,
+# frontend/scenes.h): the first scene whose modules (CROs) are all loaded
+# picks the layout. "stacked": both screens one over the other, as made for
+# two (movies, cutscenes); "panel": the top screen, the bottom one a panel on
+# Tab or the left stick's click (L3); "top": the top screen alone. Anything
+# not listed is "panel".
+#
+# [[scene]]
+# name = "movie"
+# modules = ["MovieLib"]   # all loaded; none: any time
+# layout = "stacked"
+# lift = 46                # "panel": the panel that many of the top screen's
+#                          # 240 rows up (over a message box)

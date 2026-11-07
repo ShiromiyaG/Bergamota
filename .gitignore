@@ -8,3 +8,6 @@ launcher/target/
 
 # the ports' packages' build (ports/package-all.ps1)
 build-release/
+
+# the SDK's tools, run with python
+__pycache__/

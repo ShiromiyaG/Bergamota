@@ -17,3 +17,9 @@ Docs in English.
   runtime reads (`single-screen.toml`, `port.toml`, `decomp.txt`'s options) or as host code
   through `frontend/port_ui.h` (built in with `RUNTIME_PORT_UI=<port>/frontend`; Solstice's
   battle UI).
+- An SDK for ports (decided 2026-11-06): a port is data and `native/`, with no change to the
+  runtime. `sdk/` holds the port tool (`port.py`: new, check, symbols, native, build, play,
+  boot, package, driven by `port.toml`), `include/port.h`, the native code's builder
+  (`native.py`, which decomp-tools' `build.py` also goes through) and the template; the
+  contract is `docs/porting.md`. A change that breaks a port's files raises `SDK_VERSION`
+  (`sdk/portfile.py`) and says in `docs/porting.md` what to change.

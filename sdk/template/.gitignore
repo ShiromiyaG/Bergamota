@@ -1,0 +1,15 @@
+# what is made from the game: never in the repository
+build/
+dist/
+extracted/
+*.3ds
+*.cci
+*.cia
+*.cxi
+*.dll
+*.so
+*.a
+__pycache__/
+
+# shots of the game
+*.ppm

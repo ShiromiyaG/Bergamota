@@ -14,6 +14,9 @@
 //   update_name = "v1.2"       # and as players know it
 //   decomp = "decomp"          # the port's code for it (decomp.bin, decomp.txt), a folder beside the launcher
 //   color = "#F08A24"          # its color in the launcher (the glow, Play)
+//
+// The port tool (sdk/port.py) reads more keys of the same file, which the
+// launcher leaves alone: all of them in docs/porting.md.
 #ifndef LAUNCHER_PORT_H
 #define LAUNCHER_PORT_H
 
