@@ -1,9 +1,10 @@
 // What a port adds to the player and to boot on the host's side: a UI of its
 // own over the game's screens, fed by what the port's code (its native/, the
-// symbols in decomp.txt) leaves in the game's memory. The runtime has none
+// symbols in decomp.txt) leaves in the game's memory, and the look of the
+// player's menu (F1) for each of its games. The runtime has neither
 // (port_ui_none.cpp); a port builds its own in with RUNTIME_PORT_UI=<folder>
 // (CMakeLists.txt), a folder whose CMakeLists.txt makes the port_ui library
-// and defines make_port_ui (Solstice's frontend/, its battle UI).
+// and defines make_port_ui and make_port_menu (null for what it has not).
 //
 // blank runs on the game's thread, the rest on the window's, in this order
 // each frame: frame, click and input (the frame's input), draw, then up (the
@@ -56,6 +57,25 @@ struct PortUi {
 
 // the port's UI for its code, null when the code has none of it
 std::unique_ptr<PortUi> make_port_ui(const runtime::Decomp &decomp);
+
+// The menu's look (F1), the port's own for each game: its fonts, colors and
+// shapes, and a header across the menu's top. Without one, Dear ImGui's dark.
+struct PortMenu {
+    virtual ~PortMenu() = default;
+    // its fonts into Dear ImGui's atlas, which the player builds then (the
+    // menu's own made io.FontDefault), and its style (ImGui::GetStyle()),
+    // its sizes times scale, the display's
+    virtual void start(float scale) = 0;
+    // drawn at the top of the menu's window, just begun without a title
+    // bar: the header, and the cursor left under it for the menu's content;
+    // false when its close button was pressed
+    virtual bool header(const char *title) = 0;
+    // the menu window's width, in points before the display's scale
+    virtual float width() const { return 460; }
+};
+
+// the menu's look for the game (its program id), null for none
+std::unique_ptr<PortMenu> make_port_menu(uint64_t program_id);
 
 } // namespace frontend
 

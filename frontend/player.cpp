@@ -225,10 +225,12 @@ void read_settings(int argc, char **argv, Settings &settings, std::filesystem::p
 
 // the overlay (Dear ImGui) on the presenter's device
 void start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std::string &ui_font, frontend::PortUi *port_ui,
-                   const std::string &ui_art) {
+                   const std::string &ui_art, frontend::PortMenu *menu) {
     ImGui_ImplSDL3_InitForVulkan(window);
     // the port's UI's font, large, drawn smaller (ImGui's own stays the first)
     ImGui::GetIO().Fonts->AddFontDefault();
+    // the port's look for the menu: its fonts and style
+    if (menu) menu->start(SDL_GetWindowDisplayScale(window) > 0 ? SDL_GetWindowDisplayScale(window) : 1.0f);
     ImFont *font = nullptr;
     std::error_code missing;
     if (!ui_font.empty() && std::filesystem::exists(frontend::path_of(ui_font), missing))
@@ -577,7 +579,9 @@ int main(int argc, char **argv) {
     std::unique_ptr<frontend::PortUi> port_ui = session.decomp ? frontend::make_port_ui(*session.decomp) : nullptr;
     std::string font_file = settings.game.ui_font;
     if (const char *base = SDL_GetBasePath(); base && font_file.empty()) font_file = frontend::utf8(frontend::path_of(base) / "ui.ttf");
-    start_overlay(window, presenter, font_file, port_ui.get(), settings.game.ui_art);
+    // and the port's look for the menu, for this game
+    std::unique_ptr<frontend::PortMenu> port_menu = frontend::make_port_menu(session.exheader.program_id);
+    start_overlay(window, presenter, font_file, port_ui.get(), settings.game.ui_art, port_menu.get());
     // the game's vertex programs as shaders, made once and kept beside the settings
     vulkan.cache_in(frontend::utf8(config_file.parent_path() / "shaders"));
     // texture packs: Azahar's layout beside the settings (load/textures/<title
@@ -638,6 +642,7 @@ int main(int argc, char **argv) {
     };
     apply();
     frontend::Overlay overlay;
+    overlay.menu = port_menu.get();
     Tally tally(config_file);
 
     // the game on a thread of its own; this one keeps the window, reads the
@@ -881,8 +886,8 @@ int main(int argc, char **argv) {
                 scene = scenes.pick(modules);
             }
             layout = scene ? scene->layout : "panel";
-            // the port's UI up (Solstice's battle UI, with its option): the
-            // top screen alone, the UI over it
+            // the port's UI up (as its code and options ask): the top
+            // screen alone, the UI over it
             ui_up = port_ui && port_ui->up(layout);
             if (ui_up) layout = "top";
             if (scene != scene_shown) {

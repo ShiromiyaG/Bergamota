@@ -245,23 +245,9 @@ if(RUNTIME_PLAYER)
         ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
     target_link_libraries(imgui PUBLIC SDL3::SDL3-static Vulkan::Vulkan)
-    # a port's own UI over the game's screens (frontend/port_ui.h): a folder
-    # whose CMakeLists.txt makes the port_ui library (Solstice's frontend/);
-    # none, the player and boot have none
-    set(RUNTIME_PORT_UI "" CACHE PATH "a port's own UI for the player and boot (frontend/port_ui.h)")
-    if(RUNTIME_PORT_UI)
-        add_subdirectory(${RUNTIME_PORT_UI} ${CMAKE_CURRENT_BINARY_DIR}/port_ui)
-    else()
-        add_library(port_ui STATIC frontend/port_ui_none.cpp)
-    endif()
-    target_include_directories(port_ui PUBLIC frontend)
-    target_link_libraries(port_ui PUBLIC recomp_runtime imgui SDL3::SDL3-static)
-    add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
-                          frontend/layouts.cpp)
-    target_link_libraries(player PRIVATE recomp_runtime port_ui SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
-    # the ports' launcher (launcher/, docs in main.cpp): Nunito built in, the
-    # player's settings code and the dumps' readers compiled along, drawn on
-    # SDL's renderer
+    # Nunito (the launcher's, launcher/assets) as C arrays: built into the
+    # launcher, and offered to a port's UI (nunito_semibold.inc,
+    # nunito_black.inc on port_ui's include path)
     set(LAUNCHER_GEN ${CMAKE_CURRENT_BINARY_DIR}/launcher)
     foreach(weight SemiBold Black)
         string(TOLOWER ${weight} lower)
@@ -273,6 +259,24 @@ if(RUNTIME_PLAYER)
             DEPENDS launcher/assets/Nunito-${weight}.ttf cmake/embed_binary.cmake
             VERBATIM)
     endforeach()
+    # a port's own UI over the game's screens and its menu's look
+    # (frontend/port_ui.h): a folder whose CMakeLists.txt makes the port_ui
+    # library (each port's frontend/); none, the player and boot have neither
+    set(RUNTIME_PORT_UI "" CACHE PATH "a port's own UI for the player and boot (frontend/port_ui.h)")
+    if(RUNTIME_PORT_UI)
+        add_subdirectory(${RUNTIME_PORT_UI} ${CMAKE_CURRENT_BINARY_DIR}/port_ui)
+    else()
+        add_library(port_ui STATIC frontend/port_ui_none.cpp)
+    endif()
+    target_include_directories(port_ui PUBLIC frontend PRIVATE ${LAUNCHER_GEN})
+    target_sources(port_ui PRIVATE ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
+    target_link_libraries(port_ui PUBLIC recomp_runtime imgui SDL3::SDL3-static)
+    add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
+                          frontend/layouts.cpp)
+    target_link_libraries(player PRIVATE recomp_runtime port_ui SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
+    # the ports' launcher (launcher/, docs in main.cpp): Nunito built in, the
+    # player's settings code and the dumps' readers compiled along, drawn on
+    # SDL's renderer
     set(LAUNCHER_SOURCES launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp
                          launcher/pages.cpp frontend/settings.cpp src/dump.cpp src/decomp_options.cpp
                          ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)

@@ -15,8 +15,8 @@ Docs in English.
 - Nothing derived from the games goes in here.
 - Nothing made for one game either (decided 2026-11-06): it goes in its port, as data the
   runtime reads (`single-screen.toml`, `port.toml`, `decomp.txt`'s options) or as host code
-  through `frontend/port_ui.h` (built in with `RUNTIME_PORT_UI=<port>/frontend`; Solstice's
-  battle UI).
+  through `frontend/port_ui.h` (built in with `RUNTIME_PORT_UI=<port>/frontend`; each
+  port's look for the F1 menu, `frontend/menu.cpp`).
 - An SDK for ports (decided 2026-11-06): a port is data and `native/`, with no change to the
   runtime. `sdk/` holds the port tool (`port.py`: new, check, symbols, native, build, play,
   boot, package, driven by `port.toml`), `include/port.h`, the native code's builder

@@ -198,7 +198,7 @@ The runtime ignores lines it does not know (a newer builder's).
 name = "Solstice"            # the launcher's window and %APPDATA% folder, the package
 player = "SolsticeGame"      # the player in the package: game/<player>.exe
 about = "..."                # a line on the port, in the launcher
-sdk = 1                      # the SDK version the port is written for
+sdk = 2                      # the SDK version the port is written for
 
 [native]                     # port.py's
 sources = ["native"]         # folders of C, the port's
@@ -208,7 +208,7 @@ base = 0x07800000            # where the code loads
 
 [package]                    # port.py package's
 ui = "frontend"              # host code built into the player (frontend/port_ui.h)
-files = [ { from = "tools/fonts/Nunito.ttf", to = "game/ui.ttf" } ]   # more files, into the package
+files = [ { from = "ui/art", to = "game/ui/art" } ]   # more files, into the package
 readme = "packaging/README.md"
 third_party = "packaging/THIRD_PARTY.md"
 
@@ -241,13 +241,28 @@ The first scene whose modules are all loaded picks the layout; with none,
 "panel" (`frontend/scenes.h`). `boot` composes shots as the player shows
 them with `RUNTIME_LAYOUT=single` and `RUNTIME_LAYOUTS=<file>`.
 
-## A UI of the port's own
+## The port's host code: its menu's look and its own UI
 
-When the port draws something of its own over the game (Solstice's battle
-UI), it is host C++ in the port's `frontend/`, whose `CMakeLists.txt` makes
-a `port_ui` library defining `make_port_ui` (`frontend/port_ui.h`): it reads
-what the port's native code leaves in the game's memory each vertical blank,
-draws with Dear ImGui over the top screen, and can touch the bottom screen.
+What the port adds on the host's side is C++ in the port's `frontend/`,
+whose `CMakeLists.txt` makes a `port_ui` library defining both of
+`frontend/port_ui.h`'s functions, each returning null for what the port has
+not:
+
+- `make_port_menu(program_id)`: the look of the player's menu (F1) for each
+  of the port's games, a `PortMenu`. `start(scale)` adds its fonts to Dear
+  ImGui's atlas (making one `io.FontDefault`) and sets `ImGui::GetStyle()`,
+  its sizes times the display's scale; `header(title)` draws across the top
+  of the menu's window, which then has no title bar, leaves the cursor under
+  it, and returns false when its close button is pressed. The runtime offers
+  the port Nunito, the launcher's, as `nunito_semibold.inc` and
+  `nunito_black.inc` (arrays `NUNITO_SEMIBOLD`, `NUNITO_BLACK`) on the
+  library's include path. Solstice, Duality and Tidefall each have their own
+  (`frontend/menu.cpp`).
+- `make_port_ui(decomp)`: something drawn over the game, a `PortUi`: it
+  reads what the port's native code leaves in the game's memory each
+  vertical blank, draws with Dear ImGui over the top screen, and can touch
+  the bottom screen. No port has one now.
+
 `[package] ui` builds it into the package's player
 (`-DRUNTIME_PORT_UI=<folder>`); for `play`, build the runtime with the same
 option.
@@ -287,7 +302,10 @@ changing it means:
 | `single-screen.toml` | `frontend/scenes.h` |
 
 A change that breaks one of them raises the SDK's version
-(`sdk/portfile.py`, `SDK_VERSION`) and says here what to change. The
+(`sdk/portfile.py`, `SDK_VERSION`) and says here what to change:
+
+- 2 (2026-11-09): a port's `frontend/` defines `make_port_menu` too (its
+  menu's look; `return nullptr;` for none), beside `make_port_ui`. The
 recompiled code's interface (`recomp.h`, interface 6) is not part of it: the
 game is recompiled on the player's computer by the 3dsrecomp the package
 carries, so it always matches the runtime.

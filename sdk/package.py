@@ -80,8 +80,9 @@ def third_party(port, runtime_build):
   SDK (Apache-2.0), and the **Fraunhofer FDK AAC Codec Library for Android**
   (https://github.com/mstorsjo/fdk-aac, v2.0.3), which decodes the audio
   firmware's AAC. `fdk-aac.txt`.
-- **Nunito** (the launcher's font, built into `{launcher}`), SIL Open Font
-  License 1.1. `Nunito-OFL.txt`.
+- **Nunito** (the launcher's font, built into `{launcher}`, and the menu's
+  of a port that takes it, built into the player), SIL Open Font License
+  1.1. `Nunito-OFL.txt`.
 """
     if os.name == "nt":
         text += """- **Microsoft Visual C++ runtime** (`msvcp140*.dll`, `vcruntime140*.dll`,

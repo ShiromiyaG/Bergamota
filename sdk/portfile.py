@@ -10,7 +10,7 @@ inline tables.
 import os
 import re
 
-SDK_VERSION = 1
+SDK_VERSION = 2
 
 
 class PortError(Exception):

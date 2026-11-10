@@ -3,6 +3,7 @@
 #ifndef FRONTEND_UI_H
 #define FRONTEND_UI_H
 
+#include "port_ui.h"
 #include "settings.h"
 
 #include <SDL3/SDL.h>
@@ -51,6 +52,8 @@ public:
     const std::vector<runtime::DecompOption> *options = nullptr;
     // the mods folder's cheats: name, and on as its file has it
     std::vector<std::pair<std::string, bool>> cheats;
+    // the port's look for the menu (port_ui.h), none for Dear ImGui's own
+    PortMenu *menu = nullptr;
     // the overlay wants the keyboard (the game gets none)
     bool keyboard() const;
 

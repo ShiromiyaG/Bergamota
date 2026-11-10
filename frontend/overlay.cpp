@@ -90,10 +90,17 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
         return;
     }
 
-    ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_FirstUseEver);
+    // the port's look draws its own header in place of the title bar
+    const float width = menu ? menu->width() * ImGui::GetIO().FontGlobalScale : 420;
+    ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     bool keep = true;
-    ImGui::Begin("Settings (F1)", &keep, ImGuiWindowFlags_NoSavedSettings);
+    if (menu) {
+        ImGui::Begin("Settings (F1)", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
+        keep = menu->header("Settings");
+    } else {
+        ImGui::Begin("Settings (F1)", &keep, ImGuiWindowFlags_NoSavedSettings);
+    }
     bool moved = false;
     if (ImGui::BeginTabBar("tabs")) {
         if (ImGui::BeginTabItem("Video")) {
