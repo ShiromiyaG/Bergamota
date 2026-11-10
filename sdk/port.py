@@ -104,8 +104,8 @@ class Files:
             names = {"rom": "the game's dump (--rom)", "update": "the update's .cia (--update)",
                      "unpacked": "the update unpacked (--unpacked)"}
             raise PortError(f"{self.game.label()}: no {', '.join(names[m] for m in missing)}. Set the game up "
-                            f"once in the port's launcher: {os.path.relpath(os.path.join(RUNTIME, 'build', 'launcher' + EXE))} "
-                            f"--port {os.path.relpath(self.port.file)}")
+                            f"once in the port's launcher: {short(os.path.join(RUNTIME, 'build', 'launcher' + EXE), os.getcwd())} "
+                            f"--port {short(self.port.file, os.getcwd())}")
         return self
 
 

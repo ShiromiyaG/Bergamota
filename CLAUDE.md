@@ -1,8 +1,9 @@
 # Bergamota (tools/runtime) — instructions for Claude
 
 A lean 3DS system for the ports (Solstice, Duality, Tidefall): only the syscalls and services
-these games use. Private repository `ShiromiyaG/Bergamota` (`recomp-runtime` until 2026-11-05,
-`Kumquat` until 2026-11-06); routine local commits allowed, push only when the owner asks.
+these games use. Public repository `ShiromiyaG/Bergamota` (since 2026-11-09; `recomp-runtime` until
+2026-11-05, `Kumquat` until 2026-11-06); routine local commits allowed, push only when the owner
+asks. Public: nothing of the games, no keys or tokens, nothing private of the owner's in it.
 Docs in English.
 
 - C++20, plain C interface (`include/runtime/runtime.h`); CMake + Ninja + clang (decided
