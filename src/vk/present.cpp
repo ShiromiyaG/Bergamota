@@ -196,6 +196,7 @@ VulkanPresenter::~VulkanPresenter() {
 
 VkInstance VulkanPresenter::instance() const { return renderer_.impl_->instance; }
 VkPhysicalDevice VulkanPresenter::physical() const { return renderer_.impl_->physical; }
+uint32_t VulkanPresenter::api_version() const { return renderer_.impl_->api_version; }
 VkDevice VulkanPresenter::device() const { return renderer_.impl_->device; }
 VkQueue VulkanPresenter::queue() const { return renderer_.impl_->queue; }
 uint32_t VulkanPresenter::family() const { return renderer_.impl_->family; }

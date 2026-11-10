@@ -6,6 +6,8 @@
 
 #include <imgui.h>
 
+#include <cstdint>
+
 #include <functional>
 #include <optional>
 #include <string>

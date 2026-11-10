@@ -635,6 +635,14 @@ int main(int argc, char **argv) {
 
     SDL_Window *window = SDL_CreateWindow(p->name.c_str(), 1180, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     const float scale = window ? SDL_GetWindowDisplayScale(window) : 1;
+    // the port's icon on the window where the program has none of its own
+    // (beyond Windows, whose .exe carries it): icon.bmp beside the launcher
+    if (std::error_code ec; window && fs::is_regular_file(beside("icon.bmp"), ec)) {
+        if (SDL_Surface *icon = SDL_LoadBMP(utf8(beside("icon.bmp")).c_str())) {
+            SDL_SetWindowIcon(window, icon);
+            SDL_DestroySurface(icon);
+        }
+    }
     // the first renderer that starts, Vulkan never: NVIDIA's driver has been
     // seen to crash presenting a window with it (SDL_RENDER_DRIVER still chooses)
     SDL_Renderer *renderer = nullptr;

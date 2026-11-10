@@ -65,7 +65,7 @@ void VulkanRenderer::cache_in(const std::string &folder) {
     d.cache_folder = std::filesystem::u8path(folder);
     if (d.translator) d.translator->cache_in(d.cache_folder);
     // the driver's pipelines from the last run, merged into the cache
-    if (FILE *f = _wfopen((d.cache_folder / "pipelines.bin").c_str(), L"rb")) {
+    if (FILE *f = open_file(d.cache_folder / "pipelines.bin", "rb")) {
         std::vector<uint8_t> data;
         uint8_t chunk[65536];
         for (size_t n; (n = std::fread(chunk, 1, sizeof chunk, f)) > 0;) data.insert(data.end(), chunk, chunk + n);

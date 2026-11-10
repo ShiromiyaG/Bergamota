@@ -243,6 +243,7 @@ void start_overlay(SDL_Window *window, VulkanPresenter &presenter, const std::st
     }
     VkFormat format = presenter.format();
     ImGui_ImplVulkan_InitInfo info{};
+    info.ApiVersion = presenter.api_version();
     info.Instance = presenter.instance();
     info.PhysicalDevice = presenter.physical();
     info.Device = presenter.device();

@@ -9,7 +9,7 @@
 #include "runtime/gpu.h"
 #include "runtime/vulkan_renderer.h"
 
-#include <vulkan/vulkan.h>
+#include <volk.h> // vulkan.h, its functions loaded at run time
 
 #include <functional>
 #include <mutex>
@@ -69,6 +69,9 @@ public:
     // for Dear ImGui's Vulkan backend
     VkInstance instance() const;
     VkPhysicalDevice physical() const;
+    // the device's Vulkan version as used (at most 1.3; 1.1 and 1.2 with
+    // extensions)
+    uint32_t api_version() const;
     VkDevice device() const;
     VkQueue queue() const;
     uint32_t family() const;

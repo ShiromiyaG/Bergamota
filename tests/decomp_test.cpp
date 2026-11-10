@@ -4,6 +4,7 @@
 
 #include "runtime/decomp.h"
 
+#include <cstring>
 #include <cstdio>
 
 #include "runtime/loader.h"

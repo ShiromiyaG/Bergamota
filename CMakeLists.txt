@@ -89,9 +89,21 @@ endif()
 
 # the runtime's own renderer on Vulkan (docs/vulkan-renderer.md): its two
 # shaders compiled to SPIR-V here, never while a game runs
-find_package(Vulkan COMPONENTS glslc shaderc_combined)
+find_package(Vulkan COMPONENTS glslc OPTIONAL_COMPONENTS shaderc_combined)
 option(RUNTIME_VULKAN "the runtime's Vulkan renderer (needs the Vulkan SDK)" ${Vulkan_FOUND})
 if(RUNTIME_VULKAN)
+    # Vulkan through volk (zeux/volk, MIT): every function loaded while the
+    # program runs, none linked, so a device on Vulkan 1.1 with the
+    # extensions 1.3 took in (Android's Adreno, Mali, PowerVR) runs the same
+    # code, the 1.3 names pointed at the extensions' (src/vk/device.cpp)
+    FetchContent_Declare(volk GIT_REPOSITORY https://github.com/zeux/volk.git GIT_TAG vulkan-sdk-1.4.341.0 GIT_SHALLOW TRUE)
+    set(VOLK_PULL_IN_VULKAN OFF CACHE BOOL "" FORCE)
+    set(VOLK_INSTALL OFF CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(volk)
+    target_include_directories(volk PUBLIC ${Vulkan_INCLUDE_DIRS})
+    if(UNIX)
+        target_link_libraries(volk PUBLIC ${CMAKE_DL_LIBS})
+    endif()
     set(SHADER_OUT ${CMAKE_CURRENT_BINARY_DIR}/shaders)
     file(MAKE_DIRECTORY ${SHADER_OUT})
     foreach(shader pica.vert pica_gpu.vert pica.frag present.vert present.frag)
@@ -133,8 +145,25 @@ if(RUNTIME_VULKAN)
         ${SHADER_OUT}/pica_wbuffer.frag.inc ${SHADER_OUT}/pica_shadow.frag.inc ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc
         ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})
-    # the game's vertex programs compiled while it runs (shaderc, from the SDK, linked in)
-    target_link_libraries(recomp_runtime PUBLIC Vulkan::Vulkan Vulkan::shaderc_combined)
+    # the game's vertex programs compiled while it runs: shaderc, from the
+    # Windows SDK, linked in; else glslang alone (fetched; Linux, whose
+    # distributions' shaderc_combined leaves glslang out, and Android)
+    target_link_libraries(recomp_runtime PUBLIC volk)
+    if(WIN32 AND TARGET Vulkan::shaderc_combined)
+        target_link_libraries(recomp_runtime PUBLIC Vulkan::shaderc_combined)
+    else()
+        FetchContent_Declare(glslang GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git GIT_TAG 16.4.0 GIT_SHALLOW TRUE)
+        set(ENABLE_OPT OFF CACHE BOOL "" FORCE)
+        set(ENABLE_HLSL OFF CACHE BOOL "" FORCE)
+        set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+        set(ENABLE_SPVREMAPPER OFF CACHE BOOL "" FORCE)
+        set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
+        set(GLSLANG_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+        set(BUILD_EXTERNAL OFF CACHE BOOL "" FORCE)
+        FetchContent_MakeAvailable(glslang)
+        target_link_libraries(recomp_runtime PUBLIC glslang glslang-default-resource-limits)
+        target_compile_definitions(recomp_runtime PRIVATE RUNTIME_GLSLANG)
+    endif()
     target_compile_definitions(recomp_runtime PUBLIC RUNTIME_VULKAN)
 endif()
 
@@ -244,11 +273,18 @@ if(RUNTIME_PLAYER)
         ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlrenderer3.cpp
         ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
     target_include_directories(imgui PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
-    target_link_libraries(imgui PUBLIC SDL3::SDL3-static Vulkan::Vulkan)
+    target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
+    if(RUNTIME_VULKAN)
+        # its Vulkan backend on volk's functions too
+        target_compile_definitions(imgui PUBLIC IMGUI_IMPL_VULKAN_USE_VOLK)
+        target_link_libraries(imgui PUBLIC volk)
+    else()
+        target_include_directories(imgui PUBLIC ${Vulkan_INCLUDE_DIRS})
+    endif()
     # Nunito (the launcher's, launcher/assets) as C arrays: built into the
     # launcher, and offered to a port's UI (nunito_semibold.inc,
     # nunito_black.inc on port_ui's include path)
-    set(LAUNCHER_GEN ${CMAKE_CURRENT_BINARY_DIR}/launcher)
+    set(LAUNCHER_GEN ${CMAKE_CURRENT_BINARY_DIR}/generated)
     foreach(weight SemiBold Black)
         string(TOLOWER ${weight} lower)
         string(TOUPPER ${weight} upper)
@@ -259,6 +295,9 @@ if(RUNTIME_PLAYER)
             DEPENDS launcher/assets/Nunito-${weight}.ttf cmake/embed_binary.cmake
             VERBATIM)
     endforeach()
+    # made before what includes them (a port's UI is a folder of its own,
+    # which sees no custom command of this one)
+    add_custom_target(nunito_fonts DEPENDS ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
     # a port's own UI over the game's screens and its menu's look
     # (frontend/port_ui.h): a folder whose CMakeLists.txt makes the port_ui
     # library (each port's frontend/); none, the player and boot have neither
@@ -269,7 +308,7 @@ if(RUNTIME_PLAYER)
         add_library(port_ui STATIC frontend/port_ui_none.cpp)
     endif()
     target_include_directories(port_ui PUBLIC frontend PRIVATE ${LAUNCHER_GEN})
-    target_sources(port_ui PRIVATE ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
+    add_dependencies(port_ui nunito_fonts)
     target_link_libraries(port_ui PUBLIC recomp_runtime imgui SDL3::SDL3-static)
     add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
                           frontend/layouts.cpp)

@@ -8,16 +8,92 @@
 #include "translate.h"
 #include "impl.h"
 
+#ifdef RUNTIME_GLSLANG
+#include <glslang/Include/glslang_c_interface.h>
+#include <glslang/Public/resource_limits_c.h>
+#else
 #include <shaderc/shaderc.h>
+#endif
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <set>
 #include <sstream>
 
 namespace runtime {
 
 namespace {
+
+// GLSL to SPIR-V for Vulkan 1.1's devices (SPIR-V 1.3): shaderc, the
+// Vulkan SDK's, where it is; glslang alone elsewhere (Android)
+class Spirv {
+public:
+#ifdef RUNTIME_GLSLANG
+    Spirv() { glslang_initialize_process(); }
+    ~Spirv() { glslang_finalize_process(); }
+    bool vertex(const std::string &text, std::vector<uint32_t> &words, std::string &error) {
+        glslang_input_t input{};
+        input.language = GLSLANG_SOURCE_GLSL;
+        input.stage = GLSLANG_STAGE_VERTEX;
+        input.client = GLSLANG_CLIENT_VULKAN;
+        input.client_version = GLSLANG_TARGET_VULKAN_1_1;
+        input.target_language = GLSLANG_TARGET_SPV;
+        input.target_language_version = GLSLANG_TARGET_SPV_1_3;
+        input.code = text.c_str();
+        input.default_version = 450;
+        input.default_profile = GLSLANG_NO_PROFILE;
+        input.messages = GLSLANG_MSG_DEFAULT_BIT;
+        input.resource = glslang_default_resource();
+        glslang_shader_t *shader = glslang_shader_create(&input);
+        bool ok = glslang_shader_preprocess(shader, &input) && glslang_shader_parse(shader, &input);
+        glslang_program_t *program = nullptr;
+        if (ok) {
+            program = glslang_program_create();
+            glslang_program_add_shader(program, shader);
+            ok = glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT);
+            if (ok) {
+                glslang_program_SPIRV_generate(program, GLSLANG_STAGE_VERTEX);
+                words.resize(glslang_program_SPIRV_get_size(program));
+                glslang_program_SPIRV_get(program, words.data());
+            } else {
+                error = glslang_program_get_info_log(program);
+            }
+        } else {
+            error = glslang_shader_get_info_log(shader);
+        }
+        if (program) glslang_program_delete(program);
+        glslang_shader_delete(shader);
+        return ok;
+    }
+#else
+    Spirv() : compiler_(shaderc_compiler_initialize()), options_(shaderc_compile_options_initialize()) {
+        shaderc_compile_options_set_optimization_level(options_, shaderc_optimization_level_performance);
+        shaderc_compile_options_set_target_env(options_, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
+    }
+    ~Spirv() {
+        shaderc_compile_options_release(options_);
+        shaderc_compiler_release(compiler_);
+    }
+    bool vertex(const std::string &text, std::vector<uint32_t> &words, std::string &error) {
+        shaderc_compilation_result_t result =
+            shaderc_compile_into_spv(compiler_, text.data(), text.size(), shaderc_vertex_shader, "pica", "main", options_);
+        bool ok = shaderc_result_get_compilation_status(result) == shaderc_compilation_status_success;
+        if (ok) {
+            const auto *bytes = reinterpret_cast<const uint32_t *>(shaderc_result_get_bytes(result));
+            words.assign(bytes, bytes + shaderc_result_get_length(result) / 4);
+        } else {
+            error = shaderc_result_get_error_message(result);
+        }
+        shaderc_result_release(result);
+        return ok;
+    }
+
+private:
+    shaderc_compiler_t compiler_;
+    shaderc_compile_options_t options_;
+#endif
+};
 
 const char FRAME[] =
 #include "pica_gpu.vert.txt"
@@ -291,10 +367,7 @@ VkPipeline Translator::specialized(uint64_t shader_key, uint64_t key, bool has_d
 }
 
 void Translator::run() {
-    shaderc_compiler_t compiler = shaderc_compiler_initialize();
-    shaderc_compile_options_t options = shaderc_compile_options_initialize();
-    shaderc_compile_options_set_optimization_level(options, shaderc_optimization_level_performance);
-    shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_3);
+    Spirv spirv;
     const char *dump = std::getenv("RUNTIME_DUMP_SHADERS");
     for (;;) {
         Work work;
@@ -319,7 +392,7 @@ void Translator::run() {
             }
             std::vector<uint32_t> words;
             if (!file.empty()) {
-                if (FILE *f = _wfopen(file.c_str(), L"rb")) {
+                if (FILE *f = open_file(file, "rb")) {
                     std::fseek(f, 0, SEEK_END);
                     long size = std::ftell(f);
                     std::fseek(f, 0, SEEK_SET);
@@ -350,22 +423,21 @@ void Translator::run() {
                 std::snprintf(name, sizeof name, "%s/%016llx.vert", dump, (unsigned long long)work.shader_key);
                 if (FILE *f = std::fopen(name, "wb")) std::fwrite(text.data(), 1, text.size(), f), std::fclose(f);
             }
-            shaderc_compilation_result_t result =
-                shaderc_compile_into_spv(compiler, text.data(), text.size(), shaderc_vertex_shader, "pica", "main", options);
+            std::vector<uint32_t> spv;
+            std::string why;
             VkShaderModule module = VK_NULL_HANDLE;
-            bool ok = shaderc_result_get_compilation_status(result) == shaderc_compilation_status_success;
+            bool ok = spirv.vertex(text, spv, why);
             if (ok) {
                 VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-                smi.codeSize = shaderc_result_get_length(result);
-                smi.pCode = reinterpret_cast<const uint32_t *>(shaderc_result_get_bytes(result));
+                smi.codeSize = spv.size() * 4;
+                smi.pCode = spv.data();
                 ok = vkCreateShaderModule(device_, &smi, nullptr, &module) == VK_SUCCESS;
                 if (ok && !file.empty()) {
-                    if (FILE *f = _wfopen(file.c_str(), L"wb")) std::fwrite(smi.pCode, 1, smi.codeSize, f), std::fclose(f);
+                    if (FILE *f = open_file(file, "wb")) std::fwrite(smi.pCode, 1, smi.codeSize, f), std::fclose(f);
                 }
             } else {
-                std::fprintf(stderr, "a vertex program did not translate: %s\n", shaderc_result_get_error_message(result));
+                std::fprintf(stderr, "a vertex program did not translate: %s\n", why.c_str());
             }
-            shaderc_result_release(result);
             std::lock_guard g(lock_);
             Shader &shader = shaders_[work.shader_key];
             shader.module = module;
@@ -385,8 +457,6 @@ void Translator::run() {
         pipelines_[{work.shader_key, work.key, work.shape_hash}] = pipe;
         pipelines_made++;
     }
-    shaderc_compile_options_release(options);
-    shaderc_compiler_release(compiler);
 }
 
 } // namespace runtime

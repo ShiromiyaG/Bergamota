@@ -3,6 +3,7 @@
 
 #include "compile.h"
 
+#include <cstring>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>

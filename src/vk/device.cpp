@@ -42,6 +42,8 @@ uint32_t Impl::memory_type(uint32_t bits, VkMemoryPropertyFlags want) {
 }
 
 bool Impl::init() {
+    // the system's Vulkan loader, its functions through volk
+    if (VkResult r = volkInitialize()) return fail("loading Vulkan", r);
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "runtime";
     app.apiVersion = VK_API_VERSION_1_3;
@@ -54,26 +56,81 @@ bool Impl::init() {
     ici.enabledExtensionCount = uint32_t(wanted.size());
     ici.ppEnabledExtensionNames = wanted.data();
     if (VkResult r = vkCreateInstance(&ici, nullptr, &instance)) return fail("vkCreateInstance", r);
+    volkLoadInstance(instance);
 
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
     std::vector<VkPhysicalDevice> all(count);
     vkEnumeratePhysicalDevices(instance, &count, all.data());
-    // a discrete GPU first, then any with Vulkan 1.3
+    // what a device has of the extensions asked for
+    auto extensions_of = [](VkPhysicalDevice d) {
+        uint32_t n = 0;
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &n, nullptr);
+        std::vector<VkExtensionProperties> list(n);
+        vkEnumerateDeviceExtensionProperties(d, nullptr, &n, list.data());
+        std::vector<std::string> names;
+        for (const VkExtensionProperties &e : list) names.emplace_back(e.extensionName);
+        return names;
+    };
+    auto in = [](const std::vector<std::string> &names, const char *name) {
+        return std::find(names.begin(), names.end(), name) != names.end();
+    };
+    // what 1.3 took in that the renderer needs, as extensions on 1.1 and
+    // 1.2 (dynamic rendering, with what it needs, synchronization2, the
+    // timeline semaphores 1.2 took in), and the ones it needs on any
+    static const char *const BEFORE_1_3[] = {VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
+                                             VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME};
+    static const char *const BEFORE_1_2[] = {VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME};
+    static const char *const ALWAYS[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
+    // why a device cannot run it, empty when it can
+    auto lacks = [&](VkPhysicalDevice d) -> std::string {
+        VkPhysicalDeviceProperties p;
+        vkGetPhysicalDeviceProperties(d, &p);
+        if (p.apiVersion < VK_API_VERSION_1_1) return std::string(p.deviceName) + " has Vulkan 1.0";
+        std::vector<std::string> has = extensions_of(d);
+        std::string missing;
+        auto need = [&](const char *name) {
+            if (!in(has, name)) missing += (missing.empty() ? "" : ", ") + std::string(name);
+        };
+        for (const char *e : ALWAYS) {
+            // extended dynamic state is 1.3's own, named or not
+            if (p.apiVersion >= VK_API_VERSION_1_3 && std::string(e) == VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME) continue;
+            need(e);
+        }
+        if (p.apiVersion < VK_API_VERSION_1_3)
+            for (const char *e : BEFORE_1_3) need(e);
+        if (p.apiVersion < VK_API_VERSION_1_2)
+            for (const char *e : BEFORE_1_2) need(e);
+        return missing.empty() ? std::string() : std::string(p.deviceName) + " lacks " + missing;
+    };
+    // a discrete GPU first, then any other that can
+    std::string why;
     for (int pass = 0; pass < 2 && !physical; pass++) {
         for (VkPhysicalDevice d : all) {
             VkPhysicalDeviceProperties p;
             vkGetPhysicalDeviceProperties(d, &p);
-            if (p.apiVersion < VK_API_VERSION_1_3) continue;
             if (pass == 0 && p.deviceType != VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) continue;
+            if (std::string no = lacks(d); !no.empty()) {
+                if (pass == 1) why += (why.empty() ? "" : "; ") + no;
+                continue;
+            }
             physical = d;
             break;
         }
     }
     if (!physical) {
-        self.error = "no GPU with Vulkan 1.3";
+        self.error = "no GPU the renderer can use" + (why.empty() ? std::string() : " (" + why + ")");
         return false;
     }
+    {
+        VkPhysicalDeviceProperties p;
+        vkGetPhysicalDeviceProperties(physical, &p);
+        api_version = std::min<uint32_t>(p.apiVersion, VK_API_VERSION_1_3);
+        vendor = p.vendorID;
+        std::fprintf(stderr, "vulkan: %s, Vulkan %u.%u, driver %08x\n", p.deviceName, VK_API_VERSION_MAJOR(p.apiVersion),
+                     VK_API_VERSION_MINOR(p.apiVersion), p.driverVersion);
+    }
+    const std::vector<std::string> device_extensions = extensions_of(physical);
     vkGetPhysicalDeviceMemoryProperties(physical, &memory_props);
     uint32_t families = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(physical, &families, nullptr);
@@ -106,27 +163,66 @@ bool Impl::init() {
     // HD textures as DDS, kept compressed (BC1, BC3, BC7)
     features.features.textureCompressionBC = has.textureCompressionBC;
     bc_textures = has.textureCompressionBC;
-    VkPhysicalDeviceVulkan12Features v12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES};
-    v12.timelineSemaphore = VK_TRUE;
-    VkPhysicalDeviceVulkan13Features v13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
-    v13.dynamicRendering = VK_TRUE;
-    v13.synchronization2 = VK_TRUE;
+    // each feature by its own structure, which 1.1's devices take with the
+    // extension and 1.3's as their own
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES};
+    timeline.timelineSemaphore = VK_TRUE;
+    VkPhysicalDeviceDynamicRenderingFeatures dynamic{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES};
+    dynamic.dynamicRendering = VK_TRUE;
+    VkPhysicalDeviceSynchronization2Features sync2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SYNCHRONIZATION_2_FEATURES};
+    sync2.synchronization2 = VK_TRUE;
     VkPhysicalDeviceExtendedDynamicStateFeaturesEXT eds{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_FEATURES_EXT};
     eds.extendedDynamicState = VK_TRUE;
-    v13.pNext = &eds;
-    // and the swapchain, for a window
+    features.pNext = &timeline;
+    timeline.pNext = &dynamic;
+    dynamic.pNext = &sync2;
+    sync2.pNext = &eds;
+    // the extensions: those it needs on any, those 1.3 (1.2) took in on an
+    // older device, and the swapchain, for a window
     can_present = !instance_extensions.empty();
-    const char *extensions[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME,
-                                VK_KHR_SWAPCHAIN_EXTENSION_NAME};
-    features.pNext = &v12;
-    v12.pNext = &v13;
+    std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+    // extended dynamic state: 1.3's own, the extension's (and its feature's
+    // structure) only where the device names it
+    if (std::find(device_extensions.begin(), device_extensions.end(), VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME) != device_extensions.end())
+        extensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+    else
+        sync2.pNext = nullptr;
+    if (api_version < VK_API_VERSION_1_3) extensions.insert(extensions.end(), std::begin(BEFORE_1_3), std::end(BEFORE_1_3));
+    if (api_version < VK_API_VERSION_1_2) extensions.insert(extensions.end(), std::begin(BEFORE_1_2), std::end(BEFORE_1_2));
+    if (can_present) extensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &features;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = can_present ? 3 : 2;
-    dci.ppEnabledExtensionNames = extensions;
+    dci.enabledExtensionCount = uint32_t(extensions.size());
+    dci.ppEnabledExtensionNames = extensions.data();
     if (VkResult r = vkCreateDevice(physical, &dci, nullptr, &device)) return fail("vkCreateDevice", r);
+    volkLoadDevice(device);
+    // on an older device, 1.3's (1.2's) names are its extensions' (the same
+    // functions, as the extensions defined them)
+    if (api_version < VK_API_VERSION_1_3) {
+        vkCmdBeginRendering = vkCmdBeginRenderingKHR;
+        vkCmdEndRendering = vkCmdEndRenderingKHR;
+        vkCmdPipelineBarrier2 = vkCmdPipelineBarrier2KHR;
+        vkQueueSubmit2 = vkQueueSubmit2KHR;
+        vkCmdSetCullMode = vkCmdSetCullModeEXT;
+        vkCmdSetFrontFace = vkCmdSetFrontFaceEXT;
+        vkCmdSetPrimitiveTopology = vkCmdSetPrimitiveTopologyEXT;
+        vkCmdSetViewportWithCount = vkCmdSetViewportWithCountEXT;
+        vkCmdSetScissorWithCount = vkCmdSetScissorWithCountEXT;
+        vkCmdBindVertexBuffers2 = vkCmdBindVertexBuffers2EXT;
+        vkCmdSetDepthTestEnable = vkCmdSetDepthTestEnableEXT;
+        vkCmdSetDepthWriteEnable = vkCmdSetDepthWriteEnableEXT;
+        vkCmdSetDepthCompareOp = vkCmdSetDepthCompareOpEXT;
+        vkCmdSetDepthBoundsTestEnable = vkCmdSetDepthBoundsTestEnableEXT;
+        vkCmdSetStencilTestEnable = vkCmdSetStencilTestEnableEXT;
+        vkCmdSetStencilOp = vkCmdSetStencilOpEXT;
+    }
+    if (api_version < VK_API_VERSION_1_2) {
+        vkWaitSemaphores = vkWaitSemaphoresKHR;
+        vkSignalSemaphore = vkSignalSemaphoreKHR;
+        vkGetSemaphoreCounterValue = vkGetSemaphoreCounterValueKHR;
+    }
     vkGetDeviceQueue(device, family, 0, &queue);
     push_descriptors = PFN_vkCmdPushDescriptorSetKHR(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
     if (!push_descriptors) {
@@ -312,9 +408,15 @@ Buffer Impl::buffer(VkDeviceSize size, VkBufferUsageFlags usage, bool read) {
     if (read && !(memory_props.memoryTypes[ai.memoryTypeIndex].propertyFlags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT)) {
         ai.memoryTypeIndex = memory_type(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     }
-    vkAllocateMemory(device, &ai, nullptr, &b.memory);
-    vkBindBufferMemory(device, b.buffer, b.memory, 0);
-    vkMapMemory(device, b.memory, 0, size, 0, reinterpret_cast<void **>(&b.mapped));
+    // a buffer that cannot be had is the end: said, rather than written
+    // through a pointer that is not one
+    VkResult r = vkAllocateMemory(device, &ai, nullptr, &b.memory);
+    if (r == VK_SUCCESS) r = vkBindBufferMemory(device, b.buffer, b.memory, 0);
+    if (r == VK_SUCCESS) r = vkMapMemory(device, b.memory, 0, size, 0, reinterpret_cast<void **>(&b.mapped));
+    if (r != VK_SUCCESS) {
+        std::fprintf(stderr, "vulkan: no host memory for a buffer of %llu bytes (%d)\n", (unsigned long long)size, int(r));
+        std::abort();
+    }
     b.read = read;
     return b;
 }
@@ -562,7 +664,7 @@ void Impl::shutdown() {
         vkGetPipelineCacheData(device, pipeline_cache, &size, nullptr);
         std::vector<uint8_t> data(size);
         if (size && !cache_folder.empty() && vkGetPipelineCacheData(device, pipeline_cache, &size, data.data()) == VK_SUCCESS) {
-            if (FILE *f = _wfopen((cache_folder / "pipelines.bin").c_str(), L"wb")) std::fwrite(data.data(), 1, size, f), std::fclose(f);
+            if (FILE *f = open_file(cache_folder / "pipelines.bin", "wb")) std::fwrite(data.data(), 1, size, f), std::fclose(f);
         }
         vkDestroyPipelineCache(device, pipeline_cache, nullptr);
     }

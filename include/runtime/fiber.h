@@ -1,8 +1,9 @@
 // A stack of its own for each of the game's threads, switched to and from
 // on the one host thread they share (interface 6): the game's code calls
 // into the system as plain C calls, and a call that has the thread wait
-// switches away inside it and comes back where it was. Windows' fibers, or
-// ucontext elsewhere.
+// switches away inside it and comes back where it was. Windows' fibers; on
+// x86-64 and AArch64 elsewhere (Linux, Android) a switch of our own, else
+// ucontext.
 
 #ifndef RUNTIME_FIBER_H
 #define RUNTIME_FIBER_H

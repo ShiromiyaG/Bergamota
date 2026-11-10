@@ -98,14 +98,22 @@ struct Json {
     bool boolean = false;
     std::string text;
     std::vector<Json> items;
-    std::vector<std::pair<std::string, Json>> members;
-    const Json *get(const std::string &key) const {
-        for (const auto &[k, v] : members) {
-            if (k == key) return &v;
-        }
-        return nullptr;
-    }
+    struct Member;
+    std::vector<Member> members;
+    const Json *get(const std::string &key) const;
 };
+
+struct Json::Member {
+    std::string key;
+    Json value;
+};
+
+const Json *Json::get(const std::string &key) const {
+    for (const auto &[k, v] : members) {
+        if (k == key) return &v;
+    }
+    return nullptr;
+}
 
 class Parser {
 public:
@@ -184,7 +192,7 @@ private:
                 if (at_ >= s_.size() || s_[at_++] != ':') return false;
                 Json v;
                 if (!value(v)) return false;
-                out.members.emplace_back(std::move(key), std::move(v));
+                out.members.push_back({std::move(key), std::move(v)});
                 space();
                 if (at_ < s_.size() && s_[at_] == ',') {
                     at_++;

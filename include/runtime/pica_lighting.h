@@ -6,6 +6,7 @@
 #define RUNTIME_PICA_LIGHTING_H
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 
 namespace runtime::pica {

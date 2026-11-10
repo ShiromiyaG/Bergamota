@@ -13,7 +13,7 @@
 #include "../pica/texture.h"
 #include "translate.h"
 #include "../pica/vertex.h"
-#include <vulkan/vulkan.h>
+#include <volk.h> // vulkan.h, its functions loaded at run time
 #include <algorithm>
 #include <chrono>
 #include <bit>
@@ -32,6 +32,16 @@
 #include <filesystem>
 
 namespace runtime {
+
+// a file by its path, as wide as Windows' paths are
+inline std::FILE *open_file(const std::filesystem::path &path, const char *mode) {
+#ifdef _WIN32
+    std::wstring wide(mode, mode + std::strlen(mode));
+    return _wfopen(path.c_str(), wide.c_str());
+#else
+    return std::fopen(path.c_str(), mode);
+#endif
+}
 
 using namespace pica;
 
@@ -207,6 +217,10 @@ struct VulkanRenderer::Impl {
     VkFormat depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
     VkPhysicalDeviceMemoryProperties memory_props{};
     PFN_vkCmdPushDescriptorSetKHR push_descriptors = nullptr;
+    // the device's Vulkan, at most 1.3 (an older one runs on extensions),
+    // and its maker (PCI id: 0x5143 Qualcomm, 0x13B5 ARM, 0x1010 Imagination)
+    uint32_t api_version = VK_API_VERSION_1_3;
+    uint32_t vendor = 0;
 
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;

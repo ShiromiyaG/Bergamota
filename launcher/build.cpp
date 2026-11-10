@@ -18,11 +18,24 @@ namespace launcher {
 
 namespace {
 
-constexpr const char *ZIG = "zig-x86_64-windows-0.17.0";
-constexpr const char *ZIG_URL = "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip";
-// from ziglang.org/download/index.json
-constexpr const char *ZIG_SHA256 = "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428";
-constexpr uint64_t ZIG_SIZE = 100268137;
+// Zig, when there is no C compiler that links a library: this platform's
+// build, from ziglang.org/download/index.json
+struct ZigBuild {
+    const char *name, *url, *sha256;
+    uint64_t size;
+};
+#if defined(_WIN32)
+constexpr ZigBuild ZIG{"zig-x86_64-windows-0.17.0", "https://ziglang.org/download/0.17.0/zig-x86_64-windows-0.17.0.zip",
+                       "b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428", 100268137};
+#elif defined(__linux__) && defined(__x86_64__) && !defined(__ANDROID__)
+constexpr ZigBuild ZIG{"zig-x86_64-linux-0.17.0", "https://ziglang.org/download/0.17.0/zig-x86_64-linux-0.17.0.tar.xz",
+                       "1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026", 57332648};
+#elif defined(__linux__) && defined(__aarch64__) && !defined(__ANDROID__)
+constexpr ZigBuild ZIG{"zig-aarch64-linux-0.17.0", "https://ziglang.org/download/0.17.0/zig-aarch64-linux-0.17.0.tar.xz",
+                       "9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8", 52877280};
+#else
+constexpr ZigBuild ZIG{nullptr, nullptr, nullptr, 0};
+#endif
 
 const bool WINDOWS = SDL_strcmp(SDL_GetPlatform(), "Windows") == 0;
 
@@ -47,23 +60,46 @@ SDL_Process *spawn(const std::vector<std::string> &args, SDL_Environment *env, b
     return process;
 }
 
-// whether clang is here and links a DLL
-bool clang_links() {
+// whether a C compiler (its command's words) is here and links a library
+bool links(const std::vector<std::string> &compiler) {
     fs::path dir = fs::temp_directory_path() / ("launcher-probe-" + std::to_string(SDL_GetTicksNS()));
     std::error_code ec;
     fs::create_directories(dir, ec);
     {
         std::ofstream source(dir / "probe.c");
-        source << "__declspec(dllexport) int probe(void) { return 1; }\n";
+        source << (WINDOWS ? "__declspec(dllexport) " : "") << "int probe(void) { return 1; }\n";
     }
-    bool links = false;
-    if (SDL_Process *p = spawn({"clang", "-shared", "-o", utf8(dir / "probe.dll"), utf8(dir / "probe.c")}, nullptr, false)) {
+    const fs::path out = dir / (WINDOWS ? "probe.dll" : "probe.so");
+    std::vector<std::string> args = compiler;
+    if (!WINDOWS) args.push_back("-fPIC");
+    for (const std::string &a : {std::string("-shared"), std::string("-o"), utf8(out), utf8(dir / "probe.c")}) args.push_back(a);
+    bool ok = false;
+    if (SDL_Process *p = spawn(args, nullptr, false)) {
         SDL_WaitProcess(p, true, nullptr);
         SDL_DestroyProcess(p);
-        links = fs::is_regular_file(dir / "probe.dll", ec);
+        ok = fs::is_regular_file(out, ec);
     }
     fs::remove_all(dir, ec);
-    return links;
+    return ok;
+}
+
+// the first of these on the PATH (curl, wget...), empty for none
+std::string on_path(SDL_Environment *env, std::initializer_list<const char *> names) {
+    const char *path = SDL_GetEnvironmentVariable(env, "PATH");
+    std::string all = path ? path : "";
+    const char separator = WINDOWS ? ';' : ':';
+    for (const char *name : names) {
+        size_t from = 0;
+        while (from <= all.size()) {
+            size_t to = all.find(separator, from);
+            if (to == std::string::npos) to = all.size();
+            std::error_code ec;
+            fs::path candidate = path_of(all.substr(from, to - from)) / program(name);
+            if (to > from && fs::is_regular_file(candidate, ec)) return utf8(candidate);
+            from = to + 1;
+        }
+    }
+    return {};
 }
 
 // SHA-256, small: the one file it checks is Zig's
@@ -338,38 +374,67 @@ bool Job::run(const std::vector<std::string> &args, SDL_Environment *env, const 
     return true;
 }
 
+// the C compiler 3dsrecomp builds with, into env's CC: the one CC names;
+// else clang where it links a library; else, beyond Windows, the system's cc
+// (gcc); else Zig, downloaded once into the port's folder
 bool Job::prepare_compiler(SDL_Environment *env, std::string &error) {
     const char *named = SDL_GetEnvironmentVariable(env, "CC");
-    if (!WINDOWS || (named && *named)) return true;
-    if (clang_links()) {
+    if (named && *named) return true;
+    if (links({"clang"})) {
         SDL_SetEnvironmentVariable(env, "CC", "clang", true);
         return true;
     }
-    fs::path dir = data_dir() / "zig";
-    if (data_dir().empty()) {
-        error = "there is no APPDATA folder to keep the compiler in";
+    if (!WINDOWS && links({"cc"})) {
+        SDL_SetEnvironmentVariable(env, "CC", "cc", true);
+        return true;
+    }
+    if (!ZIG.name) {
+        error = "there is no C compiler here (clang or gcc) to build the game with; install one, or name it in CC";
         return false;
     }
+    fs::path dir = data_dir() / "zig";
+    if (data_dir().empty()) {
+        error = "there is no folder to keep the compiler in";
+        return false;
+    }
+    const fs::path zig = dir / ZIG.name / program("zig");
     std::error_code ec;
-    if (!fs::is_regular_file(dir / ZIG / "zig.exe", ec)) {
-        // Windows' own curl and tar, the download checked against its SHA-256
-        const char *root = SDL_GetEnvironmentVariable(env, "SystemRoot");
-        fs::path system = path_of(root ? root : "C:\\Windows") / "System32";
+    if (!fs::is_regular_file(zig, ec)) {
+        // curl and tar, Windows' own or the system's, the download checked
+        // against its SHA-256
+        std::string curl, tar;
+        if (WINDOWS) {
+            const char *root = SDL_GetEnvironmentVariable(env, "SystemRoot");
+            fs::path system = path_of(root ? root : "C:\\Windows") / "System32";
+            curl = utf8(system / "curl.exe");
+            tar = utf8(system / "tar.exe");
+        } else {
+            curl = on_path(env, {"curl"});
+            tar = on_path(env, {"tar"});
+        }
+        const std::string wget = curl.empty() ? on_path(env, {"wget"}) : std::string();
+        if ((curl.empty() && wget.empty()) || tar.empty()) {
+            error = "there is no C compiler here (clang or gcc), nor curl (or wget) and tar to download Zig; install one of them";
+            return false;
+        }
         fs::create_directories(dir, ec);
-        fs::path zip = dir / (std::string(ZIG) + ".zip");
-        fs::remove(zip, ec);
+        const std::string url = ZIG.url;
+        fs::path archive = dir / url.substr(url.rfind('/') + 1);
+        fs::remove(archive, ec);
         auto progress = [&] {
             std::error_code e;
-            uint64_t size = fs::exists(zip, e) ? fs::file_size(zip, e) : 0;
-            set(Stage{Stage::Downloading, size, ZIG_SIZE});
+            uint64_t size = fs::exists(archive, e) ? fs::file_size(archive, e) : 0;
+            set(Stage{Stage::Downloading, size, ZIG.size});
         };
-        if (!run({utf8(system / "curl.exe"), "-L", "-f", "-s", "-o", utf8(zip), ZIG_URL}, nullptr, {}, progress, error)) {
+        std::vector<std::string> download = curl.empty() ? std::vector<std::string>{wget, "-q", "-O", utf8(archive), url}
+                                                         : std::vector<std::string>{curl, "-L", "-f", "-s", "-o", utf8(archive), url};
+        if (!run(download, nullptr, {}, progress, error)) {
             error = "could not download Zig, " + error;
             return false;
         }
-        set(Stage{Stage::Downloading, ZIG_SIZE, ZIG_SIZE});
-        if (sha256(zip) != ZIG_SHA256) {
-            fs::remove(zip, ec);
+        set(Stage{Stage::Downloading, ZIG.size, ZIG.size});
+        if (sha256(archive) != ZIG.sha256) {
+            fs::remove(archive, ec);
             error = "the Zig downloaded is not the one expected (its SHA-256 differs; is the connection all right?)";
             return false;
         }
@@ -377,22 +442,22 @@ bool Job::prepare_compiler(SDL_Environment *env, std::string &error) {
         fs::path unpacking = dir / "unpacking";
         fs::remove_all(unpacking, ec);
         fs::create_directories(unpacking, ec);
-        if (!run({utf8(system / "tar.exe"), "-xf", utf8(zip), "-C", utf8(unpacking)}, nullptr, {}, {}, error)) {
+        if (!run({tar, "-xf", utf8(archive), "-C", utf8(unpacking)}, nullptr, {}, {}, error)) {
             error = "could not unpack Zig, " + error;
             return false;
         }
-        fs::remove_all(dir / ZIG, ec);
-        fs::rename(unpacking / ZIG, dir / ZIG, ec);
+        fs::remove_all(dir / ZIG.name, ec);
+        fs::rename(unpacking / ZIG.name, dir / ZIG.name, ec);
         fs::remove_all(unpacking, ec);
-        fs::remove(zip, ec);
-        if (!fs::is_regular_file(dir / ZIG / "zig.exe", ec)) {
+        fs::remove(archive, ec);
+        if (!fs::is_regular_file(zig, ec)) {
             error = "Zig was not unpacked";
             return false;
         }
     }
     // zig's folder first on the PATH, so CC needs no path, which could hold spaces
     const char *path = SDL_GetEnvironmentVariable(env, "PATH");
-    std::string with = utf8(dir / ZIG) + ";" + (path ? path : "");
+    std::string with = utf8(dir / ZIG.name) + (WINDOWS ? ";" : ":") + (path ? path : "");
     SDL_SetEnvironmentVariable(env, "PATH", with.c_str(), true);
     SDL_SetEnvironmentVariable(env, "CC", "zig cc", true);
     return true;
@@ -490,6 +555,35 @@ bool play(const Tools &tools, const Config &config, std::string &error) {
 }
 
 bool desktop_shortcut(std::string &error) {
+#ifndef _WIN32
+    // a .desktop entry, in the applications menu and on the desktop, with
+    // the port's icon beside the launcher
+    const char *home = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "HOME");
+    if (!home || !*home) {
+        error = "there is no HOME folder";
+        return false;
+    }
+    const char *data = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), "XDG_DATA_HOME");
+    fs::path applications = (data && *data ? path_of(data) : path_of(home) / ".local" / "share") / "applications";
+    std::string entry = "[Desktop Entry]\nType=Application\nName=" + port().name + "\nComment=" + port().about + "\nExec=\"" +
+                        utf8(exe()) + "\"\nPath=" + utf8(exe().parent_path()) + "\nIcon=" + utf8(beside("icon.png")) +
+                        "\nTerminal=false\nCategories=Game;\n";
+    std::error_code ec;
+    bool any = false;
+    for (const fs::path &dir : {applications, path_of(home) / "Desktop"}) {
+        if (dir == applications) fs::create_directories(dir, ec);
+        if (!fs::is_directory(dir, ec)) continue;
+        fs::path file = dir / (port().name + ".desktop");
+        std::ofstream out(file, std::ios::binary);
+        out << entry;
+        if (!out) continue;
+        out.close();
+        fs::permissions(file, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
+        any = true;
+    }
+    if (!any) error = "could not write " + utf8(applications / (port().name + ".desktop"));
+    return any;
+#else
     auto quote = [](std::string s) {
         for (size_t at = 0; (at = s.find('\'', at)) != std::string::npos; at += 2) s.insert(at, "'");
         return s;
@@ -505,6 +599,7 @@ bool desktop_shortcut(std::string &error) {
     SDL_WaitProcess(p, true, nullptr);
     SDL_DestroyProcess(p);
     return true;
+#endif
 }
 
 } // namespace launcher

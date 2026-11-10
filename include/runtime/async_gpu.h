@@ -51,7 +51,7 @@ public:
     // seconds the game's thread waited for the GPU
     double waited = 0;
     // its thread, for the sampler
-    void *native_thread() { return thread_.native_handle(); }
+    void *native_thread() { return reinterpret_cast<void *>(uintptr_t(thread_.native_handle())); }
 
 private:
     void push(uint8_t interrupt, std::function<void()> work);

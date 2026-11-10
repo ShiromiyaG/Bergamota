@@ -20,7 +20,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <vulkan/vulkan.h>
+#include <volk.h> // vulkan.h, its functions loaded at run time
 
 namespace runtime {
 

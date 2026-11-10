@@ -11,3 +11,4 @@ build-release/
 
 # the SDK's tools, run with python
 __pycache__/
+build-android/

@@ -146,6 +146,14 @@ def package(port, args, say, build_native):
         for dll in VC_DLLS:
             for folder in (out, os.path.join(out, "game"), os.path.join(out, "3dsrecomp")):
                 copy(os.path.join(crt, dll), os.path.join(folder, dll))
+    # beyond Windows (where the .exe carry the icon): the port's icon beside
+    # the launcher, icon.bmp for its window and icon.png for its shortcut
+    # (the .desktop entry), from beside port.toml's [package] icon
+    if os.name != "nt" and port.icon:
+        for name in ("icon.png", "icon.bmp"):
+            source = os.path.join(os.path.dirname(port.icon), name)
+            if os.path.exists(source):
+                copy(source, os.path.join(out, name))
     if os.path.exists(port.readme):
         copy(port.readme, os.path.join(out, "README.md"))
     else:
@@ -195,7 +203,10 @@ def package(port, args, say, build_native):
     machine = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(
         platform.machine().lower(), platform.machine().lower())
     zip_base = os.path.join(dist, f"{port.name}-{args.version}-{system}-{machine}")
-    if os.path.exists(zip_base + ".zip"):
-        os.remove(zip_base + ".zip")
-    shutil.make_archive(zip_base, "zip", root_dir=dist, base_dir=port.name)
-    say(f"{zip_base}.zip: {os.path.getsize(zip_base + '.zip') / 2**20:.1f} MB")
+    # a .zip for Windows; a .tar.gz elsewhere, which keeps the programs'
+    # executable bits
+    kind, ext = ("zip", ".zip") if os.name == "nt" else ("gztar", ".tar.gz")
+    if os.path.exists(zip_base + ext):
+        os.remove(zip_base + ext)
+    shutil.make_archive(zip_base, kind, root_dir=dist, base_dir=port.name)
+    say(f"{zip_base}{ext}: {os.path.getsize(zip_base + ext) / 2**20:.1f} MB")
