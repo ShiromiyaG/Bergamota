@@ -55,6 +55,14 @@ bool unpack_update(const std::filesystem::path &cia, const std::filesystem::path
 // empty when the dump has none
 std::string read_title(const std::filesystem::path &dump);
 
+// the game's icon from its SMDH, as the HOME Menu shows it: the large one
+// (48 x 48) and the small one (24 x 24), each pixel RGBA (R in the low byte),
+// row by row; false when the dump has none
+struct Icon {
+    std::vector<uint32_t> large, small;
+};
+bool read_icon(const std::filesystem::path &dump, Icon &icon);
+
 } // namespace runtime
 
 #endif

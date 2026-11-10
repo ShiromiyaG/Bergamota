@@ -142,36 +142,76 @@ bool read_program(const fsys::path &dump, std::vector<uint8_t> &exheader, std::v
     return false;
 }
 
-std::string read_title(const fsys::path &dump) {
-    std::ifstream in(dump, std::ios::binary);
+namespace {
+
+// where the dump's SMDH (its ExeFS's "icon") starts, none without one
+std::optional<uint64_t> find_smdh(std::ifstream &in, const fsys::path &dump) {
     std::string error;
     std::optional<uint64_t> ncch = find_ncch(in, dump, error);
-    if (!ncch) return {};
+    if (!ncch) return std::nullopt;
     uint64_t exefs = *ncch + uint64_t(read_le<uint32_t>(in, *ncch + 0x1A0)) * 0x200;
     for (int i = 0; i < 10; i++) {
         char name[8];
         in.seekg(static_cast<std::streamoff>(exefs + i * 0x10));
         in.read(name, 8);
         if (std::strncmp(name, "icon", 8) != 0) continue;
-        // the SMDH: "SMDH", then per language a short title (0x80 bytes of
-        // UTF-16), a long one and the publisher; English is the second
         uint64_t smdh = exefs + 0x200 + read_le<uint32_t>(in, exefs + i * 0x10 + 8);
         char magic[4];
         in.seekg(static_cast<std::streamoff>(smdh));
         in.read(magic, 4);
-        if (std::memcmp(magic, "SMDH", 4) != 0) return {};
-        std::string title;
-        for (int c = 0; c < 0x40; c++) {
-            uint16_t unit = read_le<uint16_t>(in, smdh + 0x08 + 0x200 + c * 2);
-            if (!unit) break;
-            // the titles are within the basic plane: one to three bytes each
-            if (unit < 0x80) title += char(unit);
-            else if (unit < 0x800) title += char(0xC0 | unit >> 6), title += char(0x80 | (unit & 0x3F));
-            else title += char(0xE0 | unit >> 12), title += char(0x80 | (unit >> 6 & 0x3F)), title += char(0x80 | (unit & 0x3F));
-        }
-        return title;
+        if (!in || std::memcmp(magic, "SMDH", 4) != 0) return std::nullopt;
+        return smdh;
     }
-    return {};
+    return std::nullopt;
+}
+
+// an SMDH icon: RGB565 in 8 x 8 tiles, row by row, each tile's pixels in
+// Morton (Z) order
+bool read_tiled(std::ifstream &in, uint64_t at, int size, std::vector<uint32_t> &out) {
+    std::vector<uint8_t> raw(size_t(size) * size * 2);
+    in.seekg(static_cast<std::streamoff>(at));
+    in.read(reinterpret_cast<char *>(raw.data()), std::streamsize(raw.size()));
+    if (!in) return false;
+    out.assign(size_t(size) * size, 0);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            int tile = (y / 8) * (size / 8) + x / 8, tx = x % 8, ty = y % 8;
+            int morton = (tx & 1) | (ty & 1) << 1 | (tx & 2) << 1 | (ty & 2) << 2 | (tx & 4) << 2 | (ty & 4) << 3;
+            size_t i = (size_t(tile) * 64 + size_t(morton)) * 2;
+            uint32_t v = uint32_t(raw[i]) | uint32_t(raw[i + 1]) << 8;
+            uint32_t r = (v >> 11 & 0x1F) * 255 / 31, g = (v >> 5 & 0x3F) * 255 / 63, b = (v & 0x1F) * 255 / 31;
+            out[size_t(y) * size + x] = r | g << 8 | b << 16 | 0xFFu << 24;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+std::string read_title(const fsys::path &dump) {
+    std::ifstream in(dump, std::ios::binary);
+    std::optional<uint64_t> smdh = find_smdh(in, dump);
+    if (!smdh) return {};
+    // the SMDH: "SMDH", then per language a short title (0x80 bytes of
+    // UTF-16), a long one and the publisher; English is the second
+    std::string title;
+    for (int c = 0; c < 0x40; c++) {
+        uint16_t unit = read_le<uint16_t>(in, *smdh + 0x08 + 0x200 + c * 2);
+        if (!unit) break;
+        // the titles are within the basic plane: one to three bytes each
+        if (unit < 0x80) title += char(unit);
+        else if (unit < 0x800) title += char(0xC0 | unit >> 6), title += char(0x80 | (unit & 0x3F));
+        else title += char(0xE0 | unit >> 12), title += char(0x80 | (unit >> 6 & 0x3F)), title += char(0x80 | (unit & 0x3F));
+    }
+    return title;
+}
+
+bool read_icon(const fsys::path &dump, Icon &icon) {
+    std::ifstream in(dump, std::ios::binary);
+    std::optional<uint64_t> smdh = find_smdh(in, dump);
+    // after the titles and settings, the small icon at 0x2040, the large one
+    // at 0x24C0
+    return smdh && read_tiled(in, *smdh + 0x2040, 24, icon.small) && read_tiled(in, *smdh + 0x24C0, 48, icon.large);
 }
 
 std::optional<RomFsImage> find_romfs(const fsys::path &dump, std::string &error) {

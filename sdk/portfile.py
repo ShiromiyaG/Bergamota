@@ -250,6 +250,8 @@ class Port:
         self.base = int(native.get("base", 0x07800000))
         package = t.get("package", {})
         self.ui = self.path(package["ui"]) if package.get("ui") else ""
+        # the port's icon, a .ico, in the launcher's and the player's .exe
+        self.icon = self.path(package["icon"]) if package.get("icon") else ""
         self.files = []
         for item in package.get("files", []):
             if isinstance(item, dict):

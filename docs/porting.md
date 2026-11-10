@@ -208,6 +208,7 @@ base = 0x07800000            # where the code loads
 
 [package]                    # port.py package's
 ui = "frontend"              # host code built into the player (frontend/port_ui.h)
+icon = "packaging/icon.ico"  # the port's icon, in the launcher's and the player's .exe
 files = [ { from = "ui/art", to = "game/ui/art" } ]   # more files, into the package
 readme = "packaging/README.md"
 third_party = "packaging/THIRD_PARTY.md"
@@ -266,6 +267,15 @@ not:
 `[package] ui` builds it into the package's player
 (`-DRUNTIME_PORT_UI=<folder>`); for `play`, build the runtime with the same
 option.
+
+## Icons
+
+`[package] icon`, a `.ico` of the port's own, goes into the launcher's and
+the player's `.exe` (`-DRUNTIME_PORT_ICON=<file>`): Explorer shows it, and
+their windows take it. Once the game starts, the player's window takes the
+game's own icon instead, read from the player's dump (its SMDH, the large
+and the small one; `runtime::read_icon` in `runtime/dump.h`), so nothing of
+the game's is in the port or the package.
 
 ## The package
 

@@ -23,6 +23,7 @@
 #include "ui.h"
 
 #include "runtime/decomp.h"
+#include "runtime/dump.h"
 #include "runtime/texture_pack.h"
 #include "runtime/async_gpu.h"
 #include "runtime/fs.h"
@@ -557,6 +558,17 @@ int main(int argc, char **argv) {
         if (!window) return fail(std::string("SDL: ") + SDL_GetError());
         SDL_SetWindowPosition(window, x, y);
         to_front(window);
+    }
+    // and with the game's own icon, read from the player's dump (the
+    // launcher's, the port's, until then): the large one, the small one for
+    // where the system shows small icons
+    if (runtime::Icon icon; !g.game.empty() && runtime::read_icon(frontend::path_of(g.game), icon)) {
+        SDL_Surface *large = SDL_CreateSurfaceFrom(48, 48, SDL_PIXELFORMAT_RGBA32, icon.large.data(), 48 * 4);
+        SDL_Surface *small = SDL_CreateSurfaceFrom(24, 24, SDL_PIXELFORMAT_RGBA32, icon.small.data(), 24 * 4);
+        if (large && small) SDL_AddSurfaceAlternateImage(large, small);
+        if (large) SDL_SetWindowIcon(window, large);
+        SDL_DestroySurface(small);
+        SDL_DestroySurface(large);
     }
     Uint32 extension_count = 0;
     const char *const *extension_names = SDL_Vulkan_GetInstanceExtensions(&extension_count);

@@ -287,6 +287,19 @@ if(RUNTIME_PLAYER)
     target_include_directories(launcher_test PRIVATE include launcher ${LAUNCHER_GEN})
     target_link_libraries(launcher_test PRIVATE SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
     add_test(NAME launcher COMMAND launcher_test)
+    # the port's icon (a .ico, [package] icon in port.toml), in the
+    # launcher's and the player's .exe: Explorer's, and their windows' (SDL
+    # takes the first icon); the player's window then takes the game's own,
+    # from the player's dump. None, the .exe have none
+    set(RUNTIME_PORT_ICON "" CACHE FILEPATH "the port's icon (.ico) for the launcher's and the player's .exe")
+    if(WIN32 AND RUNTIME_PORT_ICON)
+        enable_language(RC)
+        file(TO_CMAKE_PATH "${RUNTIME_PORT_ICON}" PORT_ICON)
+        file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/port_icon.rc CONTENT "1 ICON \"${PORT_ICON}\"\n")
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/port_icon.rc PROPERTIES OBJECT_DEPENDS ${PORT_ICON})
+        target_sources(launcher PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/port_icon.rc)
+        target_sources(player PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/port_icon.rc)
+    endif()
     # boot's shots of the single screen, composed as the player shows it
     if(RUNTIME_VULKAN)
         target_sources(boot PRIVATE frontend/layouts.cpp frontend/scenes.cpp frontend/raster_ui.cpp)

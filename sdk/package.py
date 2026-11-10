@@ -109,8 +109,10 @@ def package(port, args, say, build_native):
         # the port's own UI built into the player, none otherwise (a build
         # folder shared with another port's may have had its)
         ui = port.ui.replace("\\", "/") if port.ui else ""
+        icon = port.icon.replace("\\", "/") if port.icon else ""
         command = ["cmake", "-S", RUNTIME, "-B", runtime_build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                   "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", f"-DRUNTIME_PORT_UI={ui}"]
+                   "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++", f"-DRUNTIME_PORT_UI={ui}",
+                   f"-DRUNTIME_PORT_ICON={icon}"]
         say("> " + " ".join(command))
         if subprocess.run(command, env=env).returncode:
             raise PortError("configuring the runtime failed")
