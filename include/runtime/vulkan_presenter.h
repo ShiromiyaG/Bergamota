@@ -81,12 +81,17 @@ public:
     std::mutex &queue_lock();
     // waits until the GPU has done all that was sent, the queue to itself
     void idle();
+    // the window's surface made again (Android takes a window's away while
+    // the program is in the background, and gives it a new one after): the
+    // next present makes its swapchain on it. false when it cannot be had
+    bool surface_changed();
 
 private:
     bool make_swapchain(const View &view);
     void drop_swapchain();
 
     VulkanRenderer &renderer_;
+    std::function<bool(VkInstance, VkSurfaceKHR *)> make_surface_;
     VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
     VkFormat format_ = VK_FORMAT_B8G8R8A8_UNORM;

@@ -1,0 +1,135 @@
+# Bergamota's builds for a release: the launcher, the player, 3dsrecomp and
+# boot for Windows and Linux, the Android program (libmain.so, 3dsrecomp for
+# arm64), and the SDK for ports, made when a version's tag (v1.2.3) is pushed
+# or when asked from the Actions tab. A tag also makes the GitHub release.
+# Versions are bumped and tagged only when the owner asks (CLAUDE.md).
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VULKAN_SDK_VERSION: 1.4.341.1
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Vulkan SDK (glslc, shaderc)
+        shell: pwsh
+        run: |
+          $v = "$env:VULKAN_SDK_VERSION"
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe" -OutFile vulkansdk.exe
+          Start-Process .\vulkansdk.exe -ArgumentList "--root C:\VulkanSDK\$v --accept-licenses --default-answer --confirm-command install" -Wait
+          "VULKAN_SDK=C:\VulkanSDK\$v" | Out-File $env:GITHUB_ENV -Append
+          "C:\VulkanSDK\$v\Bin" | Out-File $env:GITHUB_PATH -Append
+      - name: Ninja
+        run: choco install ninja -y
+      - name: Build
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build --target launcher player 3dsrecomp boot
+      - name: Tests (those without a GPU)
+        run: ctest --test-dir build --output-on-failure -E "^render$"
+      - name: Pack
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory bergamota-windows-x64 | Out-Null
+          Copy-Item build\launcher.exe, build\player.exe, build\3dsrecomp.exe, build\boot.exe, LICENSE bergamota-windows-x64\
+          Compress-Archive bergamota-windows-x64 bergamota-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: bergamota-windows-x64.zip
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake ninja-build libvulkan-dev glslc mesa-vulkan-drivers \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxfixes-dev libxtst-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libegl-dev libasound2-dev libpulse-dev libdrm-dev \
+            libgbm-dev libudev-dev libdbus-1-dev libibus-1.0-dev
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build --target launcher player 3dsrecomp boot
+          cmake --build build
+      - name: Tests (the renderer's on lavapipe)
+        run: ctest --test-dir build --output-on-failure
+      - name: Pack
+        run: |
+          mkdir bergamota-linux-x64
+          cp build/launcher build/player build/3dsrecomp build/boot LICENSE bergamota-linux-x64/
+          tar -czf bergamota-linux-x64.tar.gz bergamota-linux-x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: bergamota-linux-x64.tar.gz
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build (arm64, Android 10 and up)
+        run: |
+          NDK="$ANDROID_NDK_LATEST_HOME"
+          cmake -S . -B build-android -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_static -DRUNTIME_VULKAN=ON \
+            -DVulkan_GLSLC_EXECUTABLE="$NDK/shader-tools/linux-x86_64/glslc"
+          cmake --build build-android --target main 3dsrecomp
+          STRIP="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip"
+          mkdir -p bergamota-android-arm64
+          "$STRIP" --strip-unneeded -o bergamota-android-arm64/libmain.so build-android/libmain.so
+          "$STRIP" --strip-unneeded -o bergamota-android-arm64/lib3dsrecomp.so build-android/3dsrecomp
+          cp LICENSE bergamota-android-arm64/
+          tar -czf bergamota-android-arm64.tar.gz bergamota-android-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: bergamota-android-arm64.tar.gz
+
+  sdk:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack the SDK (the port tool, port.h, the Android app's template, the contract)
+        run: |
+          mkdir -p bergamota-sdk/frontend bergamota-sdk/docs
+          cp -r sdk android bergamota-sdk/
+          cp frontend/port_ui.h bergamota-sdk/frontend/
+          cp docs/porting.md bergamota-sdk/docs/
+          cp LICENSE bergamota-sdk/
+          python3 -c "import sys; sys.path.insert(0, 'sdk'); import portfile; print(portfile.SDK_VERSION)" > bergamota-sdk/SDK_VERSION
+          zip -r bergamota-sdk.zip bergamota-sdk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk
+          path: bergamota-sdk.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux, android, sdk]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true

@@ -20,6 +20,7 @@
 #include "layouts.h"
 #include "scenes.h"
 #include "settings.h"
+#include "touch.h"
 #include "ui.h"
 
 #include "runtime/decomp.h"
@@ -314,7 +315,7 @@ struct Pointer {
 // (or on the port's UI, where what it stands for is), else the pointer's
 // touch where the view shows it
 Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *window, const VulkanPresenter::View &shown,
-                 const Pointer &pointer, const frontend::PortUi *port_ui) {
+                 const Pointer &pointer, const frontend::PortUi *port_ui, const frontend::TouchControls &touch) {
     Input now;
     const bool *keys = SDL_GetKeyboardState(nullptr);
     float circle[4] = {}; // up, down, left, right
@@ -332,10 +333,19 @@ Input read_input(const Bindings &bindings, SDL_Gamepad *gamepad, SDL_Window *win
         if (std::abs(gx) > std::abs(cx)) cx = gx;
         if (std::abs(gy) > std::abs(cy)) cy = gy;
     }
+    // the controls on a touch screen, over the rest
+    now.buttons |= touch.buttons();
+    if (touch.circle_x() || touch.circle_y()) cx = touch.circle_x(), cy = touch.circle_y();
     now.circle_x = cx;
     now.circle_y = cy;
     float mx = 0, my = 0, bx = 0, by = 0;
     SDL_MouseButtonFlags mouse = SDL_GetMouseState(&mx, &my);
+    // on a touch screen the stylus is the finger on none of the controls (the
+    // mouse SDL makes of the first finger could be on one)
+    if (touch.menu_button) {
+        mouse = 0;
+        if (std::optional<ImVec2> at = touch.stylus()) mouse = SDL_BUTTON_LMASK, mx = at->x, my = at->y;
+    }
     // the mouse in the window's points, the view in its pixels
     float density = SDL_GetWindowPixelDensity(window);
     if ((mouse & SDL_BUTTON_LMASK) && port_ui && port_ui->click(mx, my, bx, by)) { // the window's points, both
@@ -479,7 +489,13 @@ private:
 
 } // namespace
 
+#ifdef __ANDROID__
+// Android: frontend/android_main.cpp runs the launcher, then this, in one
+// program (libmain.so)
+int player_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     Settings settings;
     std::filesystem::path config_file;
     bool setup = false;
@@ -740,6 +756,13 @@ int main(int argc, char **argv) {
     auto shown_at = std::chrono::steady_clock::now();
     Pointer pointer;
     auto pointer_at = std::chrono::steady_clock::now();
+    // the 3DS's controls on the screen, on Android (a touch screen), hidden
+    // while a gamepad is connected; the menu's button there always
+    frontend::TouchControls touch;
+#ifdef __ANDROID__
+    touch.menu_button = true;
+    touch.shown = !SDL_HasGamepad();
+#endif
     // the port's UI up (as the layout last picked it), and its input's clock
     bool ui_up = false;
     auto ui_at = std::chrono::steady_clock::now();
@@ -748,6 +771,8 @@ int main(int argc, char **argv) {
     bool swapped = false, l2_held = false;
     while (!quit) {
         SDL_Event event;
+        int window_w = 0, window_h = 0; // in its points, for the touch controls
+        SDL_GetWindowSize(window, &window_w, &window_h);
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) quit = true;
             if (event.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) gamepad = SDL_OpenGamepad(event.gdevice.which);
@@ -755,6 +780,18 @@ int main(int argc, char **argv) {
                 SDL_CloseGamepad(gamepad);
                 gamepad = nullptr;
             }
+            // a gamepad hides the controls on the screen, until none is left
+            if (touch.menu_button && (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED))
+                touch.shown = event.type == SDL_EVENT_GAMEPAD_REMOVED && !SDL_HasGamepad();
+            // a finger on a control is the control's, not the game's touch
+            if (touch.event(event, float(window_w), float(window_h)) && !overlay.open) continue;
+#ifdef __ANDROID__
+            // Android gives the window a new surface when the program comes
+            // back from the background; its back button opens the menu
+            if (event.type == SDL_EVENT_DID_ENTER_FOREGROUND) presenter.surface_changed();
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_AC_BACK && !event.key.repeat)
+                overlay.open = !overlay.open;
+#endif
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && !event.key.repeat) {
                 settings.video.fullscreen = !settings.video.fullscreen;
                 SDL_SetWindowFullscreen(window, settings.video.fullscreen);
@@ -765,6 +802,7 @@ int main(int argc, char **argv) {
             }
             overlay.event(event);
         }
+        if (touch.menu()) overlay.open = !overlay.open;
         // a gamepad there already, or plugged in while the setup screen took
         // the events: the first one
         if (!gamepad) {
@@ -787,7 +825,7 @@ int main(int argc, char **argv) {
         }
         // none while the overlay is open; the port's UI takes what it moves on
         if (port_ui) port_ui->frame();
-        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer, port_ui.get());
+        Input now = overlay.open ? Input{} : read_input(bindings, gamepad, window, shown_view, pointer, port_ui.get(), touch);
         if (port_ui) {
             auto at = std::chrono::steady_clock::now();
             float seconds = std::chrono::duration<float>(at - ui_at).count(), bx, by;
@@ -835,6 +873,7 @@ int main(int argc, char **argv) {
         bool changed = false;
         overlay.scene = scene_shown ? scene_shown->name + " (" + scene_shown->layout + ")" : "none (panel)";
         overlay.draw(settings, tally.stats, config_file, changed);
+        touch.draw(ImGui::GetForegroundDrawList(), float(window_w), float(window_h), !overlay.open);
         // the pointer where the view last shown puts the bottom screen: a
         // ring, filled while it touches
         if (float wx, wy; pointer.shown() && !overlay.open && VulkanPresenter::from_bottom(shown_view, pointer.x, pointer.y, wx, wy)) {

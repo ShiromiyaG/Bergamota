@@ -1,5 +1,7 @@
 #include "build.h"
 
+#include "android.h"
+
 #include "runtime/dump.h"
 
 #include <SDL3/SDL.h>
@@ -7,6 +9,7 @@
 #include <chrono>
 #include <cstring>
 #include <fstream>
+#include <thread>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -530,6 +533,11 @@ void build_full(const std::string &title_in) {
 
 void finish_in_background(const Config &config) {
     if (config.full && config.current()) return;
+#ifdef __ANDROID__
+    // no launcher program to start: a thread of this one, the game playing
+    std::thread([title = config.title] { build_full(title); }).detach();
+    return;
+#endif
     std::vector<std::string> args{utf8(exe())};
     if (auto named = arg_after("--port")) args.insert(args.end(), {"--port", *named});
     args.insert(args.end(), {"--build-full", config.title});
@@ -551,7 +559,14 @@ bool play(const Tools &tools, const Config &config, std::string &error) {
     // minimized), unless the launcher, in front now, lets it come forward
     AllowSetForegroundWindow(ASFW_ANY);
 #endif
+#ifdef __ANDROID__
+    // the player is in this program: android_main.cpp starts it once the
+    // launcher has closed
+    play_request() = {utf8(tools.player), "--config", utf8(settings)};
+    return true;
+#else
     return start({utf8(tools.player), "--config", utf8(settings)}, error);
+#endif
 }
 
 bool desktop_shortcut(std::string &error) {

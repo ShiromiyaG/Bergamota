@@ -329,6 +329,10 @@ def cmd_boot(port, args):
 
 
 def cmd_package(port, args):
+    if args.android:
+        from android import package_android
+        package_android(port, args, say, cmd_native)
+        return
     from package import package
     package(port, args, say, cmd_native)
 
@@ -420,6 +424,8 @@ def main():
     p = command("package", "the package players download, into dist/", game=False)
     p.add_argument("--version", default="0.1.0")
     p.add_argument("--no-runtime-build", action="store_true", help="the runtime as built already")
+    p.add_argument("--android", action="store_true", help="the Android app (an APK) instead (sdk/android.py)")
+    p.add_argument("--android-build", help="where the runtime is built for Android (default <runtime>/build-android)")
 
     args = parser.parse_args()
     if not sys.stdout.isatty() and hasattr(sys.stdout, "reconfigure"):

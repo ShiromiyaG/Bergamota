@@ -104,7 +104,14 @@ std::string utf8(const fs::path &path) {
 
 fs::path path_of(const std::string &utf8) { return fs::path(std::u8string(utf8.begin(), utf8.end())); }
 
+namespace {
+fs::path given_base;
+} // namespace
+
+void set_base(const fs::path &dir) { given_base = dir; }
+
 fs::path exe() {
+    if (!given_base.empty()) return given_base / "launcher";
     const char *base = SDL_GetBasePath();
     fs::path name = path_of(program).filename();
     if (name.empty()) name = "launcher";
@@ -113,6 +120,7 @@ fs::path exe() {
 }
 
 fs::path beside(const std::string &name) {
+    if (!given_base.empty()) return given_base / path_of(name);
     const char *base = SDL_GetBasePath();
     return base ? path_of(base) / path_of(name) : path_of(name);
 }

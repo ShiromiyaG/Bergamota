@@ -11,13 +11,16 @@
 // launcher run again with `--build-full <title>`, and is used from the next
 // start. Drawn with Dear ImGui on SDL's renderer (Direct3D 11 on Windows).
 
+#include "android.h"
 #include "build.h"
 #include "check.h"
 #include "look.h"
 #include "pages.h"
 
 #include <SDL3/SDL.h>
+#ifndef __ANDROID__
 #include <SDL3/SDL_main.h>
+#endif
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlrenderer3.h>
@@ -170,7 +173,13 @@ private:
 void App::open_dialog(int which) {
     static const SDL_DialogFileFilter games[] = {{"3DS game", "3ds;cci;cxi;cia"}};
     static const SDL_DialogFileFilter updates[] = {{"3DS update", "cia"}};
+#ifdef __ANDROID__
+    // Android's picker knows no .3ds or .cia (no type of its own): any file
+    SDL_ShowOpenFileDialog(on_picked, reinterpret_cast<void *>(intptr_t(which)), window_, nullptr, 0, nullptr, false);
+    (void)games, (void)updates;
+#else
     SDL_ShowOpenFileDialog(on_picked, reinterpret_cast<void *>(intptr_t(which)), window_, which == 1 ? games : updates, 1, nullptr, false);
+#endif
 }
 
 void App::picked_files() {
@@ -182,6 +191,8 @@ void App::picked_files() {
         picked.ready = false;
         path = picked.path, which = picked.which;
     }
+    // Android's document (content://) opened as a file this program reads
+    path = local_path(path);
     if (which == 1) {
         game_path_ = path_of(path);
         check_game_file();
@@ -385,12 +396,14 @@ void App::advanced() {
                       SDL_OpenURL(("file:///" + utf8(data_dir())).c_str());
                   }
               });
+#ifndef __ANDROID__
     look::row("Desktop shortcut", "", 120 * s, [&] {
         if (ImGui::Button("Add", ImVec2(120 * s, 0))) {
             std::string error;
             note_ = desktop_shortcut(error) ? "The shortcut is on the desktop." : error;
         }
     });
+#endif
     if (!note_.empty()) text_colored(look::WEAK, note_);
 
     look::section("About", acc);
@@ -605,7 +618,13 @@ void App::frame() {
 
 using namespace launcher;
 
+#ifdef __ANDROID__
+// Android: frontend/android_main.cpp runs this, then the player, in one
+// program (libmain.so)
+int launcher_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     set_args(argc, argv);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         SDL_Log("SDL: %s", SDL_GetError());
@@ -647,7 +666,7 @@ int main(int argc, char **argv) {
     // seen to crash presenting a window with it (SDL_RENDER_DRIVER still chooses)
     SDL_Renderer *renderer = nullptr;
     const char *chosen = SDL_GetHint(SDL_HINT_RENDER_DRIVER);
-    for (const char *driver : {"direct3d11", "direct3d12", "metal", "opengl", "software"}) {
+    for (const char *driver : {"direct3d11", "direct3d12", "metal", "opengl", "opengles2", "software"}) {
         if (!window || renderer) break;
         renderer = SDL_CreateRenderer(window, chosen && *chosen ? chosen : driver);
         if (chosen && *chosen) break;
@@ -705,6 +724,8 @@ int main(int argc, char **argv) {
     ImGui::DestroyContext();
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
-    SDL_Quit();
+#ifndef __ANDROID__
+    SDL_Quit(); // on Android the player comes next, in this program
+#endif
     return 0;
 }

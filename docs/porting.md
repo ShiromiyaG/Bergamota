@@ -296,6 +296,46 @@ and zips it as `dist/<Name>-<version>-<platform>.zip`. A game whose
 addresses are carried (`native_from`) goes without native code, with a
 warning, when its update is not set up where the package is built.
 
+On Linux the same command, run there, lays out the same folder without
+`.exe` and with the port's `icon.png` and `icon.bmp` beside the launcher
+(its shortcut is a `.desktop` entry, its window takes the BMP), as
+`dist/<Name>-<version>-linux-<machine>.tar.gz`. The launcher builds the game
+with clang, else the system's `cc`, else Zig downloaded for Linux. Needed to
+build there: clang (or gcc), CMake, Ninja, the Vulkan headers and `glslc`,
+and SDL's X11/Wayland/ALSA/PulseAudio headers (the packages are listed in
+`.github/workflows/release.yml`).
+
+## Android
+
+`port.py package --android [--version x.y.z]` (`sdk/android.py`) makes
+`dist/<Name>-<version>-android-arm64.apk`, for arm64 phones with Vulkan 1.1
+or later (Adreno, Mali, PowerVR: a device on 1.1 or 1.2 takes the extensions
+1.3 took in, `src/vk/device.cpp`; `VK_KHR_push_descriptor` is needed). It
+needs the Android SDK (`ANDROID_HOME`, or Android Studio's), an NDK in it
+(or `ANDROID_NDK_HOME`), CMake, Ninja and a JDK Gradle 9 runs on.
+
+- The runtime is built with the NDK into `build-android/`: `libmain.so`
+  (the launcher, then the player, one program SDL's activity runs;
+  `frontend/android_main.cpp`) and `3dsrecomp`, with the port's UI.
+- The game is built on the phone, as on a computer: 3dsrecomp
+  (`lib3dsrecomp.so`) with Zig for AArch64 (`libzig.so`; the part of its lib
+  folder that C for `aarch64-linux-musl` takes is an asset, unpacked on the
+  first start), the library linked without a C library (`recomp/compile.cpp`,
+  `freestanding()`). Android runs programs only from the APK's library
+  folder, so both are there, named as libraries.
+- The game is picked with Android's picker; the launcher keeps its
+  `content://` and reads it as `/proc/self/fd/N` (`launcher/android.cpp`).
+- The port's files (port.toml, the scenes, the hot lists, each game's native
+  code, the licenses) are assets under `port/`, unpacked beside the
+  launcher's settings when the APK changes.
+- `[android] id` in port.toml is the app's id (else `org.bergamota.<name>`);
+  its icon is `icon.png` beside `[package] icon`. Signed with Android's debug
+  key unless `ANDROID_KEYSTORE`, `ANDROID_KEYSTORE_PASSWORD`,
+  `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` name the port's own.
+- In the game: the 3DS's controls on the screen (`frontend/touch.h`) until a
+  gamepad is connected, a finger elsewhere touching the bottom screen; the
+  round button at the top, or Android's back button, opens the menu.
+
 ## What stays stable
 
 `sdk` in `port.toml` is the SDK version a port is written for;

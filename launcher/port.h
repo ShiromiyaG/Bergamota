@@ -66,6 +66,9 @@ const Port &port();
 // the launcher itself, and a file beside it
 fs::path exe();
 fs::path beside(const std::string &name);
+// the folder taken for the launcher's own (Android: where the port's files
+// are unpacked, the program being in the APK); none: where it is
+void set_base(const fs::path &dir);
 // a folder the port's file names, beside the port's file
 fs::path folder(const std::string &name);
 

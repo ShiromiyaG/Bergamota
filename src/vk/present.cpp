@@ -43,7 +43,7 @@ void image_barrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkIma
 } // namespace
 
 VulkanPresenter::VulkanPresenter(VulkanRenderer &renderer, const std::function<bool(VkInstance, VkSurfaceKHR *)> &make_surface)
-    : renderer_(renderer) {
+    : renderer_(renderer), make_surface_(make_surface) {
     VulkanRenderer::Impl &d = *renderer.impl_;
     if (!renderer.ready() || !d.can_present) {
         error = "the renderer was made without a window's extensions";
@@ -273,6 +273,21 @@ void VulkanPresenter::drop_swapchain() {
     swapchain_ = VK_NULL_HANDLE;
 }
 
+bool VulkanPresenter::surface_changed() {
+    VulkanRenderer::Impl &d = *renderer_.impl_;
+    if (!d.device) return false;
+    idle();
+    drop_swapchain();
+    if (surface_) vkDestroySurfaceKHR(d.instance, surface_, nullptr);
+    surface_ = VK_NULL_HANDLE;
+    extent_ = {};
+    if (!make_surface_ || !make_surface_(d.instance, &surface_)) {
+        surface_ = VK_NULL_HANDLE;
+        return false;
+    }
+    return true;
+}
+
 bool VulkanPresenter::make_swapchain(const View &view) {
     VulkanRenderer::Impl &d = *renderer_.impl_;
     idle();
@@ -280,6 +295,13 @@ bool VulkanPresenter::make_swapchain(const View &view) {
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(d.physical, surface_, &caps);
     VkExtent2D extent = caps.currentExtent;
+    // a display turned a quarter (Android's phones, held across): its
+    // extent is the display's own way round; drawn the window's way, the
+    // system turns it
+    const bool turned = caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR |
+                                                 VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR |
+                                                 VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR);
+    if (turned && extent.width != 0xFFFFFFFF) std::swap(extent.width, extent.height);
     if (extent.width == 0xFFFFFFFF) {
         extent.width = std::clamp(view.width, caps.minImageExtent.width, caps.maxImageExtent.width);
         extent.height = std::clamp(view.height, caps.minImageExtent.height, caps.maxImageExtent.height);
@@ -305,8 +327,17 @@ bool VulkanPresenter::make_swapchain(const View &view) {
     ci.imageExtent = extent;
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-    ci.preTransform = caps.currentTransform;
+    ci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                                                        : caps.currentTransform;
+    // opaque where the surface takes it (Android's often take only inherit)
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    for (VkCompositeAlphaFlagBitsKHR a : {VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
+                                          VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR}) {
+        if (caps.supportedCompositeAlpha & a) {
+            ci.compositeAlpha = a;
+            break;
+        }
+    }
     ci.presentMode = mode;
     ci.clipped = VK_TRUE;
     if (vkCreateSwapchainKHR(d.device, &ci, nullptr, &swapchain_) != VK_SUCCESS) {
@@ -354,6 +385,10 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
     VkResult acquired = vkAcquireNextImageKHR(d.device, swapchain_, UINT64_MAX, f.acquired, VK_NULL_HANDLE, &index);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR) {
         make_swapchain(view);
+        return;
+    }
+    if (acquired == VK_ERROR_SURFACE_LOST_KHR) {
+        surface_changed();
         return;
     }
     if (acquired != VK_SUCCESS && acquired != VK_SUBOPTIMAL_KHR) return;
@@ -456,6 +491,7 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
         result = vkQueuePresentKHR(d.queue, &pi);
     }
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR) extent_ = {}; // made again next time
+    if (result == VK_ERROR_SURFACE_LOST_KHR) surface_changed();
     at_ ^= 1;
 }
 

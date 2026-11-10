@@ -252,6 +252,8 @@ class Port:
         self.ui = self.path(package["ui"]) if package.get("ui") else ""
         # the port's icon, a .ico, in the launcher's and the player's .exe
         self.icon = self.path(package["icon"]) if package.get("icon") else ""
+        # the Android app's id (sdk/android.py), else org.bergamota.<name>
+        self.android_id = t.get("android", {}).get("id", "")
         self.files = []
         for item in package.get("files", []):
             if isinstance(item, dict):

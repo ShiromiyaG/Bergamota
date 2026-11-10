@@ -1,5 +1,7 @@
 #include "library.h"
 
+#include "android.h"
+
 #include "runtime/dump.h"
 
 #include <SDL3/SDL.h>
@@ -39,8 +41,9 @@ template <typename View> fs::path path_value(View node) { return path_of(node.va
 Config config_of(const toml::table &t) {
     Config c;
     c.title = t["title"].value_or(std::string());
-    c.game = path_value(t["game"]);
-    c.update = path_value(t["update"]);
+    // Android's documents (content://) opened for this run
+    c.game = path_of(local_path(t["game"].value_or(std::string())));
+    c.update = path_of(local_path(t["update"].value_or(std::string())));
     c.built = t["built"].value_or(false);
     c.full = t["full"].value_or(false);
     c.decomp = path_value(t["decomp"]);
@@ -51,8 +54,8 @@ Config config_of(const toml::table &t) {
 
 toml::table table_of(const Config &c) {
     toml::table t{{"title", c.title}, {"built", c.built}, {"full", c.full}};
-    if (!c.game.empty()) t.insert("game", utf8(c.game));
-    if (!c.update.empty()) t.insert("update", utf8(c.update));
+    if (!c.game.empty()) t.insert("game", kept_path(utf8(c.game)));
+    if (!c.update.empty()) t.insert("update", kept_path(utf8(c.update)));
     if (!c.decomp.empty()) t.insert("decomp", utf8(c.decomp));
     if (c.decomp_built) t.insert("decomp_built", int64_t(*c.decomp_built));
     return t;

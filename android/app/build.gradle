@@ -1,0 +1,60 @@
+// The app: no native build of its own. sdk/android.py builds libmain.so
+// (the launcher and the player) and 3dsrecomp with the NDK beforehand, and
+// lays them in jniLibs/ with Zig; this packs them with SDL's Java (copied
+// into java/), the port's files (assets/) and its icon (res/).
+plugins {
+    id 'com.android.application'
+}
+
+def port = new Properties()
+file('../port.properties').withInputStream { port.load(it) }
+
+android {
+    namespace = 'org.bergamota'
+    compileSdk = 35
+    defaultConfig {
+        applicationId = port['id']
+        minSdk = 29
+        targetSdk = 35
+        versionCode = port['version_code'] as int
+        versionName = port['version']
+        ndk { abiFilters 'arm64-v8a' }
+    }
+    buildTypes {
+        release {
+            minifyEnabled = false
+            // the debug key unless the port's signing is given
+            // (sdk/android.py: ANDROID_KEYSTORE and its kin)
+            signingConfig = signingConfigs.debug
+        }
+    }
+    signingConfigs {
+        if (port['keystore']) {
+            own {
+                storeFile = file(port['keystore'])
+                storePassword = port['keystore_password']
+                keyAlias = port['key_alias']
+                keyPassword = port['key_password']
+            }
+        }
+    }
+    if (port['keystore']) buildTypes.release.signingConfig = signingConfigs.own
+    sourceSets {
+        main {
+            assets.srcDirs = ['../assets']
+            jniLibs.srcDirs = ['../jniLibs']
+            res.srcDirs += ['../res']
+        }
+    }
+    packaging {
+        // the libraries unpacked on the phone: libzig.so and lib3dsrecomp.so
+        // are programs run from there (the one place Android lets an app run them)
+        jniLibs { useLegacyPackaging = true }
+    }
+    androidResources {
+        // the port's small files kept as they are (Zig's lib.tar compressed: SDL
+        // reads it as it streams)
+        noCompress += ['toml', 'txt', 'bin']
+    }
+    lint { abortOnError = false }
+}

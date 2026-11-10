@@ -73,6 +73,10 @@ if(RUNTIME_AAC)
     set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(fdk_aac GIT_REPOSITORY https://github.com/mstorsjo/fdk-aac.git GIT_TAG v2.0.3 GIT_SHALLOW TRUE)
     FetchContent_MakeAvailable(fdk_aac)
+    if(ANDROID)
+        # its log.h for Android, the system's own and not the NDK's
+        target_include_directories(fdk-aac PRIVATE cmake/android)
+    endif()
     target_link_libraries(recomp_runtime PRIVATE fdk-aac)
     target_compile_definitions(recomp_runtime PRIVATE RUNTIME_AAC=1)
 endif()
@@ -310,13 +314,13 @@ if(RUNTIME_PLAYER)
     target_include_directories(port_ui PUBLIC frontend PRIVATE ${LAUNCHER_GEN})
     add_dependencies(port_ui nunito_fonts)
     target_link_libraries(port_ui PUBLIC recomp_runtime imgui SDL3::SDL3-static)
-    add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp
+    add_executable(player frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp frontend/overlay.cpp frontend/scenes.cpp frontend/touch.cpp
                           frontend/layouts.cpp)
     target_link_libraries(player PRIVATE recomp_runtime port_ui SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
     # the ports' launcher (launcher/, docs in main.cpp): Nunito built in, the
     # player's settings code and the dumps' readers compiled along, drawn on
     # SDL's renderer
-    set(LAUNCHER_SOURCES launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp
+    set(LAUNCHER_SOURCES launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp launcher/android.cpp
                          launcher/pages.cpp frontend/settings.cpp src/dump.cpp src/decomp_options.cpp
                          ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
     add_executable(launcher WIN32 launcher/main.cpp ${LAUNCHER_SOURCES})
@@ -326,6 +330,17 @@ if(RUNTIME_PLAYER)
     target_include_directories(launcher_test PRIVATE include launcher ${LAUNCHER_GEN})
     target_link_libraries(launcher_test PRIVATE SDL3::SDL3-static imgui tomlplusplus::tomlplusplus)
     add_test(NAME launcher COMMAND launcher_test)
+    # Android: one program, libmain.so (SDL's activity loads it and runs its
+    # SDL_main), the launcher and then the player (frontend/android_main.cpp);
+    # 3dsrecomp an executable the APK carries as lib3dsrecomp.so (sdk/android.py)
+    if(ANDROID)
+        add_library(main SHARED frontend/android_main.cpp frontend/player.cpp frontend/settings.cpp frontend/launcher.cpp
+                    frontend/overlay.cpp frontend/scenes.cpp frontend/layouts.cpp frontend/touch.cpp launcher/main.cpp
+                    launcher/port.cpp launcher/library.cpp launcher/check.cpp launcher/build.cpp launcher/look.cpp
+                    launcher/pages.cpp launcher/android.cpp ${LAUNCHER_GEN}/nunito_semibold.inc ${LAUNCHER_GEN}/nunito_black.inc)
+        target_include_directories(main PRIVATE include launcher frontend ${LAUNCHER_GEN})
+        target_link_libraries(main PRIVATE recomp_runtime port_ui SDL3::SDL3-static imgui tomlplusplus::tomlplusplus android log)
+    endif()
     # the port's icon (a .ico, [package] icon in port.toml), in the
     # launcher's and the player's .exe: Explorer's, and their windows' (SDL
     # takes the first icon); the player's window then takes the game's own,

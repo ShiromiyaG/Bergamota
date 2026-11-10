@@ -43,6 +43,67 @@ const std::vector<std::string> UNIX_FLAGS = {};
 #else
 const std::vector<std::string> UNIX_FLAGS = {"-fPIC", "-fvisibility=hidden"};
 #endif
+// a library that needs nothing of a C library, linked without one: on
+// Android (Zig builds it there for aarch64-linux-musl, whose libc is not the
+// system's; the process it loads into has its own), or where
+// RECOMP_FREESTANDING=1 asks. The generated code calls no more of it than
+// memcpy, memset and abort, which recomp_support.c gives it
+bool freestanding() {
+#ifdef __ANDROID__
+    return true;
+#else
+    const char *asked = std::getenv("RECOMP_FREESTANDING");
+    return asked && asked[0] == '1';
+#endif
+}
+// compiled so: for ELF, without debug information (Zig adds it unasked),
+// and no outline atomics (calls into compiler-rt on
+// AArch64)
+const std::vector<std::string> FREESTANDING_FLAGS = {"-mno-outline-atomics", "-fPIC", "-fvisibility=hidden", "-g0"};
+// and linked so: no C library or start files, nothing left undefined, no
+// symbols but the exported
+const std::vector<std::string> FREESTANDING_LINK = {"-nostdlib", "-Wl,-z,defs", "-s"};
+const char *const SUPPORT = "recomp_support.c";
+const char *const SUPPORT_C = R"(/* written by 3dsrecomp: what the generated code may call of a C library,
+ * for a library linked without one */
+#include <stddef.h>
+
+#define SUPPORT __attribute__((visibility("hidden"), used))
+
+SUPPORT void *memcpy(void *to, const void *from, size_t n) {
+    unsigned char *d = to;
+    const unsigned char *s = from;
+    while (n--) *d++ = *s++;
+    return to;
+}
+
+SUPPORT void *memmove(void *to, const void *from, size_t n) {
+    unsigned char *d = to;
+    const unsigned char *s = from;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else {
+        while (n--) d[n] = s[n];
+    }
+    return to;
+}
+
+SUPPORT void *memset(void *to, int value, size_t n) {
+    unsigned char *d = to;
+    while (n--) *d++ = (unsigned char)value;
+    return to;
+}
+
+SUPPORT int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *x = a, *y = b;
+    for (; n--; x++, y++)
+        if (*x != *y) return *x - *y;
+    return 0;
+}
+
+SUPPORT void abort(void) { __builtin_trap(); }
+)";
+
 // gcc collects its garbage far less often on a machine with a lot of
 // memory, and with that a file of generated code took 7.8 GB at its peak
 // instead of 4.8
@@ -233,7 +294,8 @@ bool objects(const Compiler &compiler, const fs::path &dir, const std::vector<st
     bool read_ok = false;
     std::string header = read_text(dir / "recomp.h", read_ok);
     static const std::vector<std::string> none;
-    const std::vector<std::string> flag_list = joined({&FLAGS, gcc ? &GCC_FLAGS : &none, &UNIX_FLAGS});
+    const std::vector<std::string> flag_list =
+        joined({&FLAGS, gcc ? &GCC_FLAGS : &none, &UNIX_FLAGS, freestanding() ? &FREESTANDING_FLAGS : &none});
     std::string flags;
     for (size_t i = 0; i < flag_list.size(); i++) flags += (i ? " " : "") + flag_list[i];
     const std::string described = compiler.describe();
@@ -360,6 +422,7 @@ bool shared(const Compiler &compiler, const std::vector<fs::path> &objects, cons
     }
     std::vector<std::string> names = from_folder(command, objects);
     command.args.push_back("-shared");
+    if (freestanding()) command.args.insert(command.args.end(), FREESTANDING_LINK.begin(), FREESTANDING_LINK.end());
     command.args.push_back("-o");
     command.args.push_back(utf8(absolute));
     command.args.insert(command.args.end(), names.begin(), names.end());
@@ -375,8 +438,13 @@ bool compile(const Compiler &compiler, const fs::path &dir, const std::vector<st
              const fs::path &library, const Progress &progress, bool background,
              const std::function<bool(const std::string &)> &quick, std::string &error) {
     std::vector<fs::path> made;
-    return objects(compiler, dir, sources, progress, background, quick, made, error) &&
-           shared(compiler, made, library, error);
+    // without a C library, its few functions compiled along
+    std::vector<std::string> all = sources;
+    if (freestanding()) {
+        std::ofstream(dir / SUPPORT, std::ios::binary) << SUPPORT_C;
+        all.push_back(SUPPORT);
+    }
+    return objects(compiler, dir, all, progress, background, quick, made, error) && shared(compiler, made, library, error);
 }
 
 } // namespace recomp

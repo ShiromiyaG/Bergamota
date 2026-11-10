@@ -5,7 +5,9 @@
 #include "runtime/memory.h"
 
 #include <cstring>
+#include <atomic>
 #include <execution>
+#include <thread>
 #include <numeric>
 
 namespace runtime::pica {
@@ -185,11 +187,26 @@ void VertexStage::shade_all(Pica &p) {
     // runners each chunk: they keep their own registers
     std::vector<size_t> chunks((n + CHUNK - 1) / CHUNK);
     std::iota(chunks.begin(), chunks.end(), size_t(0));
-    std::for_each(std::execution::par, chunks.begin(), chunks.end(), [&](size_t c) {
+    auto chunk = [&](size_t c) {
         Runner runner;
         auto batch = std::make_unique<BatchRunner>();
         for (size_t i = c * CHUNK; i < std::min(n, (c + 1) * CHUNK); i += BATCH) shade_batch(p, *program_, *batch, runner, inputs_, shaded_, i);
-    });
+    };
+#if defined(__cpp_lib_parallel_algorithm) || defined(_MSC_VER) || defined(__GLIBCXX__)
+    std::for_each(std::execution::par, chunks.begin(), chunks.end(), chunk);
+#else
+    // a C++ library without the parallel algorithms (Android's libc++): the
+    // chunks taken in turn by as many threads as there are cores
+    std::atomic<size_t> next{0};
+    auto take = [&] {
+        for (size_t c; (c = next.fetch_add(1)) < chunks.size();) chunk(c);
+    };
+    const size_t helpers = std::min<size_t>(chunks.size(), std::max(1u, std::thread::hardware_concurrency())) - 1;
+    std::vector<std::thread> threads;
+    for (size_t i = 0; i < helpers; i++) threads.emplace_back(take);
+    take();
+    for (std::thread &t : threads) t.join();
+#endif
 }
 
 // triangles from the vertices, in the topology the registers say: a list,

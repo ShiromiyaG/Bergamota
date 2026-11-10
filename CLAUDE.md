@@ -23,3 +23,10 @@ Docs in English.
   (`native.py`, which decomp-tools' `build.py` also goes through) and the template; the
   contract is `docs/porting.md`. A change that breaks a port's files raises `SDK_VERSION`
   (`sdk/portfile.py`) and says in `docs/porting.md` what to change.
+- Windows, Linux and Android (2026-11-09; `docs/porting.md`, "Android"): fibers switched by our
+  own code on x86-64 and AArch64 (`src/fiber.cpp`), Vulkan through volk with 1.1 devices on
+  extensions, glslang where there is no shaderc, the game built on the phone by 3dsrecomp and
+  Zig without a C library (`port.py package --android`). Linux is tested in WSL2 (Ubuntu 24.04,
+  lavapipe); Android only builds here (no emulator: the owner tests on a phone).
+- `.github/workflows/release.yml` builds the launcher, player, 3dsrecomp, the Android program
+  and the SDK on a version tag (`v*`). Bump versions or push tags only when the owner asks.
