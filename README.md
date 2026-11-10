@@ -1,12 +1,12 @@
 # Bergamota
 
-Bergamota runs Nintendo 3DS games natively on the PC, from the games' own code
-recompiled to C. It is not an emulator: instead of a whole console, it gives a
-game only what the game uses (a 3DS kernel, the system services, sound and a
-Vulkan renderer). It comes with the recompiler, a player and a launcher,
-and it is an SDK for ports: a port of a game is a small repository of its
-own, with only what is the port's, and Bergamota does the rest
-([`docs/porting.md`](docs/porting.md)).
+Bergamota runs Nintendo 3DS games natively on Windows, Linux and Android, from
+the games' own code recompiled to C. It is not an emulator: instead of a whole
+console, it gives a game only what the game uses (a 3DS kernel, the system
+services, sound and a Vulkan renderer). It comes with the recompiler, a player
+and a launcher, and it is an SDK for ports: a port of a game is a small
+repository of its own, with only what is the port's, and Bergamota does the
+rest ([`docs/porting.md`](docs/porting.md)).
 
 **No game is included, and none is needed to build Bergamota.** To play, you
 need your own copy of a game and its update, which are recompiled on your
@@ -16,12 +16,27 @@ Bergamota was made for three Pokémon ports, each in a repository of its own:
 **Solstice** (Ultra Sun / Ultra Moon), **Duality** (X / Y) and **Tidefall**
 (Omega Ruby / Alpha Sapphire).
 
+## Platforms
+
+| Platform | What it needs | How far it is tested |
+| --- | --- | --- |
+| Windows 10/11, x64 | a GPU with Vulkan 1.1 or later | the main one: everything is developed and measured here |
+| Linux, x86-64 and AArch64 | the same, X11 or Wayland | built and run in WSL2 (Ubuntu 24.04, software Vulkan): Ultra Sun plays as on Windows |
+| Android, arm64 | Android 10 or later, Vulkan 1.1 or later | one phone so far (a Mali-G52, an entry-level chip): Ultra Sun builds on the phone and plays its intro with the right picture, below full speed in 3D scenes |
+
+On every platform the game is recompiled on the device that plays it, from
+the player's own copy: nothing made from a game is ever shipped.
+
 ## How it works
 
 1. **The recompiler** (`3dsrecomp`) reads a game and its update and turns the
    game's ARM code (its executable and its CRO modules) into C.
-2. **A C compiler** (clang, or Zig when there is none) builds that C into a
-   library.
+2. **A C compiler** (clang, or Zig when there is none; on Android, the Zig
+   inside the app) builds that C into a library. The code a game spends
+   nearly all its time in is built first, so the game plays after about a
+   minute on a desktop; the rest is built in the background while it is
+   played. On a phone only that first part is built by default, and what the
+   game is seen to run besides is added on the next start.
 3. **The player** loads the library and runs it on Bergamota. Each of the game's
    threads runs on a fiber, its system calls go to Bergamota's kernel and its
    GPU commands go to the Vulkan renderer. Code the library does not have (code
@@ -40,6 +55,10 @@ Bergamota was made for three Pokémon ports, each in a repository of its own:
 - **X, Y, Omega Ruby and Alpha Sapphire** recompile, and Bergamota already has
   what they need beyond Ultra Sun, such as the AAC decoder their music goes
   through. Their ports come after Solstice.
+- **Android** is new (2026-11): a port packages as an APK, with the 3DS's
+  controls on the screen until a gamepad is connected. On the one phone
+  tested, 3D scenes run at 16 to 20 frames a second where the game wants 30;
+  the renderer's speed on phone GPUs is the open work there.
 
 ## What is in it
 
@@ -53,8 +72,9 @@ Bergamota was made for three Pokémon ports, each in a repository of its own:
 | Sound | the DSP's 24 voices and its mixer; AAC through FDK AAC | `src/audio.cpp`, `src/aac.cpp` |
 | Graphics | the PICA200 GPU on Vulkan: its vertex shaders translated for the GPU, a resolution scale, widescreen, extra frames for 60 FPS and above, texture packs in Azahar's format | `src/pica/`, `src/vk/` ([docs](docs/vulkan-renderer.md)) |
 | Mods | a port's native code, `code.ips` patches and Gateway cheats (`cheats.txt`), none of which needs the game recompiled | `src/decomp.cpp`, `src/cheats.cpp` |
-| Player | an SDL3 window; keyboard, gamepad, and the mouse as the stylus; a settings overlay (F1); single-screen layouts | `frontend/` |
+| Player | an SDL3 window; keyboard, gamepad, and the mouse as the stylus (on a phone, controls on the screen and a finger as the stylus); a settings overlay (F1); single-screen layouts | `frontend/` |
 | Launcher | sets up a port's games, recompiles them, and edits the player's graphics and controls | `launcher/` |
+| Android app | SDL's activity running the launcher and then the player as one program, with the recompiler and Zig inside the APK | `android/`, `frontend/android_main.cpp`, `sdk/android.py` |
 | SDK | the port tool (`port.py`: new, check, symbols, native, build, play, boot, package), the header and builder for a port's native code, the template of a new port | `sdk/` ([docs](docs/porting.md)) |
 
 The C interface that the games' code calls is `include/runtime/runtime.h`.
@@ -77,6 +97,12 @@ ctest --test-dir build
 | `build/launcher` | the ports' launcher; each port's package renames it (`Solstice.exe`, ...) |
 | `build/3dsrecomp` | the recompiler |
 | `build/boot` | runs a game without a window, for measuring and testing |
+
+On Linux the same commands work; the packages a build needs (clang, CMake,
+Ninja, the Vulkan headers, `glslc` and SDL's X11/Wayland/sound headers) are
+the ones `.github/workflows/release.yml` installs. Android is built through
+a port's package (`sdk/port.py package --android`, with the Android SDK and
+NDK), not by hand: [`docs/porting.md`](docs/porting.md), "Android".
 
 Builds are optimized unless you pick another build type; a Debug build runs
 games several times slower. CMake options: `RUNTIME_VULKAN` (the Vulkan
@@ -105,7 +131,8 @@ build/player --config <file>  # uses another settings file
 
 Its settings are in `%APPDATA%\runtime\config.toml` (on other systems, the
 platform's usual place). While playing, **F1** opens the settings and
-**F11** switches fullscreen.
+**F11** switches fullscreen. On Android the round button at the top of the
+screen, or the back button, opens the settings.
 
 To recompile a game by hand (all the options are in
 [`docs/recompiler.md`](docs/recompiler.md)):
@@ -122,6 +149,10 @@ build/3dsrecomp build <game .3ds> <output folder> --mods <update, unpacked>
 - `tools/compare.py` runs a stretch of a game here and on Zakuro with the same
   input and reports where they differ (screens, service calls, saves).
 - `RUNTIME_STATS=1` makes the player print where each second went.
+- On Android, what the program prints goes to the system's log
+  (`adb logcat -s Bergamota`), and
+  `adb shell setprop debug.bergamota.env "RUNTIME_STATS=1"` sets these
+  variables for the next start.
 
 All of them, with the environment variables: [`docs/tools.md`](docs/tools.md).
 
@@ -129,7 +160,7 @@ All of them, with the environment variables: [`docs/tools.md`](docs/tools.md).
 
 | File | About |
 | --- | --- |
-| [`docs/porting.md`](docs/porting.md) | porting a game: a port's files, the port tool, native code, the package, what stays stable |
+| [`docs/porting.md`](docs/porting.md) | porting a game: a port's files, the port tool, native code, the package for each platform (Android included), what stays stable |
 | [`docs/recompiler.md`](docs/recompiler.md) | the recompiler and the interface its C runs against |
 | [`docs/vulkan-renderer.md`](docs/vulkan-renderer.md) | the renderer's design and milestones |
 | [`docs/tools.md`](docs/tools.md) | `boot`, `compare.py`, the environment variables, mods and texture packs |
