@@ -36,6 +36,11 @@ const std::vector<std::string> FLAGS = {"-ffp-contract=off", "-fno-math-errno", 
 // runs compiles three times faster without (a fast compile's cold files)
 const char *const OPTIMIZED = "-O2";
 const char *const QUICK = "-O0";
+// what zig cc adds unasked without optimizing, and the generated code has
+// no use for: checks for undefined behaviour and stack protectors, with which
+// a cold file took five times as long to compile (longer than optimized) and
+// made an object twenty times the size
+const std::vector<std::string> ZIG_FLAGS = {"-fno-sanitize=undefined", "-fno-stack-protector"};
 // what only matters for ELF and Mach-O, and that compilers for Windows
 // refuse or ignore
 #ifdef _WIN32
@@ -243,6 +248,11 @@ bool Compiler::runs() const {
     return recomp::run(run).success();
 }
 
+bool Compiler::is_zig() const {
+    std::string name = program.stem().string();
+    return name == "zig" || name == "libzig";
+}
+
 bool Compiler::is_gcc() const {
     Run run = command_of(*this);
     run.args.push_back("--version");
@@ -295,7 +305,8 @@ bool objects(const Compiler &compiler, const fs::path &dir, const std::vector<st
     std::string header = read_text(dir / "recomp.h", read_ok);
     static const std::vector<std::string> none;
     const std::vector<std::string> flag_list =
-        joined({&FLAGS, gcc ? &GCC_FLAGS : &none, &UNIX_FLAGS, freestanding() ? &FREESTANDING_FLAGS : &none});
+        joined({&FLAGS, gcc ? &GCC_FLAGS : &none, compiler.is_zig() ? &ZIG_FLAGS : &none, &UNIX_FLAGS,
+                freestanding() ? &FREESTANDING_FLAGS : &none});
     std::string flags;
     for (size_t i = 0; i < flag_list.size(); i++) flags += (i ? " " : "") + flag_list[i];
     const std::string described = compiler.describe();

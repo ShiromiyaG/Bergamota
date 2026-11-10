@@ -17,6 +17,8 @@
 #include "look.h"
 #include "pages.h"
 
+#include "../frontend/drag_scroll.h"
+
 #include <SDL3/SDL.h>
 #ifndef __ANDROID__
 #include <SDL3/SDL_main.h>
@@ -139,6 +141,7 @@ private:
     void build_page();
     void advanced();
     void fast_option();
+    void rest_option();
     void open_dialog(int which);
 
     SDL_Window *window_;
@@ -193,9 +196,12 @@ void App::picked_files() {
     }
     // Android's document (content://) opened as a file this program reads
     path = local_path(path);
+    const std::string allow = asked_for_files() ? "Allow " + port().name + " to read all files in the screen that opened, then choose the file again."
+                                                : std::string();
     if (which == 1) {
         game_path_ = path_of(path);
         check_game_file();
+        if (!allow.empty()) game_error_ = allow;
         // an update chosen for another game no longer fits; the game's own
         // set up before comes back
         update_path_.clear();
@@ -213,6 +219,7 @@ void App::picked_files() {
     } else if (which == 2) {
         update_path_ = path_of(path);
         check_update_file();
+        if (!allow.empty()) update_error_ = allow;
     }
 }
 
@@ -238,7 +245,11 @@ void App::home(ImVec2 min, ImVec2 max) {
         y -= size.y;
         draw->AddText(font, font->FontSize, ImVec2(right - size.x, y), c, text.c_str());
     };
+#ifdef __ANDROID__
+    text_right(f.small, look::WEAK, "In the game: the round button at the top opens the player's menu.");
+#else
     text_right(f.small, look::WEAK, "In the game: F1 opens the player's menu, F11 switches fullscreen.");
+#endif
     y -= 4 * s;
     text_right(f.body, look::TEXT, pages_.summary());
     y -= 10 * s;
@@ -248,6 +259,7 @@ void App::home(ImVec2 min, ImVec2 max) {
         std::error_code ec;
         if (config->full) chips.emplace_back("Fully built", look::GOOD);
         else if (fs::exists(lock_file(config->title), ec)) chips.emplace_back("The rest building in the background", look::WARN);
+        else if (!library_.rest) chips.emplace_back("Built for what the game runs", look::GOOD);
         else chips.emplace_back("The rest builds while you play", look::WARN);
         if (!config->update.empty())
             chips.emplace_back(info && !info->update_name.empty() ? "Update " + info->update_name : "Update", look::GOOD);
@@ -351,6 +363,21 @@ void App::fast_option() {
               });
 }
 
+// a phone's: whether the rest of the game is built while it is played
+void App::rest_option() {
+#ifdef __ANDROID__
+    look::row("Build the rest while playing",
+              "Off, only the code the game spends its time in is built, and what it is seen to run besides is added on the next "
+              "start: less battery, heat and storage. On, all of the game is built in the background while you play.",
+              ImGui::GetFrameHeight(), [&] {
+                  if (ImGui::Checkbox("##rest", &library_.rest)) {
+                      std::string error;
+                      if (!library_.save(error)) note_ = error;
+                  }
+              });
+#endif
+}
+
 void App::advanced() {
     const float s = look::scale();
     const Port &p = port();
@@ -358,6 +385,7 @@ void App::advanced() {
     look::page_title("Advanced", "Building the games, recording, and where things are kept.");
     look::section("Building", acc);
     fast_option();
+    rest_option();
     const GameInfo *info = selected_info();
     const std::string name = info ? info->name : "the game";
     if (auto found = library_.games.find(selected_); found != library_.games.end() && found->second.built) {
@@ -366,7 +394,7 @@ void App::advanced() {
             look::row(("Build all of " + name + " now").c_str(), "Rather than while you play: takes a while, the computer stays usable.",
                       120 * s, [&] {
                           if (ImGui::Button("Build", ImVec2(120 * s, 0))) {
-                              finish_in_background(config);
+                              finish_in_background(config, true);
                               note_ = "Building in the background.";
                           }
                       });
@@ -496,6 +524,7 @@ void App::build_page() {
                          .c_str());
     ImGui::Dummy(ImVec2(0, 6 * s));
     fast_option();
+    rest_option();
     ImGui::Dummy(ImVec2(0, 6 * s));
     if (!tools_) {
         text_colored(look::BAD, p.name + " can't find 3dsrecomp and " + p.player + ". It looked in:");
@@ -518,9 +547,10 @@ void App::build_page() {
     ImGui::TextWrapped("%s", stage.describe().c_str());
     ImGui::Dummy(ImVec2(0, 8 * s));
     if (stage.kind == Stage::Done) {
-        const bool fast = library_.fast;
+        const bool fast = library_.fast, rest = library_.rest;
         library_ = Library::load();
         library_.fast = fast;
+        library_.rest = rest;
         Config c = config(true);
         selected_ = c.title;
         library_.put(c);
@@ -591,6 +621,7 @@ void App::frame() {
         ImGui::SetCursorScreenPos(min);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(28 * s, 0));
         ImGui::BeginChild("page", ImVec2(width, content_max.y - min.y), ImGuiChildFlags_AlwaysUseWindowPadding);
+        frontend::drag_scroll();
         if (page_ != Page::Home) {
             steps();
             if (page_ == Page::Game) game_page();
@@ -641,7 +672,7 @@ int main(int argc, char **argv) {
     Library library = Library::load();
     std::optional<Tools> tools = Tools::find(library);
     if (has_arg("--build-full")) {
-        if (auto title = arg_after("--build-full")) build_full(*title);
+        if (auto title = arg_after("--build-full")) build_full(*title, has_arg("--all"));
         return 0;
     }
     // straight into the game, from a terminal or a shortcut: the launcher
@@ -652,7 +683,14 @@ int main(int argc, char **argv) {
         if (config.ready() && tools && play(*tools, config, error)) return 0;
     }
 
-    SDL_Window *window = SDL_CreateWindow(p->name.c_str(), 1180, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    // a phone: the whole screen, Android's bars hidden
+#ifdef __ANDROID__
+    const SDL_WindowFlags whole = SDL_WINDOW_FULLSCREEN;
+#else
+    const SDL_WindowFlags whole = 0;
+#endif
+    SDL_Window *window =
+        SDL_CreateWindow(p->name.c_str(), 1180, 720, SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY | whole);
     const float scale = window ? SDL_GetWindowDisplayScale(window) : 1;
     // the port's icon on the window where the program has none of its own
     // (beyond Windows, whose .exe carries it): icon.bmp beside the launcher

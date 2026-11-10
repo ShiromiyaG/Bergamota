@@ -117,6 +117,13 @@ if(RUNTIME_VULKAN)
             DEPENDS src/vk/${shader}
             VERBATIM)
     endforeach()
+    # the GPU's vertex shader again for a device whose vertex shaders may
+    # not write (no outputs kept for the frames between)
+    add_custom_command(
+        OUTPUT ${SHADER_OUT}/pica_gpu_nostore.vert.inc
+        COMMAND Vulkan::glslc -O -mfmt=num -DNO_STORE -o ${SHADER_OUT}/pica_gpu_nostore.vert.inc ${CMAKE_CURRENT_SOURCE_DIR}/src/vk/pica_gpu.vert
+        DEPENDS src/vk/pica_gpu.vert
+        VERBATIM)
     # the vertex shader's text as well: the frame each translated program
     # goes in (src/vk/translate.cpp)
     add_custom_command(
@@ -145,7 +152,7 @@ if(RUNTIME_VULKAN)
         VERBATIM)
     target_sources(recomp_runtime PRIVATE src/vk/renderer.cpp src/vk/device.cpp src/vk/surfaces.cpp
         src/vk/textures.cpp src/vk/draw.cpp src/vk/between.cpp src/vk/screens.cpp src/vk/translate.cpp src/vk/present.cpp src/pica/texture.cpp
-        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica_gpu.vert.txt ${SHADER_OUT}/pica.frag.inc
+        ${SHADER_OUT}/pica.vert.inc ${SHADER_OUT}/pica_gpu.vert.inc ${SHADER_OUT}/pica_gpu_nostore.vert.inc ${SHADER_OUT}/pica_gpu.vert.txt ${SHADER_OUT}/pica.frag.inc
         ${SHADER_OUT}/pica_wbuffer.frag.inc ${SHADER_OUT}/pica_shadow.frag.inc ${SHADER_OUT}/present.vert.inc ${SHADER_OUT}/present.frag.inc
         ${SHADER_OUT}/depth.comp.inc)
     target_include_directories(recomp_runtime PRIVATE ${SHADER_OUT})

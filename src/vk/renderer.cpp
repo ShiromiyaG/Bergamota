@@ -104,10 +104,12 @@ void VulkanRenderer::draw(Pica &p, bool indexed) {
         stats.time_vertices += since(t);
         t = clock::now();
         d.gpu_draw = &live;
+        d.not_made = false;
         d.render(p);
         d.gpu_draw = nullptr;
         stats.time_render += since(t);
-        return;
+        if (!d.not_made) return;
+        t = clock::now();
     }
     d.stage.draw(p, indexed, d.triangles);
     stats.time_vertices += since(t);

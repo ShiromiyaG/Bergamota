@@ -93,7 +93,10 @@ void PlayerPages::graphics(ImU32 accent, const std::vector<runtime::DecompOption
     auto check = [&](const char *id, bool &value) { changed |= ImGui::Checkbox(id, &value); };
     look::page_title("Graphics", "Saved for the next start. In the game, F1 opens the same settings.");
     look::section("Window", accent);
+    // a phone has no windows, nor Azahar's folder to read (below)
+#ifndef __ANDROID__
     look::row("Fullscreen", "Covers the screen; F11 switches in the game.", box, [&] { check("##fullscreen", v.fullscreen); });
+#endif
     look::row("VSync", "Waits for the display: no tearing, a little more latency.", box, [&] { check("##vsync", v.vsync); });
 
     look::section("Screens", accent);
@@ -127,8 +130,10 @@ void PlayerPages::graphics(ImU32 accent, const std::vector<runtime::DecompOption
     look::row("Anti-aliasing (FXAA)", "", box, [&] { check("##antialias", v.antialias); });
     look::row("Texture packs", "Azahar's packs as they are: in load/textures/<title id> beside the settings, and Azahar's own.", box,
               [&] { check("##hd_textures", v.hd_textures); });
+#ifndef __ANDROID__
     look::row("Azahar's packs", "The texture packs installed for Azahar, read from its folder too.", box,
               [&] { check("##azahar_textures", v.azahar_textures); });
+#endif
     look::row("Preload HD textures", "All of them read from the start: no stutter the first time one shows, more memory.", box,
               [&] { check("##preload_textures", v.preload_textures); });
     look::row("Dump textures", "Every texture the game uses written to dump/textures, as Azahar dumps them, for making packs.", box,

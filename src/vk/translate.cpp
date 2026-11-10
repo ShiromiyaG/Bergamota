@@ -15,6 +15,10 @@
 #include <shaderc/shaderc.h>
 #endif
 
+#ifdef __linux__
+#include <sched.h>
+#include <sys/resource.h>
+#endif
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -302,15 +306,17 @@ uint64_t frame_version() {
     return version;
 }
 
-std::string translated_shader(const ProgramBlock &program, uint32_t entry) {
+std::string translated_shader(const ProgramBlock &program, uint32_t entry, bool store) {
     std::string frame = FRAME;
+    // defined on the line after #version
+    if (size_t line = frame.find('\n'); !store && line != std::string::npos) frame.insert(line + 1, "#define NO_STORE 1\n");
     size_t from = frame.find("// -- run:"), to = frame.find("// -- end run");
     if (from == std::string::npos || to == std::string::npos) return frame;
     return frame.substr(0, from) + translate_program(program, entry) + frame.substr(to);
 }
 
-Translator::Translator(VkDevice device, MakePipeline make) : device_(device), make_(std::move(make)) {
-    unsigned n = std::clamp(std::thread::hardware_concurrency() / 4, 1u, 4u);
+Translator::Translator(VkDevice device, MakePipeline make, bool store) : device_(device), make_(std::move(make)), store_(store) {
+    unsigned n = std::clamp(std::thread::hardware_concurrency() / 2, 1u, 4u);
     for (unsigned i = 0; i < n; i++) threads_.emplace_back([this] { run(); });
 }
 
@@ -320,6 +326,7 @@ Translator::~Translator() {
         stop_ = true;
     }
     wake_.notify_all();
+    made_.notify_all();
     for (std::thread &t : threads_) t.join();
     for (auto &[key, pipe] : pipelines_) {
         if (pipe) vkDestroyPipeline(device_, pipe, nullptr);
@@ -356,17 +363,62 @@ VkPipeline Translator::pipeline(const std::shared_ptr<const ProgramBlock> &progr
     return VK_NULL_HANDLE;
 }
 
-VkPipeline Translator::specialized(uint64_t shader_key, uint64_t key, bool has_depth, const Shape &shape, uint64_t shape_hash) {
-    std::lock_guard g(lock_);
-    auto pipe = pipelines_.find({shader_key, key, shape_hash});
-    if (pipe != pipelines_.end()) return pipe->second;
-    pipelines_[{shader_key, key, shape_hash}] = VK_NULL_HANDLE;
-    later_.push_back({nullptr, shader_key, 0, key, has_depth, shape, shape_hash});
-    wake_.notify_one();
-    return VK_NULL_HANDLE;
+VkPipeline Translator::specialized(uint64_t shader_key, uint64_t key, bool has_depth, const Shape &shape, uint64_t shape_hash,
+                                   bool wait) {
+    std::unique_lock g(lock_);
+    const std::tuple<uint64_t, uint64_t, uint64_t> which{shader_key, key, shape_hash};
+    auto pipe = pipelines_.find(which);
+    if (pipe != pipelines_.end() && (pipe->second || !wait)) return pipe->second;
+    if (pipe == pipelines_.end()) {
+        pipelines_[which] = VK_NULL_HANDLE;
+        // waited for: before the ones nothing waits for
+        if (wait) later_.push_front({nullptr, shader_key, 0, key, has_depth, shape, shape_hash});
+        else later_.push_back({nullptr, shader_key, 0, key, has_depth, shape, shape_hash});
+        wake_.notify_one();
+    }
+    if (!wait) return VK_NULL_HANDLE;
+    made_.wait(g, [&] { return stop_ || pipelines_[which] || failed_.count(which); });
+    return pipelines_[which];
 }
 
+namespace {
+
+// a worker gives way to the game's own threads: below their priority, and
+// on a phone on its slower cores (the big ones are the game's and the
+// GPU's), where it has both kinds
+void step_back() {
+#ifdef __linux__
+    setpriority(PRIO_PROCESS, 0, 10); // this thread, on Linux
+#endif
+#ifdef __ANDROID__
+    long speed[CPU_SETSIZE] = {}, fastest = 0;
+    int cores = 0;
+    for (; cores < CPU_SETSIZE; cores++) {
+        char name[80];
+        std::snprintf(name, sizeof name, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cores);
+        FILE *f = std::fopen(name, "r");
+        if (!f) break;
+        if (std::fscanf(f, "%ld", &speed[cores]) != 1) speed[cores] = 0;
+        std::fclose(f);
+        fastest = std::max(fastest, speed[cores]);
+    }
+    cpu_set_t slower;
+    CPU_ZERO(&slower);
+    int count = 0;
+    for (int cpu = 0; cpu < cores; cpu++) {
+        if (speed[cpu] < fastest) {
+            CPU_SET(cpu, &slower);
+            count++;
+        }
+    }
+    if (count) sched_setaffinity(0, sizeof slower, &slower);
+#endif
+}
+
+} // namespace
+
 void Translator::run() {
+    step_back();
     Spirv spirv;
     const char *dump = std::getenv("RUNTIME_DUMP_SHADERS");
     for (;;) {
@@ -386,7 +438,7 @@ void Translator::run() {
                 std::lock_guard g(lock_);
                 if (!cache_.empty()) {
                     char name[40];
-                    std::snprintf(name, sizeof name, "%016llx.spv", (unsigned long long)(work.shader_key ^ frame_version()));
+                    std::snprintf(name, sizeof name, "%016llx.spv", (unsigned long long)(work.shader_key ^ frame_version() ^ (store_ ? 0 : 0x4E4F53544F524531ull)));
                     file = cache_ / name;
                 }
             }
@@ -417,7 +469,7 @@ void Translator::run() {
                 (ok ? loaded : failed)++;
                 continue;
             }
-            std::string text = translated_shader(*work.program, work.entry);
+            std::string text = translated_shader(*work.program, work.entry, store_);
             if (dump) {
                 char name[512];
                 std::snprintf(name, sizeof name, "%s/%016llx.vert", dump, (unsigned long long)work.shader_key);
@@ -456,6 +508,10 @@ void Translator::run() {
         std::lock_guard g(lock_);
         pipelines_[{work.shader_key, work.key, work.shape_hash}] = pipe;
         pipelines_made++;
+        if (work.shape_hash) {
+            if (!pipe) failed_.insert({work.shader_key, work.key, work.shape_hash});
+            made_.notify_all();
+        }
     }
 }
 

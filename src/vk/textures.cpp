@@ -311,7 +311,7 @@ VkImageView Impl::depth_as_color(Surface &s) {
         writes[i].descriptorType = i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         writes[i].pImageInfo = &images[i];
     }
-    push_descriptors(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_layout, 0, 3, writes);
+    push(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, depth_layout, depth_set, 3, writes, slots[current].pools, slots[current].pool_at);
     vkCmdDispatch(cmd, (s.image.width + 7) / 8, (s.image.height + 7) / 8, 1);
     barrier();
     s.converted = s.version;

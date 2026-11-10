@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <thread>
@@ -16,8 +17,32 @@
 #define NOMINMAX
 #include <windows.h>
 #endif
+#ifdef __ANDROID__
+#include <fcntl.h>
+#include <signal.h>
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cerrno>
+
+extern char **environ;
+#endif
 
 namespace launcher {
+
+// a program started: SDL's process, but on Android, where SDL has none, one
+// of our own with a pipe for what it writes
+struct Process {
+#ifdef __ANDROID__
+    pid_t pid = -1;
+    int out = -1;
+    bool exited = false;
+#else
+    SDL_Process *sdl = nullptr;
+    SDL_IOStream *out = nullptr;
+#endif
+};
 
 namespace {
 
@@ -46,10 +71,49 @@ std::string program(const std::string &name) { return WINDOWS ? name + ".exe" : 
 
 // a process started from args, its output read when pipe; background ones
 // show no console window
-SDL_Process *spawn(const std::vector<std::string> &args, SDL_Environment *env, bool pipe) {
+// (nullptr with why in SDL's error)
+Process *spawn(const std::vector<std::string> &args, SDL_Environment *env, bool pipe) {
     std::vector<const char *> argv;
     for (const std::string &a : args) argv.push_back(a.c_str());
     argv.push_back(nullptr);
+#ifdef __ANDROID__
+    // its output down a pipe read without waiting; a group of its own, so
+    // the programs it starts (the compilers) are stopped with it; the
+    // descriptors left open stay so (the game's, launcher/android.cpp)
+    int ends[2] = {-1, -1};
+    if (pipe && pipe2(ends, O_CLOEXEC) != 0) {
+        SDL_SetError("%s", strerror(errno));
+        return nullptr;
+    }
+    posix_spawn_file_actions_t actions;
+    posix_spawnattr_t attributes;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawnattr_init(&attributes);
+    posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETPGROUP);
+    posix_spawnattr_setpgroup(&attributes, 0);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    if (pipe) {
+        posix_spawn_file_actions_adddup2(&actions, ends[1], STDOUT_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, ends[1], STDERR_FILENO);
+    }
+    char **variables = env ? SDL_GetEnvironmentVariables(env) : nullptr;
+    pid_t pid = -1;
+    int failed = posix_spawn(&pid, argv[0], &actions, &attributes, const_cast<char *const *>(argv.data()), variables ? variables : environ);
+    SDL_free(variables);
+    posix_spawn_file_actions_destroy(&actions);
+    posix_spawnattr_destroy(&attributes);
+    if (pipe) close(ends[1]);
+    if (failed) {
+        if (pipe) close(ends[0]);
+        SDL_SetError("%s", strerror(failed));
+        return nullptr;
+    }
+    if (pipe) fcntl(ends[0], F_SETFL, fcntl(ends[0], F_GETFL) | O_NONBLOCK);
+    Process *started = new Process;
+    started->pid = pid;
+    started->out = pipe ? ends[0] : -1;
+    return started;
+#else
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
     if (env) SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, env);
@@ -60,7 +124,57 @@ SDL_Process *spawn(const std::vector<std::string> &args, SDL_Environment *env, b
     }
     SDL_Process *process = SDL_CreateProcessWithProperties(props);
     SDL_DestroyProperties(props);
-    return process;
+    if (!process) return nullptr;
+    Process *started = new Process;
+    started->sdl = process;
+    started->out = pipe ? SDL_GetProcessOutput(process) : nullptr;
+    return started;
+#endif
+}
+
+// whether it has ended, waiting for that when block
+bool wait_process(Process *process, bool block) {
+#ifdef __ANDROID__
+    if (process->exited) return true;
+    int status = 0;
+    pid_t ended;
+    do ended = waitpid(process->pid, &status, block ? 0 : WNOHANG);
+    while (ended < 0 && errno == EINTR);
+    if (ended != 0) process->exited = true; // ended, or no longer ours to wait for
+    return process->exited;
+#else
+    return SDL_WaitProcess(process->sdl, block, nullptr);
+#endif
+}
+
+// stopped, with the programs it started
+void kill_process(Process *process) {
+#ifdef __ANDROID__
+    if (!process->exited) kill(-process->pid, SIGKILL);
+#else
+    SDL_KillProcess(process->sdl, true);
+#endif
+}
+
+// what it wrote since, up to size bytes; 0 when nothing yet, or no more
+size_t read_output(Process *process, char *buffer, size_t size) {
+#ifdef __ANDROID__
+    if (process->out < 0) return 0;
+    ssize_t n = read(process->out, buffer, size);
+    return n > 0 ? size_t(n) : 0;
+#else
+    return process->out ? SDL_ReadIO(process->out, buffer, size) : 0;
+#endif
+}
+
+// done with it; one still running carries on
+void destroy_process(Process *process) {
+#ifdef __ANDROID__
+    if (process->out >= 0) close(process->out);
+#else
+    SDL_DestroyProcess(process->sdl);
+#endif
+    delete process;
 }
 
 // whether a C compiler (its command's words) is here and links a library
@@ -77,9 +191,9 @@ bool links(const std::vector<std::string> &compiler) {
     if (!WINDOWS) args.push_back("-fPIC");
     for (const std::string &a : {std::string("-shared"), std::string("-o"), utf8(out), utf8(dir / "probe.c")}) args.push_back(a);
     bool ok = false;
-    if (SDL_Process *p = spawn(args, nullptr, false)) {
-        SDL_WaitProcess(p, true, nullptr);
-        SDL_DestroyProcess(p);
+    if (Process *p = spawn(args, nullptr, false)) {
+        wait_process(p, true);
+        destroy_process(p);
         ok = fs::is_regular_file(out, ec);
     }
     fs::remove_all(dir, ec);
@@ -275,21 +389,23 @@ std::vector<std::string> recomp_args(const Tools &tools, const Config &config, s
 }
 
 bool start(const std::vector<std::string> &args, std::string &error) {
-    SDL_Process *p = spawn(args, nullptr, false);
+    Process *p = spawn(args, nullptr, false);
     if (!p) {
         error = "could not start " + args.front() + ", " + SDL_GetError();
         return false;
     }
-    SDL_DestroyProcess(p); // it carries on
+    destroy_process(p); // it carries on
     return true;
 }
 
-std::unique_ptr<Job> Job::start(const Tools &tools, const Config &config, const fs::path &hot, bool cold_fast) {
+std::unique_ptr<Job> Job::start(const Tools &tools, const Config &config, const fs::path &hot, bool cold_fast,
+                                bool background) {
     std::string error;
     std::vector<std::string> args = recomp_args(tools, config, error);
     if (args.empty()) return failed(error);
     if (!hot.empty()) args.insert(args.end(), {"--hot", utf8(hot)});
     if (cold_fast) args.push_back("--cold-fast");
+    if (background) args.push_back("--background");
     std::unique_ptr<Job> job(new Job);
     job->thread_ = std::thread(&Job::work, job.get(), std::move(args));
     return job;
@@ -321,7 +437,7 @@ void Job::set(const Stage &next) {
 void Job::cancel() {
     cancelled_ = true;
     std::lock_guard<std::mutex> hold(lock_);
-    if (process_) SDL_KillProcess(process_, true);
+    if (process_) kill_process(process_);
     stage_ = Stage{Stage::Failed, 0, 0, "cancelled"};
 }
 
@@ -331,7 +447,7 @@ void Job::wait() {
 
 bool Job::run(const std::vector<std::string> &args, SDL_Environment *env, const std::function<void(const std::string &)> &on_line,
               const std::function<void()> &while_running, std::string &error) {
-    SDL_Process *p = spawn(args, env, bool(on_line));
+    Process *p = spawn(args, env, bool(on_line));
     if (!p) {
         error = "could not start " + args.front() + ", " + SDL_GetError();
         return false;
@@ -339,16 +455,16 @@ bool Job::run(const std::vector<std::string> &args, SDL_Environment *env, const 
     {
         std::lock_guard<std::mutex> hold(lock_);
         process_ = p;
-        if (cancelled_) SDL_KillProcess(p, true);
+        if (cancelled_) kill_process(p);
     }
-    SDL_IOStream *out = on_line ? SDL_GetProcessOutput(p) : nullptr;
+    const bool out = bool(on_line);
     std::string line;
     char buffer[4096];
     for (;;) {
-        bool exited = SDL_WaitProcess(p, false, nullptr);
+        bool exited = wait_process(p, false);
         bool read_any = false;
         while (out) {
-            size_t n = SDL_ReadIO(out, buffer, sizeof buffer);
+            size_t n = read_output(p, buffer, sizeof buffer);
             if (!n) break;
             read_any = true;
             for (size_t i = 0; i < n; i++) {
@@ -369,7 +485,7 @@ bool Job::run(const std::vector<std::string> &args, SDL_Environment *env, const 
         std::lock_guard<std::mutex> hold(lock_);
         process_ = nullptr;
     }
-    SDL_DestroyProcess(p);
+    destroy_process(p);
     if (cancelled_) {
         error = "cancelled";
         return false;
@@ -487,7 +603,44 @@ void Job::work(std::vector<std::string> args) {
     else set(Stage{Stage::Done});
 }
 
-void build_full(const std::string &title_in) {
+namespace {
+
+// the hints the player writes for a title as it closes, where it
+// interpreted (the runtime's save_hints, src/loader.cpp: 3dsrecomp's folder)
+fs::path hints_file(const std::string &title) {
+    auto var = [](const char *name) {
+        const char *value = SDL_GetEnvironmentVariable(SDL_GetEnvironment(), name);
+        return value && *value ? path_of(value) : fs::path();
+    };
+#ifdef _WIN32
+    fs::path dir = var("APPDATA");
+#else
+    fs::path dir = var("XDG_DATA_HOME");
+    if (dir.empty() && !var("HOME").empty()) dir = var("HOME") / ".local/share";
+#endif
+    return dir.empty() ? dir : dir / "3dsrecomp" / (upper(title) + ".hints");
+}
+
+// whether the game was seen to run code its library has none for since it
+// was built: the player's hints written after the library was
+bool learned_more(const Config &config) {
+    std::error_code ec;
+    fs::path hints = hints_file(config.title);
+    if (hints.empty() || !fs::is_regular_file(hints, ec)) return false;
+    auto written = fs::last_write_time(hints, ec);
+    if (ec) return false;
+    for (const auto &entry : fs::directory_iterator(build_dir(config.title), ec)) {
+        auto ext = entry.path().extension();
+        if (ext != ".dll" && ext != ".so" && ext != ".dylib") continue;
+        auto built = fs::last_write_time(entry.path(), ec);
+        return ec || written > built;
+    }
+    return true;
+}
+
+} // namespace
+
+void build_full(const std::string &title_in, bool all) {
     const std::string title = upper(title_in);
     Library library = Library::load();
     auto found = library.games.find(title);
@@ -509,11 +662,16 @@ void build_full(const std::string &title_in) {
     // a fast compile: the hot code optimized, the rest not
     fs::path hot = hot_list(title);
     bool fast = library.fast && !hot.empty();
+    // without the rest: the hot code again, with what the game was seen to
+    // run since (the object cache keeps what did not change)
+    const bool hot_only = !all && !library.rest && !hot.empty();
+    if (hot_only) fast = false;
     // the port's code as it is now goes in (it may have changed since the
     // game was built: the object cache keeps the rest)
     fs::path dir = config.decomp_dir();
     const std::optional<uint64_t> with = dir.empty() ? std::nullopt : fingerprint(dir);
-    auto job = Job::start(*tools, config, fast ? hot : fs::path(), fast);
+    // the game is being played meanwhile
+    auto job = Job::start(*tools, config, fast || hot_only ? hot : fs::path(), fast, true);
     job->wait();
     const bool built = job->stage().kind == Stage::Done;
     // the player may have chosen other files meanwhile; the port's code
@@ -522,7 +680,7 @@ void build_full(const std::string &title_in) {
     if (auto it = now.games.find(title); built && it != now.games.end()) {
         Config &c = it->second;
         if (c.game == config.game && c.update == config.update) {
-            c.full = true;
+            c.full = !hot_only;
             c.decomp_built = with;
             std::string error;
             now.save(error);
@@ -531,16 +689,19 @@ void build_full(const std::string &title_in) {
     fs::remove(lock, ec);
 }
 
-void finish_in_background(const Config &config) {
+void finish_in_background(const Config &config, bool all) {
     if (config.full && config.current()) return;
+    // without the rest, only when there is something new to build
+    if (!all && !Library::load().rest && !hot_list(config.title).empty() && config.current() && !learned_more(config)) return;
 #ifdef __ANDROID__
     // no launcher program to start: a thread of this one, the game playing
-    std::thread([title = config.title] { build_full(title); }).detach();
+    std::thread([title = config.title, all] { build_full(title, all); }).detach();
     return;
 #endif
     std::vector<std::string> args{utf8(exe())};
     if (auto named = arg_after("--port")) args.insert(args.end(), {"--port", *named});
     args.insert(args.end(), {"--build-full", config.title});
+    if (all) args.push_back("--all");
     std::string error;
     start(args, error);
 }
@@ -606,13 +767,13 @@ bool desktop_shortcut(std::string &error) {
     const std::string target = quote(utf8(exe())), dir = quote(utf8(exe().parent_path())), name = quote(port().name);
     std::string script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut([Environment]::GetFolderPath('Desktop') + '\\" + name +
                          ".lnk'); $s.TargetPath = '" + target + "'; $s.WorkingDirectory = '" + dir + "'; $s.Save()";
-    SDL_Process *p = spawn({"powershell", "-NoProfile", "-NonInteractive", "-Command", script}, nullptr, false);
+    Process *p = spawn({"powershell", "-NoProfile", "-NonInteractive", "-Command", script}, nullptr, false);
     if (!p) {
         error = "could not run PowerShell";
         return false;
     }
-    SDL_WaitProcess(p, true, nullptr);
-    SDL_DestroyProcess(p);
+    wait_process(p, true);
+    destroy_process(p);
     return true;
 #endif
 }

@@ -32,6 +32,9 @@ struct Compiler {
     static Compiler named(const std::string &value);
     // whether it runs, asked for its version
     bool runs() const;
+    // whether it is Zig (zig cc; libzig.so on Android), which adds flags of
+    // its own
+    bool is_zig() const;
     // whether it is gcc, whose options for its garbage the others refuse
     bool is_gcc() const;
     // how it is called, for messages

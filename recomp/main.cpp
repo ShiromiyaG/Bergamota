@@ -16,6 +16,10 @@
 #include <string>
 #include <vector>
 
+#ifdef __ANDROID__
+#include <sched.h>
+#endif
+
 #include "build.h"
 #include "codegen/codegen.h"
 #include "cro.h"
@@ -42,7 +46,8 @@ and modules. build takes --hot <file>, the heat of a run, to build only the\n\
 functions the game spends nearly all its time in, in a fraction of the time,\n\
 with those the host was seen to interpret (its hints); with --cold-fast as\n\
 well, build all of it, the rest compiled without optimizing, three times\n\
-faster. --c-only writes the C and compiles nothing.\n\
+faster. --background compiles below normal priority and leaves a core, for\n\
+building while the game is played. --c-only writes the C and compiles nothing.\n\
 \n\
 symbols writes, for each program, the names the title's modules and its\n\
 static.crs export and the functions the analysis finds, for a disassembler.\n\
@@ -94,6 +99,7 @@ struct Options {
     std::optional<Decomp> decomp;
     std::optional<fs::path> hot;
     bool cold_fast = false;
+    bool background = false;
     bool c_only = false;
 
     // what the mod changes, its RomFS files read from its folder
@@ -290,6 +296,7 @@ void build_command(const std::string &path, const std::optional<fs::path> &dir, 
     build_options.mods = options.to_mods();
     build_options.hot = options.hot;
     build_options.cold_fast = options.cold_fast;
+    build_options.background = options.background;
     build_options.c_only = options.c_only;
     fs::path library;
     std::string error;
@@ -393,6 +400,16 @@ void analyze_command(const std::string &path, const Options &options) {
 } // namespace
 
 int main(int argc, char **argv) {
+#ifdef __ANDROID__
+    // every core: a phone keeps a game's threads on its big cores, and the
+    // launcher's hands that down, eight compilers left sharing two of them
+    {
+        cpu_set_t all;
+        CPU_ZERO(&all);
+        for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) CPU_SET(cpu, &all);
+        sched_setaffinity(0, sizeof all, &all);
+    }
+#endif
     std::vector<std::string> words;
     Options options;
     for (int i = 1; i < argc; i++) {
@@ -414,6 +431,8 @@ int main(int argc, char **argv) {
             options.hot = path_of(value());
         } else if (arg == "--cold-fast") {
             options.cold_fast = true;
+        } else if (arg == "--background") {
+            options.background = true;
         } else if (arg == "--c-only") {
             options.c_only = true;
         } else if (arg.rfind("--", 0) == 0) {

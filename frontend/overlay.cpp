@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include "drag_scroll.h"
+
 #include <imgui.h>
 #include <imgui_impl_sdl3.h>
 
@@ -92,19 +94,37 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
 
     // the port's look draws its own header in place of the title bar
     const float width = menu ? menu->width() * ImGui::GetIO().FontGlobalScale : 420;
-    ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_FirstUseEver);
+    // under a port's header the rest scrolls in a part of its own (the
+    // header stays), so the window has a height: the display's, nearly
+    const ImVec2 display = ImGui::GetIO().DisplaySize;
+    const float height = menu ? std::min(display.y * 0.96f, 720 * ImGui::GetIO().FontGlobalScale) : 0;
+    ImGui::SetNextWindowSize(ImVec2(width, height), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     bool keep = true;
+    // a phone: a finger dragged over the menu scrolls it, so it stays where
+    // it is; and what is a computer's (windows, a keyboard, Azahar's folder)
+    // is left out
+#ifdef __ANDROID__
+    const ImGuiWindowFlags place = ImGuiWindowFlags_NoMove;
+    const bool phone = true;
+#else
+    const ImGuiWindowFlags place = 0;
+    const bool phone = false;
+#endif
     if (menu) {
-        ImGui::Begin("Settings (F1)", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar);
+        ImGui::Begin("Settings (F1)", nullptr,
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoScrollWithMouse | place);
         keep = menu->header("Settings");
+        ImGui::BeginChild("##body", ImVec2(0, 0));
     } else {
-        ImGui::Begin("Settings (F1)", &keep, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::Begin("Settings (F1)", &keep, ImGuiWindowFlags_NoSavedSettings | place);
     }
+    drag_scroll();
     bool moved = false;
     if (ImGui::BeginTabBar("tabs")) {
         if (ImGui::BeginTabItem("Video")) {
-            moved |= ImGui::Checkbox("Fullscreen (F11)", &s.video.fullscreen);
+            if (!phone) moved |= ImGui::Checkbox("Fullscreen (F11)", &s.video.fullscreen);
             moved |= ImGui::Checkbox("Smooth scaling", &s.video.smooth);
             moved |= ImGui::Checkbox("60 FPS (frames drawn between the game's)", &s.video.between);
             if (s.video.between) moved |= ImGui::Checkbox("Up to the display's rate (120, 144 Hz)", &s.video.between_display);
@@ -147,7 +167,8 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("HD textures (textures folder; on the next start)", &s.video.hd_textures);
             moved |= ImGui::Checkbox("Preload the HD textures (no stutter, more memory; on the next start)", &s.video.preload_textures);
             moved |= ImGui::Checkbox("Dump the textures the game uses (dump/textures, as Azahar dumps; on the next start)", &s.video.dump_textures);
-            moved |= ImGui::Checkbox("Use the texture packs installed for Azahar too (on the next start)", &s.video.azahar_textures);
+            if (!phone)
+                moved |= ImGui::Checkbox("Use the texture packs installed for Azahar too (on the next start)", &s.video.azahar_textures);
             static const char *OUTLINES[] = {"auto", "original", "thin", "none"};
             int outlines = 0;
             for (int i = 0; i < 4; i++) {
@@ -181,7 +202,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
             moved |= ImGui::Checkbox("Mute", &s.audio.mute);
             ImGui::EndTabItem();
         }
-        for (int pad = 0; pad < 2; pad++) {
+        for (int pad = phone ? 1 : 0; pad < 2; pad++) {
             if (!ImGui::BeginTabItem(pad ? "Gamepad" : "Keyboard")) continue;
             auto &map = pad ? s.pad : s.keys;
             if (ImGui::BeginTable("bindings", 2, ImGuiTableFlags_RowBg)) {
@@ -217,6 +238,7 @@ void Overlay::draw(Settings &s, const Stats &stats, const std::filesystem::path 
         ImGui::EndTabBar();
     }
     if (!message_.empty()) ImGui::TextDisabled("%s", message_.c_str());
+    if (menu) ImGui::EndChild();
     ImGui::End();
     if (!keep) open = false;
     if (moved) changed = dirty_ = true;

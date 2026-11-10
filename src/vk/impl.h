@@ -210,13 +210,28 @@ struct VulkanRenderer::Impl {
         std::vector<Buffer> staging;
         std::vector<struct Image> dead;
         bool pending = false;
+        // the descriptor sets its commands bind, where none can be pushed
+        std::vector<VkDescriptorPool> pools;
+        size_t pool_at = 0;
     } slots[2];
     int current = 0;
     VkCommandBuffer cmd = VK_NULL_HANDLE; // the current slot's
     uint64_t submitted = 0;               // submissions so far; the next one is submitted + 1
     VkFormat depth_format = VK_FORMAT_D24_UNORM_S8_UINT;
     VkPhysicalDeviceMemoryProperties memory_props{};
+    // VK_KHR_push_descriptor's, null on a device without it (Mali-G52)
     PFN_vkCmdPushDescriptorSetKHR push_descriptors = nullptr;
+    // the descriptors of the next draw or dispatch: pushed, or without the
+    // extension a set of set's layout written and bound, out of pools (the
+    // one at `at`, another made when it is full) that empty_sets empties
+    // once the commands they were for have run
+    void push(VkCommandBuffer cmd, VkPipelineBindPoint point, VkPipelineLayout layout, VkDescriptorSetLayout set, uint32_t count,
+              const VkWriteDescriptorSet *writes, std::vector<VkDescriptorPool> &pools, size_t &at);
+    void empty_sets(std::vector<VkDescriptorPool> &pools, size_t &at);
+    // the flag of a layout whose sets are pushed, none without the extension
+    VkDescriptorSetLayoutCreateFlags pushed_layout() const {
+        return push_descriptors ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+    }
     // the device's Vulkan, at most 1.3 (an older one runs on extensions),
     // and its maker (PCI id: 0x5143 Qualcomm, 0x13B5 ARM, 0x1010 Imagination)
     uint32_t api_version = VK_API_VERSION_1_3;
@@ -359,6 +374,12 @@ struct VulkanRenderer::Impl {
     // own (vblank). the game's logic is untouched
     int between = 0; // self.between, taken at each vertical blank
     bool replaying = false;
+    // draws shaded on the CPU until their program's own shader is made, not
+    // by the GPU interpreting the program: a GPU that is slow at that (a
+    // Mali, told by its vertex shaders not writing), or RUNTIME_CPU_UNTIL_MADE=1.
+    // not_made: render() left such a draw to the CPU's stage
+    bool cpu_until_made = std::getenv("RUNTIME_CPU_UNTIL_MADE") != nullptr;
+    bool not_made = false;
     const VkImageView *forced_views = nullptr;
     // in a replay, a buffer read as a texture is read from its between image
     std::unordered_map<VkImageView, VkImageView> between_views;
@@ -574,6 +595,9 @@ struct VulkanRenderer::Impl {
     // the one shader for all, to compare)
     static Shape shape_of(const State &st, const pica::LightingBlock &lit);
     const bool specialize = std::getenv("RUNTIME_GENERIC_FRAG") == nullptr;
+    // a draw waits for the shader made for its shape, none drawn with the
+    // one for every state meanwhile (RUNTIME_WAIT_FRAG=1, or 0 for not)
+    bool wait_frag = std::getenv("RUNTIME_WAIT_FRAG") && std::getenv("RUNTIME_WAIT_FRAG")[0] == '1';
 
     // -- drawing -----------------------------------------------------------------
 

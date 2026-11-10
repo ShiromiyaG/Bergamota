@@ -13,10 +13,12 @@
 #include <mutex>
 #include <thread>
 
-struct SDL_Process;
 struct SDL_Environment;
 
 namespace launcher {
+
+// a program the launcher started (build.cpp)
+struct Process;
 
 struct Stage {
     enum Kind { Starting, Downloading, Generating, Compiling, Linking, Done, Failed } kind = Starting;
@@ -58,7 +60,9 @@ bool start(const std::vector<std::string> &args, std::string &error);
 class Job {
 public:
     // with hot, only the game's hottest functions; fast, the rest unoptimized
-    static std::unique_ptr<Job> start(const Tools &tools, const Config &config, const fs::path &hot, bool cold_fast);
+    // background: built while the game is played, below normal priority
+    static std::unique_ptr<Job> start(const Tools &tools, const Config &config, const fs::path &hot, bool cold_fast,
+                                      bool background = false);
     static std::unique_ptr<Job> failed(const std::string &error);
     ~Job();
 
@@ -71,7 +75,7 @@ private:
     void set(const Stage &next);
     std::mutex lock_;
     Stage stage_;
-    SDL_Process *process_ = nullptr;
+    Process *process_ = nullptr;
     std::atomic<bool> cancelled_{false};
     std::thread thread_;
     void work(std::vector<std::string> args);
@@ -85,10 +89,11 @@ private:
 
 // the whole of a game built below the game, noted in the config once done:
 // the launcher run with --build-full <title>; one at a time
-void build_full(const std::string &title);
+// all: all of it even when the library's rest is off
+void build_full(const std::string &title, bool all = false);
 // the rest of the game built in the background, when only its hottest
 // functions are
-void finish_in_background(const Config &config);
+void finish_in_background(const Config &config, bool all = false);
 
 // the game started in the runtime's player, the rest of its build behind it
 bool play(const Tools &tools, const Config &config, std::string &error);

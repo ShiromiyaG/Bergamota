@@ -98,7 +98,8 @@ Library Library::load() {
     library.last = (*t)["last"].value_or(std::string());
     library.recomp = path_value((*t)["recomp"]);
     library.player = path_value((*t)["player"]);
-    library.fast = (*t)["fast"].value_or(false);
+    library.fast = (*t)["fast"].value_or(library.fast);
+    library.rest = (*t)["rest"].value_or(library.rest);
     if (const toml::table *games = (*t)["games"].as_table()) {
         for (auto &&[key, node] : *games)
             if (const toml::table *g = node.as_table()) library.games[upper(std::string(key.str()))] = config_of(*g);
@@ -132,7 +133,7 @@ bool Library::save(std::string &error) const {
         error = "there is no APPDATA folder to keep the settings in";
         return false;
     }
-    toml::table t{{"fast", fast}};
+    toml::table t{{"fast", fast}, {"rest", rest}};
     if (!last.empty()) t.insert("last", last);
     if (!recomp.empty()) t.insert("recomp", utf8(recomp));
     if (!player.empty()) t.insert("player", utf8(player));

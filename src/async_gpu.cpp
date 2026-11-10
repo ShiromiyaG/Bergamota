@@ -102,8 +102,28 @@ uint32_t AsyncGpu::read_register(uint32_t offset) {
     return inner_.read_register(offset);
 }
 
+// A game keeps a couple of buffers of commands and writes the next frame's
+// into the one the GPU is done with, as the 3DS's GPU always is by then. A
+// host's GPU that falls behind (a phone's) would still be reading a list
+// while the game writes over it, and draw with half of another frame's
+// state (lights gone for a few frames). So a list waits here while one from
+// before the last vertical blank has not run: the game slows down instead,
+// as it does on the console when the GPU is late.
 void AsyncGpu::command_list(uint32_t paddr, uint32_t size) {
-    push(NONE, [this, paddr, size] { inner_.command_list(paddr, size); });
+    {
+        auto started = std::chrono::steady_clock::now();
+        std::unique_lock g(lock_);
+        if (!lists_.empty() && lists_.front() < blank_) {
+            idle_.wait(g, [this] { return stop_ || lists_.empty() || lists_.front() >= blank_; });
+            waited += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        }
+        lists_.push_back(blank_);
+    }
+    push(NONE, [this, paddr, size] {
+        inner_.command_list(paddr, size);
+        std::lock_guard g(lock_);
+        lists_.pop_front();
+    });
 }
 
 void AsyncGpu::memory_fill(uint32_t start, uint32_t end, uint32_t value, uint32_t width) {
@@ -123,7 +143,13 @@ void AsyncGpu::texture_copy(uint32_t input, uint32_t output, uint32_t size, uint
 void AsyncGpu::after(uint8_t interrupt) { push(interrupt, [] {}); }
 
 // the screens taken in order: after the frame's last transfer, before the next
-void AsyncGpu::vblank() { push(NONE, [this] { inner_.vblank(); }); }
+void AsyncGpu::vblank() {
+    {
+        std::lock_guard g(lock_);
+        blank_++;
+    }
+    push(NONE, [this] { inner_.vblank(); });
+}
 
 void AsyncGpu::framebuffer(uint32_t screen, uint32_t index, uint32_t left, uint32_t right, uint32_t stride,
                            uint32_t format) {

@@ -155,6 +155,20 @@ void Impl::render(Pica &p) {
     // depth or stencil test (as Azahar's software renderer has it)
     const bool shadow = (r[COLOR_OPERATION] & 3) == 3;
     bool use_depth = !shadow && depth_address && (depth_test || depth_write || stencil);
+    // a program whose own shader is not made yet: the CPU's stage meanwhile,
+    // where the GPU interpreting it is the slower of the two (not_made)
+    if (on_gpu && translator && cpu_until_made && !replaying) {
+        const bool blend_on = (r[COLOR_OPERATION] >> 8) & 1;
+        const uint32_t mask = r[COLOR_BUFFER_WRITE] & 0xF ? (mask_reg >> 8) & 15 : 0;
+        const uint64_t ahead = uint64_t(blend_on) | uint64_t(mask) << 4 | uint64_t(blend_on ? r[BLEND_FUNC] & 0xFFFF0707 : 0) << 8 |
+                               uint64_t(use_depth) << 40 | uint64_t(1) << 41 |
+                               uint64_t(use_depth && !(r[DEPTHMAP_ENABLE] & 1)) << 42 | uint64_t(shadow) << 43;
+        if (!translator->pipeline(gpu_draw->program, gpu_draw->program_hash, gpu_draw->unit.misc[1], ahead, use_depth)) {
+            not_made = true;
+            self.stats.draws--;
+            return;
+        }
+    }
 
     // what the draw reads first, outside a pass
     VkImageView views[3];
@@ -339,7 +353,7 @@ void Impl::render(Pica &p) {
         const Shape shape = shape_of(st, lit);
         const uint64_t shape_hash = hash_bytes(reinterpret_cast<const uint8_t *>(shape.data()), sizeof shape) | 1;
         uint64_t shader = on_gpu ? Translator::shader_key(gpu_draw->program_hash, gpu_draw->unit.misc[1]) : 0;
-        if (VkPipeline special = translator->specialized(shader, key, depth != nullptr, shape, shape_hash)) {
+        if (VkPipeline special = translator->specialized(shader, key, depth != nullptr, shape, shape_hash, wait_frag)) {
             pipe = special;
             self.stats.specialized_draws++;
         }
@@ -448,7 +462,8 @@ void Impl::render(Pica &p) {
     };
     if (!on_gpu) {
         if (shadow) shadow_write(writes[fixed_writes]);
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, fixed_writes + shadow, writes);
+        push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, set_layout, fixed_writes + shadow, writes, slots[current].pools,
+             slots[current].pool_at);
         vkCmdBindVertexBuffers(cmd, 0, 1, &vertices.buffer, &voff);
         vkCmdDraw(cmd, uint32_t(triangles.size()), 1, 0, 0);
         self.stats.triangles += triangles.size() / 3;
@@ -464,14 +479,17 @@ void Impl::render(Pica &p) {
         static constexpr VkDescriptorType TYPES[6] = {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
                                                       VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
-        for (int k = 0; k < 6; k++) {
+        // the outputs last of them, where the device keeps any
+        const uint32_t gpu_writes = outputs ? 6 : 5;
+        for (uint32_t k = 0; k < gpu_writes; k++) {
             writes[5 + k].dstBinding = uint32_t(4 + k);
             writes[5 + k].descriptorCount = 1;
             writes[5 + k].descriptorType = TYPES[k];
             writes[5 + k].pBufferInfo = &gpu_info[k];
         }
-        if (shadow) shadow_write(writes[11]);
-        push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 11 + shadow, writes);
+        if (shadow) shadow_write(writes[5 + gpu_writes]);
+        push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, set_layout, 5 + gpu_writes + shadow, writes, slots[current].pools,
+             slots[current].pool_at);
         VertexPush push{gpu_draw->stride, gpu_before ? gpu_before->stride : gpu_draw->stride, gpu_t, gpu_before ? 1u : 0u,
                         0, 0, store, gpu_jump};
         if (from_outputs) {

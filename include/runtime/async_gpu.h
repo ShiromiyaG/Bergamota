@@ -69,6 +69,11 @@ private:
         std::function<void()> work;
     };
     std::deque<Item> queue_;
+    // the command lists not run yet, each by the vertical blank it was
+    // queued in (blank_, counted by vblank()): one from a blank before the
+    // last holds the next back (command_list)
+    std::deque<uint64_t> lists_;
+    uint64_t blank_ = 0;
     std::vector<uint8_t> done_;
     bool busy_ = false, stop_ = false;
     std::thread thread_;

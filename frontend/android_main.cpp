@@ -12,13 +12,18 @@
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
+#include <android/log.h>
+#include <sched.h>
 #include <jni.h>
+#include <sys/system_properties.h>
+#include <unistd.h>
 
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 int launcher_main(int argc, char **argv);
@@ -166,10 +171,66 @@ void set(const char *name, const std::string &value) {
     SDL_SetEnvironmentVariable(SDL_GetEnvironment(), name, value.c_str(), true);
 }
 
+// for looking into a phone from a computer: what the program prints or writes to
+// stderr goes to Android's log (adb logcat -s Bergamota), and the variables
+// the runtime reads (RUNTIME_...) are taken from a system property,
+//   adb shell setprop debug.bergamota.env "RUNTIME_STATS=1,RUNTIME_GENERIC_FRAG=1"
+// BERGAMOTA_PLAY=1 among them starting the game played last at once
+void debug_aids() {
+    int ends[2];
+    if (pipe(ends) == 0) {
+        dup2(ends[1], STDERR_FILENO);
+        dup2(ends[1], STDOUT_FILENO);
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+        close(ends[1]);
+        setvbuf(stderr, nullptr, _IOLBF, 0);
+        std::thread([in = ends[0]] {
+            std::string line;
+            char buffer[512];
+            for (ssize_t n; (n = read(in, buffer, sizeof buffer)) > 0;) {
+                for (ssize_t i = 0; i < n; i++) {
+                    if (buffer[i] != '\n') {
+                        line += buffer[i];
+                        continue;
+                    }
+                    __android_log_write(ANDROID_LOG_INFO, "Bergamota", line.c_str());
+                    line.clear();
+                }
+            }
+        }).detach();
+    }
+    char value[PROP_VALUE_MAX] = {};
+    if (__system_property_get("debug.bergamota.env", value) <= 0) return;
+    std::string all = value;
+    for (size_t from = 0; from < all.size();) {
+        size_t to = all.find(',', from);
+        if (to == std::string::npos) to = all.size();
+        std::string one = all.substr(from, to - from);
+        if (size_t eq = one.find('='); eq != std::string::npos && eq > 0) {
+            setenv(one.substr(0, eq).c_str(), one.substr(eq + 1).c_str(), 1);
+            SDL_SetEnvironmentVariable(SDL_GetEnvironment(), one.substr(0, eq).c_str(), one.substr(eq + 1).c_str(), true);
+            std::fprintf(stderr, "debug.bergamota.env: %s\n", one.c_str());
+        }
+        from = to + 1;
+    }
+}
+
+// every core for this thread and the ones it starts (the game's, the
+// GPU's, the shaders' workers): a phone hands a game's main thread its two
+// big cores alone, and all of them shared those, the six others idle
+void every_core() {
+    cpu_set_t all;
+    CPU_ZERO(&all);
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) CPU_SET(cpu, &all);
+    sched_setaffinity(0, sizeof all, &all);
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
     (void)argc, (void)argv;
+    every_core();
+    debug_aids();
     // landscape, and Android's back button to the program (the player's menu)
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
@@ -206,10 +267,10 @@ int main(int argc, char *argv[]) {
         set(("LAUNCHER_" + launcher::upper(p->player)).c_str(), libraries + "/libmain.so");
     }
 
-    char name[] = "launcher";
-    char *launcher_argv[] = {name, nullptr};
+    char name[] = "launcher", play[] = "--play";
+    char *launcher_argv[] = {name, play, nullptr};
     launcher::play_request().clear();
-    int result = launcher_main(1, launcher_argv);
+    int result = launcher_main(getenv("BERGAMOTA_PLAY") ? 2 : 1, launcher_argv);
     if (launcher::play_request().empty()) return result;
     std::vector<std::string> args = launcher::play_request();
     std::vector<char *> player_argv;

@@ -13,6 +13,10 @@ namespace launcher {
 // this program and the ones it starts read it by (/proc/self/fd/N, the
 // descriptor left to them); any other path as it is
 std::string local_path(const std::string &path);
+// whether local_path had to ask the player, in Android's settings, to let
+// the app read the phone's files (a picked file it could not read) since
+// the last time this was asked
+bool asked_for_files();
 // back: the content:// a path of local_path's stands for, to keep in the
 // settings (the descriptor is this run's); any other path as it is
 std::string kept_path(const std::string &path);

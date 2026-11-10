@@ -16,6 +16,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <set>
 #include <tuple>
 #include <unordered_map>
 #include <vector>
@@ -34,7 +35,9 @@ using Shape = std::array<uint32_t, SHAPE_SIZE>;
 // a program's run(), in GLSL, for the frame pica_gpu.vert gives it
 std::string translate_program(const ProgramBlock &program, uint32_t entry);
 // the whole shader: the frame with run() swapped for the program's
-std::string translated_shader(const ProgramBlock &program, uint32_t entry);
+// store: with the outputs kept for the frames between (the frame's
+// NO_STORE otherwise, for a device whose vertex shaders may not write)
+std::string translated_shader(const ProgramBlock &program, uint32_t entry, bool store = true);
 
 class Translator {
 public:
@@ -42,7 +45,7 @@ public:
     // shape or null for none) makes a pipeline; called on the translator's
     // threads
     using MakePipeline = std::function<VkPipeline(uint64_t, bool, VkShaderModule, const uint32_t *)>;
-    Translator(VkDevice device, MakePipeline make);
+    Translator(VkDevice device, MakePipeline make, bool store = true);
     ~Translator();
 
     // the pipeline for a draw with the program (by its hash, at entry):
@@ -52,8 +55,10 @@ public:
 
     // the same with a fragment shader made for the draw's shape, for the
     // program's shader (shader_key) or the renderer's own (0): null until
-    // it is ready
-    VkPipeline specialized(uint64_t shader_key, uint64_t key, bool has_depth, const Shape &shape, uint64_t shape_hash);
+    // it is ready; wait: made before the rest and waited for, the draw
+    // held up the first time a shape shows (null only if it cannot be made)
+    VkPipeline specialized(uint64_t shader_key, uint64_t key, bool has_depth, const Shape &shape, uint64_t shape_hash,
+                           bool wait = false);
     static uint64_t shader_key(uint64_t program_hash, uint32_t entry) {
         return program_hash ^ (uint64_t(entry) + 1) * 0x9E3779B97F4A7C15ull;
     }
@@ -81,8 +86,11 @@ private:
 
     VkDevice device_;
     MakePipeline make_;
+    bool store_ = true; // the shaders keep their outputs
     std::mutex lock_;
     std::condition_variable wake_;
+    std::condition_variable made_; // a pipeline for a shape is there, or was not made
+    std::set<std::tuple<uint64_t, uint64_t, uint64_t>> failed_;
     std::deque<Work> queue_;
     std::deque<Work> later_; // the pipelines for a shape, after all the rest
     std::unordered_map<uint64_t, Shader> shaders_;

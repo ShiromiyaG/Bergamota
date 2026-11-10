@@ -28,6 +28,9 @@ int failures = 0;
 
 void cc_names_a_program_and_what_goes_before_the_rest() {
     CHECK((Compiler::named("zig cc") == Compiler{"zig", {"cc"}}));
+    CHECK(Compiler::named("zig cc").is_zig());
+    CHECK(Compiler::named("/data/app/lib/arm64/libzig.so cc -target aarch64-linux-musl").is_zig());
+    CHECK(!Compiler::named("clang").is_zig());
     CHECK((Compiler::named("gcc") == Compiler{"gcc", {}}));
     // a program that is there stays whole, spaces and all
     fs::path dir = fs::temp_directory_path() / "3dsrecomp cc test";

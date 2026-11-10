@@ -12,6 +12,9 @@ const uint32_t VERT_SPV[] = {
 const uint32_t VERT_GPU_SPV[] = {
 #include "pica_gpu.vert.inc"
 };
+const uint32_t VERT_GPU_NO_STORE_SPV[] = {
+#include "pica_gpu_nostore.vert.inc"
+};
 const uint32_t FRAG_SPV[] = {
 #include "pica.frag.inc"
 };
@@ -81,7 +84,8 @@ bool Impl::init() {
     static const char *const BEFORE_1_3[] = {VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME,
                                              VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME, VK_KHR_SYNCHRONIZATION_2_EXTENSION_NAME};
     static const char *const BEFORE_1_2[] = {VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME};
-    static const char *const ALWAYS[] = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
+    // (push descriptors are used where there are, not needed: push())
+    static const char *const ALWAYS[] = {VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME};
     // why a device cannot run it, empty when it can
     auto lacks = [&](VkPhysicalDevice d) -> std::string {
         VkPhysicalDeviceProperties p;
@@ -159,7 +163,9 @@ bool Impl::init() {
     features.features.vertexPipelineStoresAndAtomics = has.vertexPipelineStoresAndAtomics;
     // the shadow output's atomics on its map
     features.features.fragmentStoresAndAtomics = has.fragmentStoresAndAtomics;
-    store_outputs = has.vertexPipelineStoresAndAtomics;
+    // (RUNTIME_NO_VERTEX_STORES=1: as on a device without, to compare)
+    store_outputs = has.vertexPipelineStoresAndAtomics && !std::getenv("RUNTIME_NO_VERTEX_STORES");
+    features.features.vertexPipelineStoresAndAtomics = store_outputs;
     // HD textures as DDS, kept compressed (BC1, BC3, BC7)
     features.features.textureCompressionBC = has.textureCompressionBC;
     bc_textures = has.textureCompressionBC;
@@ -180,7 +186,9 @@ bool Impl::init() {
     // the extensions: those it needs on any, those 1.3 (1.2) took in on an
     // older device, and the swapchain, for a window
     can_present = !instance_extensions.empty();
-    std::vector<const char *> extensions{VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+    std::vector<const char *> extensions;
+    if (std::find(device_extensions.begin(), device_extensions.end(), VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) != device_extensions.end())
+        extensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     // extended dynamic state: 1.3's own, the extension's (and its feature's
     // structure) only where the device names it
     if (std::find(device_extensions.begin(), device_extensions.end(), VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME) != device_extensions.end())
@@ -225,12 +233,8 @@ bool Impl::init() {
     }
     vkGetDeviceQueue(device, family, 0, &queue);
     push_descriptors = PFN_vkCmdPushDescriptorSetKHR(vkGetDeviceProcAddr(device, "vkCmdPushDescriptorSetKHR"));
-    if (!push_descriptors) {
-        self.error = "no VK_KHR_push_descriptor";
-        vkDestroyDevice(device, nullptr);
-        device = VK_NULL_HANDLE;
-        return false;
-    }
+    // RUNTIME_NO_PUSH_DESCRIPTORS=1: as on a device without them, for testing
+    if (const char *off = std::getenv("RUNTIME_NO_PUSH_DESCRIPTORS"); off && off[0] == "1"[0]) push_descriptors = nullptr;
 
     VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     pci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -295,7 +299,7 @@ bool Impl::init() {
         {11, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    sli.flags = pushed_layout();
     sli.bindingCount = 12;
     sli.pBindings = bindings;
     vkCreateDescriptorSetLayout(device, &sli, nullptr, &set_layout);
@@ -312,9 +316,6 @@ bool Impl::init() {
     smi.codeSize = sizeof VERT_SPV;
     smi.pCode = VERT_SPV;
     vkCreateShaderModule(device, &smi, nullptr, &vert);
-    smi.codeSize = sizeof VERT_GPU_SPV;
-    smi.pCode = VERT_GPU_SPV;
-    vkCreateShaderModule(device, &smi, nullptr, &vert_gpu);
     if (store_outputs) {
         // the outputs: on the GPU only, written and read by shaders
         VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
@@ -334,9 +335,12 @@ bool Impl::init() {
             store_outputs = false;
         }
     }
-    // a vertex shader that writes needs the device's leave: the CPU's stage
-    // without it
-    if (!store_outputs) gpu_vertices = false;
+    // a vertex shader that writes needs the device's leave: without it the
+    // shaders made with no outputs to keep (NO_STORE)
+    if (!store_outputs) cpu_until_made = true;
+    smi.codeSize = store_outputs ? sizeof VERT_GPU_SPV : sizeof VERT_GPU_NO_STORE_SPV;
+    smi.pCode = store_outputs ? VERT_GPU_SPV : VERT_GPU_NO_STORE_SPV;
+    vkCreateShaderModule(device, &smi, nullptr, &vert_gpu);
     {
         VkSemaphoreTypeCreateInfo type{VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO};
         type.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
@@ -381,7 +385,7 @@ bool Impl::init() {
     if (!std::getenv("RUNTIME_NO_TRANSLATE")) {
         translator = std::make_unique<Translator>(device, [this](uint64_t key, bool has_depth, VkShaderModule vertex, const uint32_t *shape) {
             return make_pipeline(key, has_depth, vertex, shape);
-        });
+        }, store_outputs);
     }
     begin();
     blank = image(1, 1, VK_FORMAT_R8G8B8A8_UNORM, false);
@@ -522,6 +526,49 @@ void Impl::destroy(Image &i) {
     i = {};
 }
 
+void Impl::push(VkCommandBuffer cmd, VkPipelineBindPoint point, VkPipelineLayout layout, VkDescriptorSetLayout set, uint32_t count,
+                const VkWriteDescriptorSet *writes, std::vector<VkDescriptorPool> &pools, size_t &at) {
+    if (push_descriptors) {
+        push_descriptors(cmd, point, layout, 0, count, writes);
+        return;
+    }
+    // room for a few hundred draws in each pool, of the layout that takes
+    // the most of each kind (the draws': device.cpp's bindings)
+    constexpr uint32_t SETS = 512;
+    VkDescriptorSet made = VK_NULL_HANDLE;
+    for (int tries = 0; tries < 2 && !made; tries++) {
+        if (at == pools.size()) {
+            VkDescriptorPoolSize sizes[4] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 * SETS},
+                                             {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8 * SETS},
+                                             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 5 * SETS},
+                                             {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, SETS}};
+            VkDescriptorPoolCreateInfo dpi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            dpi.maxSets = SETS;
+            dpi.poolSizeCount = 4;
+            dpi.pPoolSizes = sizes;
+            VkDescriptorPool pool = VK_NULL_HANDLE;
+            if (vkCreateDescriptorPool(device, &dpi, nullptr, &pool) != VK_SUCCESS) return;
+            pools.push_back(pool);
+        }
+        VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dai.descriptorPool = pools[at];
+        dai.descriptorSetCount = 1;
+        dai.pSetLayouts = &set;
+        if (vkAllocateDescriptorSets(device, &dai, &made) != VK_SUCCESS) made = VK_NULL_HANDLE, at++; // full: the next one
+    }
+    if (!made) return;
+    VkWriteDescriptorSet into[16];
+    count = std::min<uint32_t>(count, 16);
+    for (uint32_t i = 0; i < count; i++) into[i] = writes[i], into[i].dstSet = made;
+    vkUpdateDescriptorSets(device, count, into, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, point, layout, 0, 1, &made, 0, nullptr);
+}
+
+void Impl::empty_sets(std::vector<VkDescriptorPool> &pools, size_t &at) {
+    for (size_t i = 0; i < pools.size() && i <= at; i++) vkResetDescriptorPool(device, pools[i], 0);
+    at = 0;
+}
+
 void Impl::begin() {
     if (recording) return;
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -638,6 +685,7 @@ void Impl::submit(bool wait) {
     Slot &next = slots[current];
     retire(next);
     vkResetCommandBuffer(next.cmd, 0);
+    empty_sets(next.pools, next.pool_at);
     cmd = next.cmd;
     vertices = next.vertices;
     uniforms = next.uniforms;
@@ -684,6 +732,7 @@ void Impl::shutdown() {
     for (Slot &s : slots) {
         s.pending = true;
         vkResetFences(device, 1, &s.fence);
+        for (VkDescriptorPool p : s.pools) vkDestroyDescriptorPool(device, p, nullptr);
         for (Buffer &b : s.staging) destroy(b);
         for (Image &i : s.dead) destroy(i);
         destroy(s.vertices);

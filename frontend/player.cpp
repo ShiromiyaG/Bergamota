@@ -64,6 +64,13 @@ using namespace runtime;
 
 namespace {
 
+// a phone has no windows: the whole screen always, Android's bars hidden
+#ifdef __ANDROID__
+constexpr bool ON_PHONE = true;
+#else
+constexpr bool ON_PHONE = false;
+#endif
+
 // where Azahar keeps its user folder, which holds load/textures: a user\
 // beside its program is not known here, its own place for its data is
 std::vector<std::filesystem::path> azahar_folders() {
@@ -664,7 +671,7 @@ int main(int argc, char **argv) {
     bool both = true;
     auto apply = [&] {
         bindings.resolve(settings);
-        SDL_SetWindowFullscreen(window, settings.video.fullscreen);
+        SDL_SetWindowFullscreen(window, settings.video.fullscreen || ON_PHONE);
         both = settings.video.layout == "both";
         if (sound) SDL_SetAudioStreamGain(sound, settings.audio.mute ? 0.0f : settings.audio.volume / 100.0f);
         vulkan.between_still = settings.video.between_still;
@@ -794,7 +801,7 @@ int main(int argc, char **argv) {
 #endif
             if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && !event.key.repeat) {
                 settings.video.fullscreen = !settings.video.fullscreen;
-                SDL_SetWindowFullscreen(window, settings.video.fullscreen);
+                SDL_SetWindowFullscreen(window, settings.video.fullscreen || ON_PHONE);
             }
             if ((event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_TAB && !event.key.repeat) ||
                 (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_STICK)) {

@@ -88,7 +88,7 @@ VulkanPresenter::VulkanPresenter(VulkanRenderer &renderer, const std::function<b
     // a screen: its image and sampler pushed, its rectangle in push constants
     VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     VkDescriptorSetLayoutCreateInfo sli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    sli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+    sli.flags = d.pushed_layout();
     sli.bindingCount = 1;
     sli.pBindings = &binding;
     vkCreateDescriptorSetLayout(d.device, &sli, nullptr, &set_layout_);
@@ -183,6 +183,7 @@ VulkanPresenter::~VulkanPresenter() {
     for (InFlight &f : flight_) {
         if (f.fence) vkDestroyFence(d.device, f.fence, nullptr);
         if (f.acquired) vkDestroySemaphore(d.device, f.acquired, nullptr);
+        for (VkDescriptorPool p : f.pools) vkDestroyDescriptorPool(d.device, p, nullptr);
     }
     if (commands_) vkDestroyCommandPool(d.device, commands_, nullptr);
     if (pipeline_) vkDestroyPipeline(d.device, pipeline_, nullptr);
@@ -295,13 +296,15 @@ bool VulkanPresenter::make_swapchain(const View &view) {
     VkSurfaceCapabilitiesKHR caps;
     vkGetPhysicalDeviceSurfaceCapabilitiesKHR(d.physical, surface_, &caps);
     VkExtent2D extent = caps.currentExtent;
-    // a display turned a quarter (Android's phones, held across): its
-    // extent is the display's own way round; drawn the window's way, the
-    // system turns it
+    // a display turned a quarter (Android's phones, held across): drawn the
+    // window's way, the system turns it. Its extent comes the window's way
+    // round on Android (a Mali-G52's 1600x720), the display's own on others:
+    // whichever, the way the window lies
     const bool turned = caps.currentTransform & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR |
                                                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_90_BIT_KHR |
                                                  VK_SURFACE_TRANSFORM_HORIZONTAL_MIRROR_ROTATE_270_BIT_KHR);
-    if (turned && extent.width != 0xFFFFFFFF) std::swap(extent.width, extent.height);
+    if (turned && extent.width != 0xFFFFFFFF && (extent.width > extent.height) != (view.width > view.height))
+        std::swap(extent.width, extent.height);
     if (extent.width == 0xFFFFFFFF) {
         extent.width = std::clamp(view.width, caps.minImageExtent.width, caps.maxImageExtent.width);
         extent.height = std::clamp(view.height, caps.minImageExtent.height, caps.maxImageExtent.height);
@@ -396,6 +399,7 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
 
     VkCommandBuffer cmd = f.cmd;
     vkResetCommandBuffer(cmd, 0);
+    d.empty_sets(f.pools, f.pool_at);
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
@@ -446,7 +450,7 @@ void VulkanPresenter::present(const Frame *frame, const View &view, const std::f
             write.descriptorCount = 1;
             write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
             write.pImageInfo = &info;
-            d.push_descriptors(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &write);
+            d.push(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, set_layout_, 1, &write, f.pools, f.pool_at);
             vkCmdPushConstants(cmd, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof push, &push);
             vkCmdDraw(cmd, 6, 1, 0, 0);
         }

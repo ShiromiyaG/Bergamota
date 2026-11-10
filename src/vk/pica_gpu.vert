@@ -34,8 +34,12 @@ layout(std430, set = 0, binding = 6) readonly buffer Inputs { vec4 v[]; } inputs
 layout(std430, set = 0, binding = 8) readonly buffer InputsBefore { vec4 v[]; } inputs_before;
 
 // each vertex's outputs as a draw of the game's left them (24 values a
-// vertex), for its frame between to take instead of running it again
+// vertex), for its frame between to take instead of running it again. A
+// device whose vertex shaders may not write (NO_STORE: a Mali) has none,
+// and a frame between runs both frames' programs
+#ifndef NO_STORE
 layout(std430, set = 0, binding = 9) buffer Outputs { float v[]; } outputs;
+#endif
 
 layout(push_constant) uniform Push {
     uint stride, before_stride;
@@ -360,13 +364,16 @@ void mix_between(float was[24], float t) {
 
 void main() {
     float was[24];
+#ifndef NO_STORE
     uint vertex = uint(gl_VertexIndex) * 24u;
     if (pc.between == 2u) {
         // both frames' as their draws left them: nothing to run
         for (uint k = 0u; k < 24u; k++) values[k] = outputs.v[pc.now_out + vertex + k];
         for (uint k = 0u; k < 24u; k++) was[k] = outputs.v[pc.before_out + vertex + k];
         mix_between(was, between_t(vec4(was[0], was[1], was[2], was[3]), vec4(values[0], values[1], values[2], values[3])));
-    } else {
+    } else
+#endif
+    {
     if (pc.between != 0u) {
         from_before = true;
         run();
@@ -376,9 +383,11 @@ void main() {
     from_before = false;
     run();
     place();
+#ifndef NO_STORE
     if (pc.store != 0xFFFFFFFFu) {
         for (uint k = 0u; k < 24u; k++) outputs.v[pc.store + vertex + k] = values[k];
     }
+#endif
     if (pc.between != 0u) mix_between(was, between_t(vec4(was[0], was[1], was[2], was[3]), vec4(values[0], values[1], values[2], values[3])));
     }
     vec4 position = vec4(values[0], values[1], values[2], values[3]);

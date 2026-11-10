@@ -310,7 +310,10 @@ and SDL's X11/Wayland/ALSA/PulseAudio headers (the packages are listed in
 `port.py package --android [--version x.y.z]` (`sdk/android.py`) makes
 `dist/<Name>-<version>-android-arm64.apk`, for arm64 phones with Vulkan 1.1
 or later (Adreno, Mali, PowerVR: a device on 1.1 or 1.2 takes the extensions
-1.3 took in, `src/vk/device.cpp`; `VK_KHR_push_descriptor` is needed). It
+1.3 took in, `src/vk/device.cpp`; without `VK_KHR_push_descriptor`, a Mali's case, the
+descriptors go in sets of their own, and where vertex shaders may not write
+the game's vertex programs still run on the GPU, without the outputs kept
+for the frames between). It
 needs the Android SDK (`ANDROID_HOME`, or Android Studio's), an NDK in it
 (or `ANDROID_NDK_HOME`), CMake, Ninja and a JDK Gradle 9 runs on.
 
@@ -323,8 +326,25 @@ needs the Android SDK (`ANDROID_HOME`, or Android Studio's), an NDK in it
   first start), the library linked without a C library (`recomp/compile.cpp`,
   `freestanding()`). Android runs programs only from the APK's library
   folder, so both are there, named as libraries.
+- Building is lighter there by default, two options of the launcher's
+  (`fast` and `rest` in its `config.toml`): "Fast compile" is on, and "Build
+  the rest while playing" is off, so only the hot code is built, and what
+  the game was seen to run besides (the player's hints) is added on the
+  next start. On a computer they default the other way.
 - The game is picked with Android's picker; the launcher keeps its
   `content://` and reads it as `/proc/self/fd/N` (`launcher/android.cpp`).
+  Shared storage lets only an app with access to all files open it again
+  that way, so the app asks for it (`MANAGE_EXTERNAL_STORAGE`) the first
+  time a picked file cannot be read.
+- SDL starts no programs on Android: the launcher starts 3dsrecomp itself
+  (`launcher/build.cpp`, `posix_spawn`). A phone keeps a game's threads on
+  its big cores; 3dsrecomp and the program take every core, and the shaders'
+  workers the slower ones.
+- Looking into a phone from a computer: what the program prints goes to
+  Android's log (`adb logcat -s Bergamota`), and
+  `adb shell setprop debug.bergamota.env "RUNTIME_STATS=1,BERGAMOTA_PLAY=1"`
+  sets the runtime's variables for the next start (`BERGAMOTA_PLAY`: straight
+  to the game played last; `frontend/android_main.cpp`).
 - The port's files (port.toml, the scenes, the hot lists, each game's native
   code, the licenses) are assets under `port/`, unpacked beside the
   launcher's settings when the APK changes.
@@ -334,7 +354,10 @@ needs the Android SDK (`ANDROID_HOME`, or Android Studio's), an NDK in it
   `ANDROID_KEY_ALIAS` and `ANDROID_KEY_PASSWORD` name the port's own.
 - In the game: the 3DS's controls on the screen (`frontend/touch.h`) until a
   gamepad is connected, a finger elsewhere touching the bottom screen; the
-  round button at the top, or Android's back button, opens the menu.
+  round button at the top, or Android's back button, opens the menu. The
+  launcher's pages and the menu scroll with a finger dragged over them
+  (`frontend/drag_scroll.h`); what is a computer's (fullscreen, a keyboard's
+  keys, Azahar's folder) is left out of both.
 
 ## What stays stable
 

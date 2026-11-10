@@ -104,6 +104,9 @@ private:
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         VkSemaphore acquired = VK_NULL_HANDLE;
+        // the descriptor sets its commands bind, where none can be pushed
+        std::vector<VkDescriptorPool> pools;
+        size_t pool_at = 0;
     } flight_[2];
     int at_ = 0;
     VkCommandPool commands_ = VK_NULL_HANDLE;

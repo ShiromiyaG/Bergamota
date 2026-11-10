@@ -37,8 +37,21 @@ struct Library {
     std::string last; // the title played last
     fs::path recomp, player; // the tools, when the player had to point at them
     // a fast compile, for modest processors: the rest of the game built
-    // in the background without optimizing
+    // in the background without optimizing. a phone's default
+#ifdef __ANDROID__
+    bool fast = true;
+#else
     bool fast = false;
+#endif
+    // the rest of the game built in the background while it is played; when
+    // not, only its hottest functions and those it was seen to run, taken
+    // in on the next start. off on a phone unless asked: its battery, heat
+    // and storage
+#ifdef __ANDROID__
+    bool rest = false;
+#else
+    bool rest = true;
+#endif
     std::map<std::string, Config> games; // by title id
 
     static Library load();
